@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app_types.h"
+#include "provider_profiles.h"
 
 namespace cardputer {
 
@@ -10,7 +11,9 @@ struct WebConsoleResult {
     String error;
 };
 
-WebConsoleResult runWebConsole(const Settings& settings, const String& initialChatId,
+WebConsoleResult runWebConsole(const Settings& settings,
+                               ProviderProfileStore& providerStore,
+                               const String& initialChatId,
                                const String& version);
 
 }  // namespace cardputer

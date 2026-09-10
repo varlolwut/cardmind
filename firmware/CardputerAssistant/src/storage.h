@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app_types.h"
+#include "provider_profiles.h"
 
 namespace cardputer {
 
@@ -8,8 +9,11 @@ constexpr std::uint32_t kMinimumProjectChatHistoryQuotaBytes = 2U * 1024U * 1024
 
 bool isValidProjectChatHistoryQuota(std::uint32_t quotaBytes);
 
-OperationResult loadSettings(Settings& settings);
+OperationResult loadSettings(Settings& settings, ProviderProfileStore& providerStore);
 OperationResult saveSettings(const Settings& settings);
+ProviderStoreResult saveProvisionedSettings(
+    const Settings& settings,
+    ProviderProfileStore& providerStore);
 OperationResult saveModel(const String& model);
 OperationResult loadSetupAccessPointPassword(String& password);
 OperationResult saveSetupAccessPointPassword(const String& password);

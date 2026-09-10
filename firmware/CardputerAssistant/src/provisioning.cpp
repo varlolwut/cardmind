@@ -29,6 +29,7 @@ WifiScanResult nearbyNetworkScan = {true, {}, ""};
 bool restartPending = false;
 std::uint32_t restartAt = 0;
 String serialCommand;
+ProviderProfileStore* currentProviderStore = nullptr;
 
 String htmlEscape(const String& value)
 {
@@ -208,7 +209,6 @@ void saveSubmittedSettings()
     String sttApiKey = webServer.arg("stt_api_key");
     String webSearchApiKey = webServer.arg("search_api_key");
     String ttsApiKey = webServer.arg("tts_api_key");
-    apiKey.trim();
     sttApiKey.trim();
     webSearchApiKey.trim();
     ttsApiKey.trim();
@@ -227,17 +227,35 @@ void saveSubmittedSettings()
     if (!ttsApiKey.isEmpty()) {
         submitted.ttsApiKey = ttsApiKey;
     }
-    const OperationResult result = saveSettings(submitted);
-    if (!result.success) {
-        webServer.send(400, "text/html; charset=utf-8", setupPage(result.error));
+    if (currentProviderStore == nullptr) {
+        webServer.send(500, "text/html; charset=utf-8",
+                       setupPage("Provider profile storage is unavailable"));
+        return;
+    }
+    const ProviderStoreResult result =
+        saveProvisionedSettings(submitted, *currentProviderStore);
+    const bool savedWithCleanupWarning =
+        !providerStoreResultSucceeded(result) && result.committed &&
+        result.error == ProviderStoreError::CleanupFailed;
+    if (!providerStoreResultSucceeded(result) && !savedWithCleanupWarning) {
+        webServer.send(
+            400, "text/html; charset=utf-8",
+            setupPage(String(result.message.c_str())));
         return;
     }
     currentSettings = submitted;
-    webServer.send(200, "text/html; charset=utf-8",
-                   "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
-                   "<body style='font:18px system-ui;background:#101522;color:#eef;padding:30px'>"
-                   "<h1>Saved and verified</h1><p>The Cardputer will restart in five seconds. "
-                   "You may close this page after it disconnects.</p></body>");
+    String response =
+        "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
+        "<body style='font:18px system-ui;background:#101522;color:#eef;padding:30px'>";
+    response += savedWithCleanupWarning
+        ? "<h1>Saved with a cleanup warning</h1><p>The provider settings are authoritative. "
+        : "<h1>Saved and verified</h1><p>";
+    if (savedWithCleanupWarning) {
+        response += htmlEscape(String(result.message.c_str())) + "</p><p>";
+    }
+    response += "The Cardputer will restart in five seconds. "
+                "You may close this page after it disconnects.</p></body>";
+    webServer.send(200, "text/html; charset=utf-8", response);
     Serial.printf("PROVISIONING settings_saved=yes nvs_verified=yes restart_delay_ms=%u\n",
                   static_cast<unsigned int>(kRestartDelayMs));
     restartPending = true;
@@ -314,9 +332,11 @@ void updateProvisioningSerial()
 
 }  // namespace
 
-[[noreturn]] void runProvisioningPortal(const Settings& existingSettings)
+[[noreturn]] void runProvisioningPortal(const Settings& existingSettings,
+                                        ProviderProfileStore& providerStore)
 {
     currentSettings = existingSettings;
+    currentProviderStore = &providerStore;
     const String accessPointName = "Cardputer-" + macSuffix();
     String accessPointPassword;
     const OperationResult passwordLoadResult = loadSetupAccessPointPassword(accessPointPassword);

@@ -142,7 +142,7 @@ void connectSelectedWifi(const String& enteredPassword)
         setTransientStatus("Wi-Fi connected", 2500);
     }
     Serial.println("INFO event=wifi_update result=ok source=device_ui");
-    refreshModels();
+    refreshModels("");
     if (currentScreen == Screen::MainCarousel) {
         renderCarousel();
     } else {

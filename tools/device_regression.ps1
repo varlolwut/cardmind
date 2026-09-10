@@ -7,7 +7,7 @@ param(
     [int]$BaudRate,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet("status", "sd-mount", "audio", "offline", "online", "p1", "p2-storage", "p2-migration", "p2-migration-exact", "p2-projects", "p2-chats", "p2-context", "p2-summary", "p2-limits", "p2-archive", "p2-file", "p2-binary", "hotfix-message", "hotfix-latency", "hotfix-device-ui", "web-console-start", "web-console-cycle", "full")]
+    [ValidateSet("status", "sd-mount", "audio", "offline", "online", "p1", "p2-storage", "p2-migration", "p2-migration-exact", "p2-projects", "p2-chats", "p2-context", "p2-summary", "p2-limits", "p2-archive", "p2-file", "p2-binary", "p6-providers", "hotfix-message", "hotfix-latency", "hotfix-device-ui", "web-console-start", "web-console-cycle", "full")]
     [string]$Suite,
 
     [Parameter(Mandatory = $true)]
@@ -118,11 +118,11 @@ function Read-ClassifiedSerialLines {
 
     $readinessLossLine = ""
     foreach ($line in $read.Lines) {
-        if ($readinessLossLine.Length -eq 0 -and $line -match "Guru Meditation|Brownout|abort\(\)|ESP-ROM:esp32s3|rst:0x") {
+        if ($readinessLossLine.Length -eq 0 -and $line -match "Guru Meditation|Brownout|abort\(\)|\bFATAL\b|ESP-ROM:esp32s3|rst:0x") {
             $readinessLossLine = $line
         }
     }
-    if ($readinessLossLine.Length -eq 0 -and $script:serialPending -match "Guru Meditation|Brownout|abort\(\)|ESP-ROM:esp32s3|rst:0x") {
+    if ($readinessLossLine.Length -eq 0 -and $script:serialPending -match "Guru Meditation|Brownout|abort\(\)|\bFATAL\b|ESP-ROM:esp32s3|rst:0x") {
         $readinessLossLine = $script:serialPending
     }
     if ($readinessLossLine.Length -gt 0) {
@@ -235,6 +235,431 @@ function Invoke-RegressionCase {
         throw "Regression '$($Case.Name)' failed: $completedLine"
     }
     Write-Host ("PASS {0}" -f $Case.Name)
+}
+
+function ConvertTo-P6UnsignedField {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Text.RegularExpressions.Match]$Match,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    return [uint64]::Parse(
+        $Match.Groups[$Name].Value,
+        [System.Globalization.NumberStyles]::None,
+        [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Assert-P6ProviderMeasuredLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Line,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Nonce
+    )
+
+    $pattern = '^P6PROVIDERTEST stage=measured nonce=(?<nonce>[0-9]{1,20}) ' +
+        'profiles_before=(?<profilesBefore>[0-9]+) profiles_max=(?<profilesMax>[0-9]+) ' +
+        'owned_profiles=(?<ownedProfiles>[0-9]+) presets_max=(?<presetsMax>[0-9]+) ' +
+        'total=(?<total>[0-9]+) used_before=(?<usedBefore>[0-9]+) ' +
+        'available_before=(?<availableBefore>[0-9]+) namespace_before=(?<namespaceBefore>[0-9]+) ' +
+        'used_max=(?<usedMax>[0-9]+) available_max=(?<availableMax>[0-9]+) ' +
+        'namespace_max=(?<namespaceMax>[0-9]+) profile_reject_available=(?<profileRejected>[0-9]+) ' +
+        'profile_recovered_available=(?<profileRecovered>[0-9]+) preset_reject_available=(?<presetRejected>[0-9]+) ' +
+        'preset_recovered_available=(?<presetRecovered>[0-9]+) available_clean=(?<availableClean>[0-9]+) ' +
+        'namespace_clean=(?<namespaceClean>[0-9]+) heap_before=(?<heapBefore>[0-9]+) ' +
+        'heap_after=(?<heapAfter>[0-9]+) largest_before=(?<largestBefore>[0-9]+) ' +
+        'largest_after=(?<largestAfter>[0-9]+) stack_free=(?<stackFree>[0-9]+) ' +
+        'operation_ms=(?<operationMs>[0-9]+) render_ms=(?<renderMs>[0-9]+) resources=pass$'
+    $match = [regex]::Match($Line, $pattern)
+    if (-not $match.Success -or $match.Groups["nonce"].Value -ne $Nonce) {
+        throw "P6 provider measured envelope is malformed or belongs to another nonce"
+    }
+
+    $profilesBefore = ConvertTo-P6UnsignedField -Match $match -Name "profilesBefore"
+    $profilesMax = ConvertTo-P6UnsignedField -Match $match -Name "profilesMax"
+    $ownedProfiles = ConvertTo-P6UnsignedField -Match $match -Name "ownedProfiles"
+    $presetsMax = ConvertTo-P6UnsignedField -Match $match -Name "presetsMax"
+    $total = ConvertTo-P6UnsignedField -Match $match -Name "total"
+    $usedBefore = ConvertTo-P6UnsignedField -Match $match -Name "usedBefore"
+    $availableBefore = ConvertTo-P6UnsignedField -Match $match -Name "availableBefore"
+    $namespaceBefore = ConvertTo-P6UnsignedField -Match $match -Name "namespaceBefore"
+    $usedMax = ConvertTo-P6UnsignedField -Match $match -Name "usedMax"
+    $availableMax = ConvertTo-P6UnsignedField -Match $match -Name "availableMax"
+    $namespaceMax = ConvertTo-P6UnsignedField -Match $match -Name "namespaceMax"
+    $profileRejected = ConvertTo-P6UnsignedField -Match $match -Name "profileRejected"
+    $profileRecovered = ConvertTo-P6UnsignedField -Match $match -Name "profileRecovered"
+    $presetRejected = ConvertTo-P6UnsignedField -Match $match -Name "presetRejected"
+    $presetRecovered = ConvertTo-P6UnsignedField -Match $match -Name "presetRecovered"
+    $availableClean = ConvertTo-P6UnsignedField -Match $match -Name "availableClean"
+    $namespaceClean = ConvertTo-P6UnsignedField -Match $match -Name "namespaceClean"
+    $heapBefore = ConvertTo-P6UnsignedField -Match $match -Name "heapBefore"
+    $heapAfter = ConvertTo-P6UnsignedField -Match $match -Name "heapAfter"
+    $largestBefore = ConvertTo-P6UnsignedField -Match $match -Name "largestBefore"
+    $largestAfter = ConvertTo-P6UnsignedField -Match $match -Name "largestAfter"
+    $stackFree = ConvertTo-P6UnsignedField -Match $match -Name "stackFree"
+    $operationMs = ConvertTo-P6UnsignedField -Match $match -Name "operationMs"
+    $renderMs = ConvertTo-P6UnsignedField -Match $match -Name "renderMs"
+    if ($profilesBefore -notin @([uint64]1, [uint64]2) -or
+        $profilesMax -ne 3 -or $ownedProfiles -ne (3 - $profilesBefore) -or
+        $presetsMax -ne 6) {
+        throw "P6 provider profile or preset boundary measurement is invalid"
+    }
+    if ($total -eq 0 -or $usedBefore -eq 0 -or $availableBefore -eq 0 -or
+        $namespaceBefore -eq 0 -or $usedMax -le $usedBefore -or
+        $availableMax -ge $availableBefore -or
+        $namespaceMax -lt $namespaceBefore -or
+        $usedBefore -gt $total -or $availableBefore -gt $total -or
+        $usedMax -gt $total -or $availableMax -gt $total -or
+        $availableClean -gt $total) {
+        throw "P6 provider NVS accounting measurement is invalid"
+    }
+    if ($profileRejected -ge 30 -or $presetRejected -ge 8 -or
+        $profileRecovered -le $profileRejected -or
+        $presetRecovered -le $presetRejected -or
+        $availableClean -le $availableMax -or
+        $namespaceClean -ne $namespaceBefore) {
+        throw "P6 provider capacity rejection or recovery measurement is invalid"
+    }
+    $heapFloor = [uint64](70 * 1024)
+    if ($heapBefore -eq 0 -or $heapAfter -lt $heapFloor -or
+        $largestBefore -eq 0 -or $largestAfter -eq 0 -or
+        $largestBefore -gt $heapBefore -or $largestAfter -gt $heapAfter -or
+        $stackFree -eq 0 -or $operationMs -gt 3000 -or $renderMs -gt 250) {
+        throw "P6 provider resource or latency measurement is invalid"
+    }
+    return [pscustomobject]@{
+        Total = $total
+        NamespaceBefore = $namespaceBefore
+    }
+}
+
+function Assert-P6ProviderFinalLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Line,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Nonce,
+
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$Measured
+    )
+
+    $pattern = '^P6PROVIDERTEST result=pass nonce=(?<nonce>[0-9]{1,20}) ' +
+        'reboot=pass persistence=pass resolver=pass default=pass cleanup=pass ' +
+        'total=(?<total>[0-9]+) used=(?<used>[0-9]+) available=(?<available>[0-9]+) ' +
+        'namespace=(?<namespace>[0-9]+) heap=(?<heap>[0-9]+) largest=(?<largest>[0-9]+) ' +
+        'stack_free=(?<stackFree>[0-9]+) error=none$'
+    $match = [regex]::Match($Line, $pattern)
+    if (-not $match.Success -or $match.Groups["nonce"].Value -ne $Nonce) {
+        throw "P6 provider final envelope is malformed or belongs to another nonce"
+    }
+    $total = ConvertTo-P6UnsignedField -Match $match -Name "total"
+    $used = ConvertTo-P6UnsignedField -Match $match -Name "used"
+    $available = ConvertTo-P6UnsignedField -Match $match -Name "available"
+    $namespace = ConvertTo-P6UnsignedField -Match $match -Name "namespace"
+    $heap = ConvertTo-P6UnsignedField -Match $match -Name "heap"
+    $largest = ConvertTo-P6UnsignedField -Match $match -Name "largest"
+    $stackFree = ConvertTo-P6UnsignedField -Match $match -Name "stackFree"
+    if ($total -ne $Measured.Total -or $total -eq 0 -or
+        $used -eq 0 -or $used -gt $total -or
+        $available -eq 0 -or $available -gt $total -or
+        $namespace -ne $Measured.NamespaceBefore -or
+        $heap -lt [uint64](70 * 1024) -or $largest -eq 0 -or
+        $largest -gt $heap -or $stackFree -eq 0) {
+        throw "P6 provider final cleanup or resource measurement is invalid"
+    }
+}
+
+function Invoke-P6ProviderRegression {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.Ports.SerialPort]$Serial,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LogPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Nonce
+    )
+
+    if ($script:readinessLost) {
+        throw "Device readiness was already lost before the P6 provider regression"
+    }
+    $command = "P6PROVIDERTEST$Nonce"
+    $finishCommand = "P6PROVIDERFINISH$Nonce"
+    Start-Sleep -Milliseconds 100
+    try {
+        $initialRead = Read-SerialLines -Serial $Serial -Pending $script:serialPending
+    } catch {
+        $script:readinessLost = $true
+        throw
+    }
+    $script:serialPending = $initialRead.Pending
+    $initialFailure = ""
+    foreach ($line in $initialRead.Lines) {
+        if ($line -match 'Guru Meditation|Brownout|abort\(\)|\bFATAL\b|ESP-ROM:esp32s3|rst:0x|^BOOT ') {
+            $initialFailure = $line
+        }
+    }
+    if ($initialFailure.Length -eq 0 -and
+        $script:serialPending -match 'Guru Meditation|Brownout|abort\(\)|\bFATAL\b|ESP-ROM:esp32s3|rst:0x|^BOOT ') {
+        $initialFailure = $script:serialPending
+    }
+    if ($initialFailure.Length -gt 0) {
+        $script:readinessLost = $true
+    }
+    foreach ($line in $initialRead.Lines) {
+        if ($line.Length -gt 0) {
+            Add-Content -LiteralPath $LogPath -Value $line
+        }
+    }
+    if ($initialFailure.Length -gt 0) {
+        if ($script:serialPending.Length -gt 0) {
+            Add-Content -LiteralPath $LogPath -Value $script:serialPending
+        }
+        throw "Device reset, panic, or fatal output before P6 provider regression"
+    }
+    try {
+        $Serial.WriteLine($command)
+        $Serial.BaseStream.Flush()
+    } catch {
+        $script:readinessLost = $true
+        throw
+    }
+    Write-Host "RUN  P6 provider persistence and limits"
+    Add-Content -LiteralPath $LogPath -Value "COMMAND name=P6 provider persistence and limits"
+
+    $phase = "await_reboot_marker"
+    $stageDeadline = [DateTime]::UtcNow.AddSeconds(300)
+    $readyDeadline = [DateTime]::MaxValue
+    $finalDeadline = [DateTime]::MaxValue
+    $measured = $null
+    $romObserved = $false
+    $resetLineObserved = $false
+    $bootObserved = $false
+    $continuationSent = $false
+    $finalObserved = $false
+    while ($true) {
+        $now = [DateTime]::UtcNow
+        $deadline = switch ($phase) {
+            "await_reboot_marker" { $stageDeadline }
+            "await_boot" { $readyDeadline }
+            "await_ready" { $readyDeadline }
+            "ready_observed" { $readyDeadline }
+            "await_final" { $finalDeadline }
+            default { [DateTime]::MinValue }
+        }
+        if ($now -ge $deadline) {
+            $script:readinessLost = $true
+            if ($script:serialPending.Length -gt 0) {
+                Add-Content -LiteralPath $LogPath -Value $script:serialPending
+            }
+            throw "P6 provider regression timed out during $phase"
+        }
+
+        Start-Sleep -Milliseconds 40
+        try {
+            $read = Read-SerialLines -Serial $Serial -Pending $script:serialPending
+        } catch {
+            $script:readinessLost = $true
+            throw
+        }
+        $script:serialPending = $read.Pending
+        $batchFailure = ""
+        $batchReadinessLost = $false
+        foreach ($line in $read.Lines) {
+            if ($line.Length -eq 0) {
+                continue
+            }
+            if ($line -match 'Guru Meditation|Brownout|abort\(\)|\bFATAL\b') {
+                if ($batchFailure.Length -eq 0) {
+                    $batchFailure = "panic or fatal output: $line"
+                }
+                $batchReadinessLost = $true
+                continue
+            }
+
+            $isRomLine = $line -match 'ESP-ROM:esp32s3'
+            $isResetLine = $line -match 'rst:0x'
+            $isBootLine = $line -match '^BOOT '
+            if ($isRomLine -or $isResetLine -or $isBootLine) {
+                if ($phase -ne "await_boot") {
+                    if ($batchFailure.Length -eq 0) {
+                        $batchFailure = "unexpected or second reset output: $line"
+                    }
+                    $batchReadinessLost = $true
+                    continue
+                }
+                if ($isRomLine) {
+                    if ($romObserved) {
+                        if ($batchFailure.Length -eq 0) {
+                            $batchFailure = "second ROM boot marker before READY"
+                        }
+                        $batchReadinessLost = $true
+                    }
+                    $romObserved = $true
+                }
+                if ($isResetLine) {
+                    if ($resetLineObserved) {
+                        if ($batchFailure.Length -eq 0) {
+                            $batchFailure = "second reset-reason line before READY"
+                        }
+                        $batchReadinessLost = $true
+                    }
+                    $resetLineObserved = $true
+                }
+                if ($isBootLine) {
+                    if ($bootObserved -or
+                        $line -notmatch '^BOOT firmware=[^ ]+ reset_reason=3$') {
+                        if ($batchFailure.Length -eq 0) {
+                            $batchFailure = "planned BOOT marker is missing or invalid: $line"
+                        }
+                        $batchReadinessLost = $true
+                    } else {
+                        $bootObserved = $true
+                        $phase = "await_ready"
+                    }
+                }
+                continue
+            }
+            if ($line -match '^P6PROVIDERTEST result=failed\b') {
+                if ($batchFailure.Length -eq 0) {
+                    $batchFailure = "firmware reported a failed P6 provider proof"
+                }
+                continue
+            }
+            if ($batchFailure.Length -gt 0) {
+                continue
+            }
+
+            if ($phase -eq "await_reboot_marker") {
+                if ($line -match '^P6PROVIDERTEST stage=measured\b') {
+                    if ($null -ne $measured) {
+                        $batchFailure = "duplicate P6 provider measured envelope"
+                    } else {
+                        try {
+                            $measured = Assert-P6ProviderMeasuredLine -Line $line -Nonce $Nonce
+                        } catch {
+                            $batchFailure = $_.Exception.Message
+                        }
+                    }
+                    continue
+                }
+                if ($line -eq "P6PROVIDERTEST stage=reboot nonce=$Nonce") {
+                    if ($null -eq $measured) {
+                        $batchFailure = "P6 provider reboot marker preceded its measured envelope"
+                    } else {
+                        $phase = "await_boot"
+                        $readyDeadline = [DateTime]::UtcNow.AddSeconds(45)
+                    }
+                    continue
+                }
+                if ($line -match '^P6PROVIDERTEST ') {
+                    $batchFailure = "unexpected P6 provider output before reboot: $line"
+                }
+                continue
+            }
+            if ($phase -eq "await_boot") {
+                if ($line -eq "READY") {
+                    $batchFailure = "READY arrived before the exact planned BOOT marker"
+                    $batchReadinessLost = $true
+                } elseif ($line -match '^P6PROVIDERTEST ') {
+                    $batchFailure = "unexpected P6 provider output while awaiting BOOT: $line"
+                }
+                continue
+            }
+            if ($phase -eq "await_ready") {
+                if ($line -eq "READY") {
+                    $phase = "ready_observed"
+                } elseif ($line -match '^P6PROVIDERTEST ') {
+                    $batchFailure = "unexpected P6 provider output while awaiting READY: $line"
+                }
+                continue
+            }
+            if ($phase -eq "ready_observed") {
+                if ($line -eq "READY") {
+                    $batchFailure = "duplicate READY after the planned reboot"
+                    $batchReadinessLost = $true
+                } elseif ($line -match '^P6PROVIDERTEST ') {
+                    $batchFailure = "unexpected P6 provider output before continuation"
+                }
+                continue
+            }
+            if ($phase -eq "await_final") {
+                if ($line -eq "READY") {
+                    $batchFailure = "unexpected READY after P6 provider continuation"
+                    $batchReadinessLost = $true
+                } elseif ($line -match '^P6PROVIDERTEST result=pass\b') {
+                    if ($finalObserved) {
+                        $batchFailure = "duplicate P6 provider final envelope"
+                    } else {
+                        try {
+                            Assert-P6ProviderFinalLine -Line $line -Nonce $Nonce -Measured $measured
+                            $finalObserved = $true
+                        } catch {
+                            $batchFailure = $_.Exception.Message
+                        }
+                    }
+                } elseif ($line -match '^P6PROVIDERTEST ') {
+                    $batchFailure = "unexpected P6 provider continuation output: $line"
+                }
+            }
+        }
+
+        $pendingFatal = $script:serialPending -match
+            'Guru Meditation|Brownout|abort\(\)|\bFATAL\b'
+        $pendingReset = $script:serialPending -match
+            'ESP-ROM:esp32s3|rst:0x|^BOOT(?: |$)'
+        if ($pendingFatal -or ($pendingReset -and $phase -ne "await_boot")) {
+            if ($batchFailure.Length -eq 0) {
+                $batchFailure = "panic, fatal, or forbidden reset output in carried serial data"
+            }
+            $batchReadinessLost = $true
+        }
+        if ($batchReadinessLost) {
+            $script:readinessLost = $true
+        }
+        foreach ($line in $read.Lines) {
+            if ($line.Length -gt 0) {
+                Add-Content -LiteralPath $LogPath -Value $line
+            }
+        }
+        if ($batchFailure.Length -gt 0) {
+            if ($script:serialPending.Length -gt 0) {
+                Add-Content -LiteralPath $LogPath -Value $script:serialPending
+            }
+            throw "P6 provider regression failed: $batchFailure"
+        }
+
+        if ($phase -eq "ready_observed" -and
+            $script:serialPending.Length -eq 0) {
+            if ($continuationSent) {
+                $script:readinessLost = $true
+                throw "P6 provider continuation would be sent more than once"
+            }
+            try {
+                $Serial.WriteLine($finishCommand)
+                $Serial.BaseStream.Flush()
+            } catch {
+                $script:readinessLost = $true
+                throw
+            }
+            $continuationSent = $true
+            $phase = "await_final"
+            $finalDeadline = [DateTime]::UtcNow.AddSeconds(60)
+            Add-Content -LiteralPath $LogPath -Value "COMMAND name=P6 provider reboot continuation"
+        }
+        if ($finalObserved -and $script:serialPending.Length -eq 0) {
+            $script:cleanupReadinessConfirmed = $true
+            Write-Host "PASS P6 provider persistence and limits"
+            return
+        }
+    }
 }
 
 $offlineCases = @(
@@ -395,6 +820,14 @@ try {
     $serial.Open()
     Start-Sleep -Seconds 12
     Assert-InitialDeviceReadiness -Serial $serial -LogPath $resolvedLogPath
+    if ($Suite -eq "p6-providers") {
+        $p6ProviderNonce = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString(
+            [System.Globalization.CultureInfo]::InvariantCulture)
+        Invoke-P6ProviderRegression -Serial $serial -LogPath $resolvedLogPath -Nonce $p6ProviderNonce
+        Add-Content -LiteralPath $resolvedLogPath -Value ("CARDMIND_REGRESSION result=pass completed={0:o}" -f [DateTime]::UtcNow)
+        Write-Host ("CARDMIND_REGRESSION result=pass cases=1 log={0}" -f $resolvedLogPath)
+        return
+    }
     $cases = [System.Collections.Generic.List[object]]::new()
     if ($Suite -eq "status") {
         $cases.Add($offlineCases[0])

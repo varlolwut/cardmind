@@ -160,7 +160,7 @@ bool isValidProjectChatHistoryQuota(std::uint32_t quotaBytes)
     return quotaBytes == 0 || quotaBytes >= kMinimumProjectChatHistoryQuotaBytes;
 }
 
-OperationResult loadSettings(Settings& settings)
+OperationResult loadSettings(Settings& settings, ProviderProfileStore& providerStore)
 {
     Preferences preferences;
     if (!preferences.begin(kNamespace, false)) {
@@ -226,10 +226,33 @@ OperationResult loadSettings(Settings& settings)
         loaded.newChatToolPolicy = decoded.newChat;
     }
     preferences.end();
-    loaded.apiKey.trim();
     loaded.sttApiKey.trim();
     loaded.webSearchApiKey.trim();
     loaded.ttsApiKey.trim();
+    ProviderStoreResult providerResult = providerStore.state() ==
+            ProviderStoreState::Uninitialized
+        ? providerStore.initialize(loaded)
+        : validProviderStoreResult();
+    if (providerStore.state() == ProviderStoreState::Ready) {
+        if (!providerStoreResultSucceeded(providerResult) &&
+            providerResult.error != ProviderStoreError::CleanupFailed) {
+            return {false, String(providerResult.message.c_str())};
+        }
+        const ProviderStoreResult resolved = providerStore.loadDefaultInto(loaded);
+        if (!providerStoreResultSucceeded(resolved)) {
+            return {false, String(resolved.message.c_str())};
+        }
+        if (providerResult.error == ProviderStoreError::CleanupFailed) {
+            Serial.printf("WARN event=provider_store state=ready error=%s\n",
+                          providerStoreErrorName(providerResult.error));
+        }
+    } else if (providerStore.state() == ProviderStoreState::LegacyRetained) {
+        Serial.printf("WARN event=provider_store state=%s error=%s\n",
+                      providerStoreStateName(providerStore.state()),
+                      providerStoreErrorName(ProviderStoreError::LegacyRetained));
+    } else if (providerStore.state() != ProviderStoreState::Unconfigured) {
+        return {false, String(providerStore.stateMessage().c_str())};
+    }
     settings = loaded;
     return {true, ""};
 }
@@ -238,14 +261,6 @@ OperationResult saveSettings(const Settings& settings)
 {
     if (settings.wifiSsid.isEmpty()) {
         return {false, "Wi-Fi SSID must not be empty"};
-    }
-    if (settings.apiKey.length() < 8) {
-        return {false, "API key must contain at least 8 characters"};
-    }
-    if (!settings.apiBaseUrl.startsWith("https://") || settings.apiBaseUrl.length() < 12 ||
-        settings.apiBaseUrl.length() > 180 || settings.apiBaseUrl.indexOf(' ') >= 0 ||
-        settings.apiBaseUrl.indexOf('?') >= 0 || settings.apiBaseUrl.indexOf('#') >= 0) {
-        return {false, "API base URL must be an https:// URL without spaces, query, or fragment"};
     }
     if (settings.model.isEmpty()) {
         return {false, "Model id must not be empty"};
@@ -329,14 +344,6 @@ OperationResult saveSettings(const Settings& settings)
                                     settings.wifiPassword.length(), "Wi-Fi password");
     }
     if (result.success) {
-        result = verifyStoredLength(preferences.putString("api_key", settings.apiKey),
-                                    settings.apiKey.length(), "API key");
-    }
-    if (result.success) {
-        result = verifyStoredLength(preferences.putString("base_url", settings.apiBaseUrl),
-                                    settings.apiBaseUrl.length(), "API base URL");
-    }
-    if (result.success) {
         result = verifyStoredLength(
             preferences.putString("model", settings.model), settings.model.length(), "model id");
     }
@@ -417,13 +424,6 @@ OperationResult saveSettings(const Settings& settings)
             preferences.getString("wifi_pass", "__missing__"), settings.wifiPassword, "Wi-Fi password");
     }
     if (result.success) {
-        result = verifyStoredValue(preferences.getString("api_key", ""), settings.apiKey, "API key");
-    }
-    if (result.success) {
-        result = verifyStoredValue(
-            preferences.getString("base_url", ""), settings.apiBaseUrl, "API base URL");
-    }
-    if (result.success) {
         result = verifyStoredValue(preferences.getString("model", ""), settings.model, "model id");
     }
     if (result.success) {
@@ -496,6 +496,30 @@ OperationResult saveSettings(const Settings& settings)
     }
     preferences.end();
     return result;
+}
+
+ProviderStoreResult saveProvisionedSettings(
+    const Settings& settings,
+    ProviderProfileStore& providerStore)
+{
+    const ProviderStoreResult provider =
+        providerStore.saveProvisionedDefault(settings);
+    if (!providerStoreResultSucceeded(provider) &&
+        (provider.error != ProviderStoreError::CleanupFailed ||
+         !provider.committed)) {
+        return provider;
+    }
+    const OperationResult saved = saveSettings(settings);
+    if (!saved.success) {
+        std::string message(saved.error.c_str());
+        if (provider.committed) {
+            message = "API provider authority was saved, but other settings failed: " +
+                      message;
+        }
+        return {ProviderStoreError::Storage, provider.committed,
+                provider.outcomeUnknown, std::move(message)};
+    }
+    return provider;
 }
 
 OperationResult saveModel(const String& model)

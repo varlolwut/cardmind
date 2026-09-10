@@ -168,7 +168,12 @@ void runWebSearchRoundTripTest()
     const std::vector<cardputer::Message> testHistory = {
         {"user", "/search Call web_search exactly once with JSON query \"Cardputer Zero\", then summarize its result."},
     };
-    cardputer::Settings requestSettings = settings;
+    cardputer::ProviderSettingsResult provider = resolveProviderSettings("");
+    if (!cardputer::providerStoreResultSucceeded(provider.result)) {
+        Serial.println("SEARCHTEST result=failed stage=provider");
+        return;
+    }
+    cardputer::Settings requestSettings = std::move(provider.settings);
     requestSettings.masterToolPolicy =
         cardputer::defaultGlobalToolPermissionPolicy();
     cardputer::ProjectDocument project = {};
@@ -228,8 +233,14 @@ void runApiTest()
     const std::vector<cardputer::Message> testHistory = {
         {"user", "Reply with exactly OK."},
     };
+    cardputer::ProviderSettingsResult provider = resolveProviderSettings("");
+    if (!cardputer::providerStoreResultSucceeded(provider.result)) {
+        Serial.println("APITEST result=failed stage=provider");
+        return;
+    }
     const cardputer::ChatResult result = cardputer::streamChatCompletion(
-        settings, testHistory, "", [](const std::string&) {}, []() { return false; });
+        provider.settings, testHistory, "", [](const std::string&) {},
+        []() { return false; });
     if (!result.success) {
         String safeError = result.error;
         safeError.replace("\r", " ");
@@ -2360,9 +2371,10 @@ void runProjectParityTest()
         } else {
             openProjectActions(source.project.summary);
             const std::vector<String> actions = projectActionItems();
-            const bool renameRoute = actions.size() == 12 &&
+            const bool renameRoute = actions.size() == 13 &&
                 actions[6] == "Rename project" &&
-                actions[10] == "Capability policies";
+                actions[10].startsWith("API profile:") &&
+                actions[11] == "Capability policies";
             openProjectImportList();
             const bool importRoute = currentScreen == Screen::WorkspaceFileList &&
                 workspaceListMode == WorkspaceListMode::ImportProject;
@@ -5080,7 +5092,7 @@ void runDeviceSettingsTest()
     cardputer::OperationResult result = saveAndApplyDeviceSettings(candidate);
     cardputer::Settings loaded;
     if (result.success) {
-        result = cardputer::loadSettings(loaded);
+        result = cardputer::loadSettings(loaded, providerProfileStore);
     }
     if (result.success &&
         (loaded.displayBrightness != candidate.displayBrightness ||
@@ -5129,7 +5141,13 @@ void runToolApiTest()
     const std::vector<cardputer::Message> testHistory = {
         {"user", prompt},
     };
-    cardputer::Settings requestSettings = settings;
+    cardputer::ProviderSettingsResult provider = resolveProviderSettings("");
+    if (!cardputer::providerStoreResultSucceeded(provider.result)) {
+        Serial.println(
+            "TOOLTEST result=failed stage=provider api=failed write=failed file=failed link=failed cleanup=pass");
+        return;
+    }
+    cardputer::Settings requestSettings = std::move(provider.settings);
     requestSettings.webSearchApiKey = "";
     requestSettings.masterToolPolicy =
         cardputer::defaultGlobalToolPermissionPolicy();
@@ -5232,7 +5250,14 @@ void runToolApiTest()
 void runApiProbe()
 {
     ensureNetworkReady();
-    String authority = settings.apiBaseUrl.substring(8);
+    const cardputer::ProviderSettingsResult provider =
+        resolveProviderSettings("");
+    if (!cardputer::providerStoreResultSucceeded(provider.result)) {
+        Serial.println("APIPROBE result=failed stage=provider");
+        return;
+    }
+    const String baseUrl = provider.settings.apiBaseUrl;
+    String authority = baseUrl.substring(8);
     const int pathStart = authority.indexOf('/');
     if (pathStart >= 0) {
         authority = authority.substring(0, pathStart);
@@ -5244,7 +5269,7 @@ void runApiProbe()
         const long parsedPort = authority.substring(portSeparator + 1).toInt();
         if (parsedPort <= 0 || parsedPort > 65535) {
             Serial.printf("APIPROBE result=failed base=%s error=invalid_port\n",
-                          settings.apiBaseUrl.c_str());
+                          baseUrl.c_str());
             return;
         }
         host = authority.substring(0, portSeparator);
@@ -5257,7 +5282,7 @@ void runApiProbe()
     client.stop();
     Serial.printf("APIPROBE result=%s base=%s host=%s port=%u dns=%s address=%s tcp=%s\n",
                   connected ? "pass" : "failed",
-                  settings.apiBaseUrl.c_str(), host.c_str(),
+                  baseUrl.c_str(), host.c_str(),
                   static_cast<unsigned int>(port), resolved ? "pass" : "failed",
                   resolved ? address.toString().c_str() : "unresolved",
                   connected ? "pass" : "failed");
@@ -5307,6 +5332,1253 @@ void runUiBenchmark()
                   static_cast<unsigned int>(heapAfter),
                   static_cast<unsigned int>(largestHeapBefore),
                   static_cast<unsigned int>(largestHeapAfter));
+}
+
+constexpr const char* kP6ProviderFillerNamespace = "assistant";
+constexpr std::size_t kP6ProviderFillerLimit = 1024;
+constexpr std::uint32_t kP6ProviderHeapFloorBytes = 70U * 1024U;
+
+struct P6ProviderFillerResult {
+    cardputer::ProviderStoreResult result;
+    std::size_t ownedCount;
+    cardputer::ProviderStorageStats stats;
+};
+
+struct P6BaselineProfile {
+    cardputer::ApiProfileSummary summary;
+    cardputer::ProviderSettingsResult resolved;
+};
+
+bool isP6ProviderNonce(const String& nonce)
+{
+    if (nonce.isEmpty() || nonce.length() > 20) return false;
+    for (std::size_t index = 0; index < nonce.length(); ++index) {
+        if (nonce[index] < '0' || nonce[index] > '9') return false;
+    }
+    return true;
+}
+
+std::string p6ProviderFillerKey(const String& nonce, std::size_t index)
+{
+    const std::size_t suffixStart = nonce.length() > 6
+        ? nonce.length() - 6 : 0;
+    const String suffix = nonce.substring(suffixStart);
+    char key[16];
+    std::snprintf(key, sizeof(key), "p6%s%04u", suffix.c_str(),
+                  static_cast<unsigned int>(index));
+    return key;
+}
+
+cardputer::ProviderStoreResult p6ProviderFailureResult(
+    cardputer::ProviderStoreError error,
+    bool committed,
+    bool outcomeUnknown)
+{
+    return {error, committed, outcomeUnknown,
+            "P6 provider diagnostic operation failed"};
+}
+
+cardputer::ProviderStoreResult p6CandidateWriteResult(esp_err_t error)
+{
+    const cardputer::ProviderWriteDisposition disposition =
+        cardputer::classifyProviderCandidateSetResult(
+            static_cast<std::int32_t>(error));
+    if (disposition == cardputer::ProviderWriteDisposition::Stored) {
+        return cardputer::validProviderStoreResult();
+    }
+    if (disposition == cardputer::ProviderWriteDisposition::Capacity) {
+        return p6ProviderFailureResult(
+            cardputer::ProviderStoreError::Capacity, false, false);
+    }
+    return p6ProviderFailureResult(
+        cardputer::ProviderStoreError::Storage, false,
+        disposition == cardputer::ProviderWriteDisposition::CandidateUncertain);
+}
+
+cardputer::ProviderStoreResult p6FillerCommitResult(esp_err_t error)
+{
+    if (cardputer::classifyProviderAuthorityCommitResult(
+            static_cast<std::int32_t>(error)) ==
+        cardputer::ProviderWriteDisposition::Stored) {
+        cardputer::ProviderStoreResult result =
+            cardputer::validProviderStoreResult();
+        result.committed = true;
+        return result;
+    }
+    return p6ProviderFailureResult(
+        cardputer::ProviderStoreError::Storage, false, true);
+}
+
+cardputer::ProviderStoreResult p6VerifyProviderFillerKeysAbsent(
+    const String& nonce,
+    std::size_t count)
+{
+    if (count > kP6ProviderFillerLimit) {
+        return p6ProviderFailureResult(
+            cardputer::ProviderStoreError::Capacity, false, false);
+    }
+    nvs_handle_t handle = 0;
+    const esp_err_t openError =
+        nvs_open(kP6ProviderFillerNamespace, NVS_READONLY, &handle);
+    if (openError != ESP_OK) {
+        return p6ProviderFailureResult(
+            cardputer::ProviderStoreError::Storage, false, false);
+    }
+    cardputer::ProviderStoreResult result =
+        cardputer::validProviderStoreResult();
+    for (std::size_t index = 0; index < count; ++index) {
+        nvs_type_t type = NVS_TYPE_ANY;
+        const esp_err_t findError = nvs_find_key(
+            handle, p6ProviderFillerKey(nonce, index).c_str(), &type);
+        if (findError == ESP_OK) {
+            result = p6ProviderFailureResult(
+                cardputer::ProviderStoreError::Conflict, false, false);
+            break;
+        }
+        if (findError != ESP_ERR_NVS_NOT_FOUND) {
+            result = p6ProviderFailureResult(
+                cardputer::ProviderStoreError::Storage, false, false);
+            break;
+        }
+    }
+    nvs_close(handle);
+    return result;
+}
+
+P6ProviderFillerResult p6FillProviderStorageBelow(const String& nonce,
+                                                   std::size_t threshold)
+{
+    const cardputer::ProviderStorageStats empty = {0, 0, 0, 0};
+    const cardputer::ProviderStorageStatsResult before =
+        providerProfileStore.storageStats();
+    if (threshold == 0 ||
+        !cardputer::providerStoreResultSucceeded(before.result)) {
+        return {threshold == 0
+                    ? p6ProviderFailureResult(
+                          cardputer::ProviderStoreError::InvalidInput,
+                          false, false)
+                    : before.result,
+                0, empty};
+    }
+    if (before.stats.availableEntries < threshold) {
+        return {p6ProviderFailureResult(
+                    cardputer::ProviderStoreError::Conflict, false, false),
+                0, before.stats};
+    }
+    const std::size_t requiredCount =
+        before.stats.availableEntries - threshold + 1;
+    const cardputer::ProviderStoreResult collision =
+        p6VerifyProviderFillerKeysAbsent(nonce, requiredCount);
+    if (!cardputer::providerStoreResultSucceeded(collision)) {
+        return {collision, 0, before.stats};
+    }
+
+    nvs_handle_t handle = 0;
+    if (nvs_open(kP6ProviderFillerNamespace, NVS_READWRITE, &handle) !=
+        ESP_OK) {
+        return {p6ProviderFailureResult(
+                    cardputer::ProviderStoreError::Storage, false, false),
+                0, before.stats};
+    }
+    std::size_t ownedCount = 0;
+    for (std::size_t index = 0; index < requiredCount; ++index) {
+        const esp_err_t setError = nvs_set_u8(
+            handle, p6ProviderFillerKey(nonce, index).c_str(), 0xA5U);
+        const cardputer::ProviderStoreResult setResult =
+            p6CandidateWriteResult(setError);
+        if (!cardputer::providerStoreResultSucceeded(setResult)) {
+            nvs_close(handle);
+            return {setResult,
+                    setResult.outcomeUnknown ? index + 1 : ownedCount,
+                    before.stats};
+        }
+        ++ownedCount;
+    }
+    const cardputer::ProviderStoreResult commit =
+        p6FillerCommitResult(nvs_commit(handle));
+    if (!cardputer::providerStoreResultSucceeded(commit)) {
+        nvs_close(handle);
+        return {commit, ownedCount, before.stats};
+    }
+    for (std::size_t index = 0; index < ownedCount; ++index) {
+        std::uint8_t stored = 0;
+        if (nvs_get_u8(handle, p6ProviderFillerKey(nonce, index).c_str(),
+                       &stored) != ESP_OK || stored != 0xA5U) {
+            nvs_close(handle);
+            return {p6ProviderFailureResult(
+                        cardputer::ProviderStoreError::Storage, true, true),
+                    ownedCount, before.stats};
+        }
+    }
+    nvs_close(handle);
+    const cardputer::ProviderStorageStatsResult after =
+        providerProfileStore.storageStats();
+    if (!cardputer::providerStoreResultSucceeded(after.result)) {
+        return {p6ProviderFailureResult(
+                    cardputer::ProviderStoreError::Storage, true, false),
+                ownedCount, empty};
+    }
+    if (after.stats.availableEntries != threshold - 1 ||
+        before.stats.availableEntries - after.stats.availableEntries !=
+            ownedCount) {
+        return {p6ProviderFailureResult(
+                    cardputer::ProviderStoreError::Storage, true, false),
+                ownedCount, after.stats};
+    }
+    return {commit, ownedCount, after.stats};
+}
+
+P6ProviderFillerResult p6ClearProviderFillers(const String& nonce,
+                                              std::size_t ownedCount)
+{
+    const cardputer::ProviderStorageStats empty = {0, 0, 0, 0};
+    if (ownedCount > kP6ProviderFillerLimit) {
+        return {p6ProviderFailureResult(
+                    cardputer::ProviderStoreError::Capacity, false, false),
+                ownedCount, empty};
+    }
+    nvs_handle_t handle = 0;
+    if (nvs_open(kP6ProviderFillerNamespace, NVS_READWRITE, &handle) !=
+        ESP_OK) {
+        return {p6ProviderFailureResult(
+                    cardputer::ProviderStoreError::Storage, false, false),
+                ownedCount, empty};
+    }
+    for (std::size_t index = 0; index < ownedCount; ++index) {
+        nvs_type_t type = NVS_TYPE_ANY;
+        const esp_err_t findError = nvs_find_key(
+            handle, p6ProviderFillerKey(nonce, index).c_str(), &type);
+        if (findError != ESP_OK && findError != ESP_ERR_NVS_NOT_FOUND) {
+            nvs_close(handle);
+            return {p6ProviderFailureResult(
+                        cardputer::ProviderStoreError::Storage, false, false),
+                    ownedCount, empty};
+        }
+    }
+    bool changed = false;
+    for (std::size_t index = 0; index < ownedCount; ++index) {
+        const esp_err_t eraseError = nvs_erase_key(
+            handle, p6ProviderFillerKey(nonce, index).c_str());
+        if (eraseError == ESP_ERR_NVS_NOT_FOUND) continue;
+        const cardputer::ProviderStoreResult eraseResult =
+            p6CandidateWriteResult(eraseError);
+        if (!cardputer::providerStoreResultSucceeded(eraseResult)) {
+            nvs_close(handle);
+            return {eraseResult, ownedCount, empty};
+        }
+        changed = true;
+    }
+    cardputer::ProviderStoreResult result =
+        cardputer::validProviderStoreResult();
+    if (changed) {
+        result = p6FillerCommitResult(nvs_commit(handle));
+        if (!cardputer::providerStoreResultSucceeded(result)) {
+            nvs_close(handle);
+            return {result, ownedCount, empty};
+        }
+    }
+    for (std::size_t index = 0; index < ownedCount; ++index) {
+        nvs_type_t type = NVS_TYPE_ANY;
+        if (nvs_find_key(handle, p6ProviderFillerKey(nonce, index).c_str(),
+                         &type) != ESP_ERR_NVS_NOT_FOUND) {
+            nvs_close(handle);
+            return {p6ProviderFailureResult(
+                        cardputer::ProviderStoreError::Storage,
+                        changed, true),
+                    ownedCount, empty};
+        }
+    }
+    nvs_close(handle);
+    const cardputer::ProviderStorageStatsResult after =
+        providerProfileStore.storageStats();
+    if (!cardputer::providerStoreResultSucceeded(after.result)) {
+        return {p6ProviderFailureResult(
+                    cardputer::ProviderStoreError::Storage,
+                    changed, false),
+                ownedCount, empty};
+    }
+    result.committed = changed;
+    return {result, ownedCount, after.stats};
+}
+
+std::string p6PaddedValue(const std::string& prefix,
+                          std::size_t bytes,
+                          char fill)
+{
+    if (prefix.size() > bytes) return "";
+    std::string value = prefix;
+    value.append(bytes - value.size(), fill);
+    return value;
+}
+
+cardputer::ApiProfileInput p6MaximumProfileInput(const String& nonce,
+                                                 std::size_t index,
+                                                 char fill)
+{
+    const std::string suffix = std::to_string(index);
+    const std::string name = p6PaddedValue(
+        "P6-" + std::string(nonce.c_str()) + "-" + suffix,
+        cardputer::kMaximumApiProfileNameBytes, fill);
+    std::string baseUrl = p6PaddedValue(
+        "https://127.0.0.1:9/v1/", cardputer::kMaximumApiBaseUrlBytes,
+        fill);
+    baseUrl.back() = fill;
+    return {name, baseUrl,
+            std::string(cardputer::kMaximumApiKeyBytes, fill)};
+}
+
+cardputer::ModelPresetInput p6MaximumPresetInput(const String& nonce,
+                                                 std::size_t index,
+                                                 char fill)
+{
+    return {
+        p6PaddedValue("P6-" + std::string(nonce.c_str()) + "-" +
+                          std::to_string(index),
+                      cardputer::kMaximumModelPresetNameBytes, fill),
+        p6PaddedValue("p6-model-" + std::to_string(index),
+                      cardputer::kMaximumModelPresetModelBytes, fill),
+        cardputer::kMaximumModelPresetOutputTokens,
+    };
+}
+
+std::string p6RebootProfileName(const String& nonce,
+                                const std::string& defaultId,
+                                char stage)
+{
+    return "P6" + std::string(1, stage) + std::string(nonce.c_str()) +
+           "-" + defaultId;
+}
+
+bool p6SettingsAuthorityEquals(
+    const cardputer::ProviderSettingsResult& left,
+    const cardputer::ProviderSettingsResult& right)
+{
+    return cardputer::providerStoreResultSucceeded(left.result) &&
+           cardputer::providerStoreResultSucceeded(right.result) &&
+           left.settings.apiKey == right.settings.apiKey &&
+           left.settings.apiBaseUrl == right.settings.apiBaseUrl &&
+           cardputer::providerAuthorityIdentitiesEqual(
+               left.authority, right.authority);
+}
+
+bool p6BaselineProfilesUnchanged(
+    const cardputer::ApiProfilesResult& profiles,
+    const std::vector<P6BaselineProfile>& baseline)
+{
+    if (!cardputer::providerStoreResultSucceeded(profiles.result) ||
+        profiles.profiles.size() != baseline.size() || baseline.empty() ||
+        profiles.defaultProfileId.empty()) {
+        return false;
+    }
+    for (const P6BaselineProfile& expected : baseline) {
+        const auto current = std::find_if(
+            profiles.profiles.begin(), profiles.profiles.end(),
+            [&expected](const cardputer::ApiProfileSummary& profile) {
+                return profile.id == expected.summary.id;
+            });
+        if (current == profiles.profiles.end() ||
+            current->name != expected.summary.name ||
+            current->baseUrl != expected.summary.baseUrl ||
+            current->authorityRevision !=
+                expected.summary.authorityRevision ||
+            current->isDefault != expected.summary.isDefault) {
+            return false;
+        }
+        const cardputer::ProviderSettingsResult resolved =
+            resolveProviderSettings(String(expected.summary.id.c_str()));
+        if (!p6SettingsAuthorityEquals(resolved, expected.resolved)) {
+            return false;
+        }
+    }
+    const auto expectedDefault = std::find_if(
+        baseline.begin(), baseline.end(), [](const P6BaselineProfile& profile) {
+            return profile.summary.isDefault;
+        });
+    return expectedDefault != baseline.end() &&
+           profiles.defaultProfileId == expectedDefault->summary.id;
+}
+
+cardputer::ProviderStoreResult p6DeleteOwnedProviderFixtures(
+    const std::vector<std::string>& profileIds,
+    const std::vector<std::string>& presetIds)
+{
+    cardputer::ProviderStoreResult failure =
+        cardputer::validProviderStoreResult();
+    for (auto preset = presetIds.rbegin(); preset != presetIds.rend();
+         ++preset) {
+        const cardputer::ProviderStoreResult removed =
+            providerProfileStore.deleteModelPreset(*preset);
+        if (!cardputer::providerStoreResultSucceeded(removed)) {
+            if (removed.outcomeUnknown) return removed;
+            if (cardputer::providerStoreResultSucceeded(failure)) {
+                failure = removed;
+            }
+        }
+    }
+    for (auto profile = profileIds.rbegin(); profile != profileIds.rend();
+         ++profile) {
+        const cardputer::ProviderStoreResult removed =
+            providerProfileStore.deleteProfile(*profile);
+        if (!cardputer::providerStoreResultSucceeded(removed)) {
+            if (removed.outcomeUnknown) return removed;
+            if (cardputer::providerStoreResultSucceeded(failure)) {
+                failure = removed;
+            }
+        }
+    }
+    return failure;
+}
+
+void p6ObserveOperation(std::uint32_t startedAt,
+                        std::uint32_t& maximumMilliseconds)
+{
+    const std::uint32_t elapsed = millis() - startedAt;
+    if (elapsed > maximumMilliseconds) maximumMilliseconds = elapsed;
+}
+
+void printP6ProviderFailure(const String& nonce,
+                            const char* stage,
+                            bool cleanupComplete,
+                            const cardputer::ProviderStoreResult& cause)
+{
+    Serial.printf(
+        "P6PROVIDERTEST result=failed nonce=%s stage=%s cleanup=%s cause=%s committed=%s outcome=%s error=proof_failed\n",
+        nonce.c_str(), stage, cleanupComplete ? "pass" : "failed",
+        cardputer::providerStoreErrorName(cause.error),
+        cause.committed ? "yes" : "no",
+        cause.outcomeUnknown ? "unknown" : "known");
+}
+
+void runP6ProviderRebootContinuation(const String& nonce)
+{
+    if (!isP6ProviderNonce(nonce)) {
+        printP6ProviderFailure(
+            nonce, "invalid_finish_nonce", false,
+            p6ProviderFailureResult(
+                cardputer::ProviderStoreError::InvalidInput, false, false));
+        return;
+    }
+    const cardputer::ApiProfilesResult initialProfiles =
+        providerProfileStore.listProfiles();
+    const cardputer::ModelPresetsResult initialPresets =
+        providerProfileStore.listModelPresets();
+    if (!cardputer::providerStoreResultSucceeded(initialProfiles.result) ||
+        !cardputer::providerStoreResultSucceeded(initialPresets.result)) {
+        printP6ProviderFailure(
+            nonce, "finish_provider_state", false,
+            cardputer::providerStoreResultSucceeded(initialProfiles.result)
+                ? initialPresets.result : initialProfiles.result);
+        return;
+    }
+
+    const std::string firstPrefix =
+        "P6A" + std::string(nonce.c_str()) + "-";
+    const std::string persistedPrefix =
+        "P6B" + std::string(nonce.c_str()) + "-";
+    const cardputer::ApiProfileSummary* owned = nullptr;
+    std::size_t firstMatches = 0;
+    std::size_t persistedMatches = 0;
+    for (const cardputer::ApiProfileSummary& profile :
+         initialProfiles.profiles) {
+        if (profile.name.rfind(firstPrefix, 0) == 0) ++firstMatches;
+        if (profile.name.rfind(persistedPrefix, 0) == 0) {
+            ++persistedMatches;
+            owned = &profile;
+        }
+    }
+    const cardputer::ApiProfileInput expected =
+        p6MaximumProfileInput(nonce, 91, 'B');
+    const std::string exactName = p6RebootProfileName(
+        nonce, initialProfiles.defaultProfileId, 'B');
+    const cardputer::ProviderSettingsResult resolved = owned == nullptr
+        ? cardputer::ProviderSettingsResult{
+              p6ProviderFailureResult(
+                  cardputer::ProviderStoreError::NotFound, false, false),
+              {}, {cardputer::ProviderAuthorityKind::None, "", 0}}
+        : resolveProviderSettings(String(owned->id.c_str()));
+    const cardputer::ProviderSettingsResult currentDefault =
+        resolveProviderSettings("");
+    const bool softwareReset = esp_reset_reason() == ESP_RST_SW;
+    const bool ownershipBound =
+        providerProfileStore.state() == cardputer::ProviderStoreState::Ready &&
+        softwareReset && firstMatches == 0 && persistedMatches == 1 &&
+        owned != nullptr && initialPresets.presets.empty() &&
+        initialProfiles.profiles.size() >= 2 &&
+        initialProfiles.profiles.size() <= cardputer::kMaximumApiProfiles &&
+        cardputer::isValidProviderStableId(initialProfiles.defaultProfileId) &&
+        cardputer::isValidProviderStableId(owned->id) &&
+        owned->name == exactName && owned->baseUrl == expected.baseUrl &&
+        owned->authorityRevision == 2 && !owned->isDefault &&
+        cardputer::providerStoreResultSucceeded(resolved.result) &&
+        resolved.authority.kind == cardputer::ProviderAuthorityKind::Profile &&
+        resolved.authority.profileId == owned->id &&
+        resolved.authority.revision == 2 &&
+        resolved.settings.apiBaseUrl == expected.baseUrl.c_str() &&
+        resolved.settings.apiKey == expected.apiKey.c_str() &&
+        cardputer::providerStoreResultSucceeded(currentDefault.result) &&
+        currentDefault.authority.profileId == initialProfiles.defaultProfileId &&
+        currentDefault.settings.apiKey == settings.apiKey &&
+        currentDefault.settings.apiBaseUrl == settings.apiBaseUrl;
+    if (!ownershipBound) {
+        printP6ProviderFailure(
+            nonce, "finish_identity", false,
+            p6ProviderFailureResult(
+                cardputer::ProviderStoreError::Conflict, false, false));
+        return;
+    }
+
+    const std::string ownedId = owned->id;
+    const cardputer::ProviderStoreResult removed =
+        providerProfileStore.deleteProfile(ownedId);
+    if (!cardputer::providerStoreResultSucceeded(removed)) {
+        printP6ProviderFailure(nonce, "finish_delete", false, removed);
+        return;
+    }
+    const cardputer::ApiProfilesResult finalProfiles =
+        providerProfileStore.listProfiles();
+    const cardputer::ModelPresetsResult finalPresets =
+        providerProfileStore.listModelPresets();
+    const cardputer::ProviderSettingsResult finalDefault =
+        resolveProviderSettings("");
+    const cardputer::ProviderSettingsResult deleted =
+        resolveProviderSettings(String(ownedId.c_str()));
+    const cardputer::ProviderStorageStatsResult stats =
+        providerProfileStore.storageStats();
+    const bool cleanupComplete =
+        cardputer::providerStoreResultSucceeded(finalProfiles.result) &&
+        cardputer::providerStoreResultSucceeded(finalPresets.result) &&
+        finalProfiles.profiles.size() + 1 == initialProfiles.profiles.size() &&
+        finalProfiles.defaultProfileId == initialProfiles.defaultProfileId &&
+        finalPresets.presets.empty() &&
+        std::none_of(
+            finalProfiles.profiles.begin(), finalProfiles.profiles.end(),
+            [&ownedId, &firstPrefix, &persistedPrefix](
+                const cardputer::ApiProfileSummary& profile) {
+                return profile.id == ownedId ||
+                       profile.name.rfind(firstPrefix, 0) == 0 ||
+                       profile.name.rfind(persistedPrefix, 0) == 0;
+            }) &&
+        deleted.result.error == cardputer::ProviderStoreError::NotFound &&
+        !deleted.result.committed && !deleted.result.outcomeUnknown &&
+        cardputer::providerStoreResultSucceeded(finalDefault.result) &&
+        finalDefault.authority.profileId == initialProfiles.defaultProfileId &&
+        finalDefault.settings.apiKey == settings.apiKey &&
+        finalDefault.settings.apiBaseUrl == settings.apiBaseUrl;
+    const std::uint32_t heap = ESP.getFreeHeap();
+    const std::uint32_t largest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    const std::uint32_t stack = uxTaskGetStackHighWaterMark(nullptr);
+    const bool passed = cleanupComplete &&
+        cardputer::providerStoreResultSucceeded(stats.result) &&
+        heap >= kP6ProviderHeapFloorBytes && stack > 0;
+    if (!passed) {
+        printP6ProviderFailure(
+            nonce, "finish_verify", cleanupComplete,
+            cardputer::providerStoreResultSucceeded(stats.result)
+                ? p6ProviderFailureResult(
+                      cardputer::ProviderStoreError::Corrupt, true, false)
+                : stats.result);
+        return;
+    }
+    Serial.printf(
+        "P6PROVIDERTEST result=pass nonce=%s reboot=pass persistence=pass resolver=pass default=pass cleanup=pass total=%u used=%u available=%u namespace=%u heap=%u largest=%u stack_free=%u error=none\n",
+        nonce.c_str(),
+        static_cast<unsigned int>(stats.stats.totalEntries),
+        static_cast<unsigned int>(stats.stats.usedEntries),
+        static_cast<unsigned int>(stats.stats.availableEntries),
+        static_cast<unsigned int>(stats.stats.namespaceEntries),
+        static_cast<unsigned int>(heap),
+        static_cast<unsigned int>(largest),
+        static_cast<unsigned int>(stack));
+}
+
+void runP6ProviderTest(const String& nonce)
+{
+    if (!isP6ProviderNonce(nonce)) {
+        printP6ProviderFailure(
+            nonce, "invalid_nonce", true,
+            p6ProviderFailureResult(
+                cardputer::ProviderStoreError::InvalidInput, false, false));
+        return;
+    }
+    const cardputer::ApiProfilesResult initialProfiles =
+        providerProfileStore.listProfiles();
+    const cardputer::ModelPresetsResult initialPresets =
+        providerProfileStore.listModelPresets();
+    if (!cardputer::providerStoreResultSucceeded(initialProfiles.result) ||
+        !cardputer::providerStoreResultSucceeded(initialPresets.result)) {
+        printP6ProviderFailure(
+            nonce, "provider_state", true,
+            cardputer::providerStoreResultSucceeded(initialProfiles.result)
+                ? initialPresets.result : initialProfiles.result);
+        return;
+    }
+
+    const std::string firstStagePrefix =
+        "P6A" + std::string(nonce.c_str()) + "-";
+    const std::string persistedPrefix =
+        "P6B" + std::string(nonce.c_str()) + "-";
+    const bool identityCollision = std::any_of(
+        initialProfiles.profiles.begin(), initialProfiles.profiles.end(),
+        [&firstStagePrefix, &persistedPrefix](
+            const cardputer::ApiProfileSummary& profile) {
+            return profile.name.rfind(firstStagePrefix, 0) == 0 ||
+                   profile.name.rfind(persistedPrefix, 0) == 0;
+        });
+    const cardputer::ProviderStoreResult fillerCollision =
+        p6VerifyProviderFillerKeysAbsent(nonce, kP6ProviderFillerLimit);
+    if (identityCollision ||
+        !cardputer::providerStoreResultSucceeded(fillerCollision)) {
+        printP6ProviderFailure(
+            nonce, "collision", true,
+            identityCollision
+                ? p6ProviderFailureResult(
+                      cardputer::ProviderStoreError::Conflict, false, false)
+                : fillerCollision);
+        return;
+    }
+
+    if (providerProfileStore.state() != cardputer::ProviderStoreState::Ready ||
+        initialProfiles.profiles.empty() ||
+        initialProfiles.profiles.size() >= cardputer::kMaximumApiProfiles ||
+        !initialPresets.presets.empty()) {
+        printP6ProviderFailure(
+            nonce, "precondition", true,
+            p6ProviderFailureResult(
+                cardputer::ProviderStoreError::Conflict, false, false));
+        return;
+    }
+
+    std::vector<P6BaselineProfile> baseline;
+    baseline.reserve(initialProfiles.profiles.size());
+    bool baselineValid = true;
+    for (const cardputer::ApiProfileSummary& profile :
+         initialProfiles.profiles) {
+        const cardputer::ProviderSettingsResult resolved =
+            resolveProviderSettings(String(profile.id.c_str()));
+        baselineValid = baselineValid &&
+            cardputer::providerStoreResultSucceeded(resolved.result);
+        baseline.push_back({profile, resolved});
+    }
+    const cardputer::ProviderSettingsResult baselineDefault =
+        resolveProviderSettings("");
+    baselineValid = baselineValid &&
+        cardputer::providerStoreResultSucceeded(baselineDefault.result) &&
+        baselineDefault.authority.profileId == initialProfiles.defaultProfileId &&
+        baselineDefault.settings.apiKey == settings.apiKey &&
+        baselineDefault.settings.apiBaseUrl == settings.apiBaseUrl;
+    if (!baselineValid) {
+        printP6ProviderFailure(
+            nonce, "baseline", true,
+            p6ProviderFailureResult(
+                cardputer::ProviderStoreError::Corrupt, false, false));
+        return;
+    }
+
+    const String baselineWifiSsid = settings.wifiSsid;
+    const String baselineWifiPassword = settings.wifiPassword;
+    const cardputer::ProviderStorageStatsResult baselineStatsResult =
+        providerProfileStore.storageStats();
+    const std::uint32_t heapBefore = ESP.getFreeHeap();
+    const std::uint32_t largestBefore =
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    std::vector<std::string> ownedProfileIds;
+    std::vector<std::string> ownedPresetIds;
+    cardputer::ProviderStorageStats maximumStats = {};
+    cardputer::ProviderStorageStats profileRejectedStats = {};
+    cardputer::ProviderStorageStats profileRecoveredStats = {};
+    cardputer::ProviderStorageStats presetRejectedStats = {};
+    cardputer::ProviderStorageStats presetRecoveredStats = {};
+    std::uint32_t maximumOperationMs = 0;
+    std::uint32_t renderMs = 0;
+    const char* failureStage = "none";
+    cardputer::ProviderStoreResult failure =
+        cardputer::validProviderStoreResult();
+    std::size_t activeFillerCount = 0;
+    bool fillerCleanupSucceeded = true;
+
+    do {
+        if (!cardputer::providerStoreResultSucceeded(
+                baselineStatsResult.result)) {
+            failureStage = "baseline_stats";
+            failure = baselineStatsResult.result;
+            break;
+        }
+        const std::size_t availableProfileSlots =
+            cardputer::kMaximumApiProfiles - initialProfiles.profiles.size();
+        for (std::size_t index = 0; index < availableProfileSlots; ++index) {
+            const cardputer::ApiProfileInput input =
+                p6MaximumProfileInput(
+                    nonce, index, static_cast<char>('A' + index));
+            const std::uint32_t startedAt = millis();
+            const cardputer::ApiProfileMutationResult created =
+                providerProfileStore.createProfile(input);
+            p6ObserveOperation(startedAt, maximumOperationMs);
+            if (!cardputer::providerStoreResultSucceeded(created.result)) {
+                if (created.result.outcomeUnknown) {
+                    printP6ProviderFailure(
+                        nonce, "profile_create", false, created.result);
+                    return;
+                }
+                failureStage = "profile_create";
+                failure = created.result;
+                break;
+            }
+            ownedProfileIds.push_back(created.profile.id);
+        }
+        if (std::string(failureStage) != "none") break;
+        for (std::size_t index = 0;
+             index < cardputer::kMaximumModelPresets; ++index) {
+            const cardputer::ModelPresetInput input =
+                p6MaximumPresetInput(
+                    nonce, index, static_cast<char>('K' + index));
+            const std::uint32_t startedAt = millis();
+            const cardputer::ModelPresetMutationResult created =
+                providerProfileStore.createModelPreset(input);
+            p6ObserveOperation(startedAt, maximumOperationMs);
+            if (!cardputer::providerStoreResultSucceeded(created.result)) {
+                if (created.result.outcomeUnknown) {
+                    printP6ProviderFailure(
+                        nonce, "preset_create", false, created.result);
+                    return;
+                }
+                failureStage = "preset_create";
+                failure = created.result;
+                break;
+            }
+            ownedPresetIds.push_back(created.preset.id);
+        }
+        if (std::string(failureStage) != "none") break;
+
+        const cardputer::ApiProfilesResult maximumProfiles =
+            providerProfileStore.listProfiles();
+        const cardputer::ModelPresetsResult maximumPresets =
+            providerProfileStore.listModelPresets();
+        const cardputer::ProviderStorageStatsResult maximumStatsResult =
+            providerProfileStore.storageStats();
+        if (cardputer::providerStoreResultSucceeded(maximumStatsResult.result)) {
+            maximumStats = maximumStatsResult.stats;
+        }
+        if (!cardputer::providerStoreResultSucceeded(maximumProfiles.result) ||
+            !cardputer::providerStoreResultSucceeded(maximumPresets.result) ||
+            maximumProfiles.profiles.size() !=
+                cardputer::kMaximumApiProfiles ||
+            maximumPresets.presets.size() !=
+                cardputer::kMaximumModelPresets ||
+            !cardputer::providerStoreResultSucceeded(maximumStatsResult.result)) {
+            failureStage = "maximum_shape";
+            failure = !cardputer::providerStoreResultSucceeded(
+                          maximumProfiles.result)
+                ? maximumProfiles.result
+                : (!cardputer::providerStoreResultSucceeded(
+                       maximumPresets.result)
+                       ? maximumPresets.result
+                       : maximumStatsResult.result);
+            if (cardputer::providerStoreResultSucceeded(failure)) {
+                failure = p6ProviderFailureResult(
+                    cardputer::ProviderStoreError::Corrupt, false, false);
+            }
+            break;
+        }
+
+        const std::string profileId = ownedProfileIds.front();
+        const cardputer::ProviderSettingsResult profileBefore =
+            resolveProviderSettings(String(profileId.c_str()));
+        const P6ProviderFillerResult profileFill =
+            p6FillProviderStorageBelow(nonce, 30);
+        activeFillerCount = profileFill.ownedCount;
+        if (!cardputer::providerStoreResultSucceeded(profileFill.result)) {
+            if (profileFill.result.outcomeUnknown) {
+                printP6ProviderFailure(
+                    nonce, "profile_fill", false, profileFill.result);
+                return;
+            }
+            failureStage = "profile_fill";
+            failure = profileFill.result;
+            break;
+        }
+        profileRejectedStats = profileFill.stats;
+        const cardputer::ApiProfileInput replacement =
+            p6MaximumProfileInput(nonce, 80, 'Z');
+        const std::uint32_t profileStartedAt = millis();
+        const cardputer::ApiProfileMutationResult profileRejected =
+            providerProfileStore.updateProfile(profileId, replacement);
+        p6ObserveOperation(profileStartedAt, maximumOperationMs);
+        if (profileRejected.result.outcomeUnknown) {
+            printP6ProviderFailure(
+                nonce, "profile_capacity", false, profileRejected.result);
+            return;
+        }
+        const cardputer::ProviderSettingsResult profileAfter =
+            resolveProviderSettings(String(profileId.c_str()));
+        const cardputer::ProviderStorageStatsResult profilePostAttemptStats =
+            providerProfileStore.storageStats();
+        const bool profileCapacityPassed =
+            profileRejected.result.error ==
+                cardputer::ProviderStoreError::Capacity &&
+            !profileRejected.result.committed &&
+            p6SettingsAuthorityEquals(profileBefore, profileAfter) &&
+            cardputer::providerStoreResultSucceeded(
+                profilePostAttemptStats.result) &&
+            profilePostAttemptStats.stats.namespaceEntries ==
+                maximumStats.namespaceEntries;
+        const P6ProviderFillerResult profileCleanup =
+            p6ClearProviderFillers(nonce, activeFillerCount);
+        activeFillerCount = 0;
+        if (profileCleanup.result.outcomeUnknown) {
+            printP6ProviderFailure(
+                nonce, "profile_filler_cleanup", false,
+                profileCleanup.result);
+            return;
+        }
+        if (!cardputer::providerStoreResultSucceeded(profileCleanup.result)) {
+            fillerCleanupSucceeded = false;
+            failureStage = "profile_filler_cleanup";
+            failure = profileCleanup.result;
+            break;
+        }
+        profileRecoveredStats = profileCleanup.stats;
+        if (!profileCapacityPassed ||
+            profileRecoveredStats.availableEntries <=
+                profileRejectedStats.availableEntries) {
+            failureStage = "profile_capacity";
+            failure = cardputer::providerStoreResultSucceeded(
+                          profileRejected.result)
+                ? p6ProviderFailureResult(
+                      cardputer::ProviderStoreError::Corrupt, false, false)
+                : profileRejected.result;
+            break;
+        }
+
+        const cardputer::ModelPresetRecord presetBefore =
+            maximumPresets.presets.front();
+        const P6ProviderFillerResult presetFill =
+            p6FillProviderStorageBelow(nonce, 8);
+        activeFillerCount = presetFill.ownedCount;
+        if (!cardputer::providerStoreResultSucceeded(presetFill.result)) {
+            if (presetFill.result.outcomeUnknown) {
+                printP6ProviderFailure(
+                    nonce, "preset_fill", false, presetFill.result);
+                return;
+            }
+            failureStage = "preset_fill";
+            failure = presetFill.result;
+            break;
+        }
+        presetRejectedStats = presetFill.stats;
+        const cardputer::ModelPresetInput presetReplacement =
+            p6MaximumPresetInput(nonce, 80, 'Z');
+        const std::uint32_t presetStartedAt = millis();
+        const cardputer::ModelPresetMutationResult presetRejected =
+            providerProfileStore.updateModelPreset(
+                presetBefore.id, presetReplacement);
+        p6ObserveOperation(presetStartedAt, maximumOperationMs);
+        if (presetRejected.result.outcomeUnknown) {
+            printP6ProviderFailure(
+                nonce, "preset_capacity", false, presetRejected.result);
+            return;
+        }
+        const cardputer::ModelPresetsResult presetsAfter =
+            providerProfileStore.listModelPresets();
+        const auto unchangedPreset = std::find_if(
+            presetsAfter.presets.begin(), presetsAfter.presets.end(),
+            [&presetBefore](const cardputer::ModelPresetRecord& preset) {
+                return preset.id == presetBefore.id;
+            });
+        const cardputer::ProviderStorageStatsResult presetPostAttemptStats =
+            providerProfileStore.storageStats();
+        const bool presetCapacityPassed =
+            presetRejected.result.error ==
+                cardputer::ProviderStoreError::Capacity &&
+            !presetRejected.result.committed &&
+            cardputer::providerStoreResultSucceeded(presetsAfter.result) &&
+            unchangedPreset != presetsAfter.presets.end() &&
+            unchangedPreset->name == presetBefore.name &&
+            unchangedPreset->model == presetBefore.model &&
+            unchangedPreset->maximumOutputTokens ==
+                presetBefore.maximumOutputTokens &&
+            cardputer::providerStoreResultSucceeded(
+                presetPostAttemptStats.result) &&
+            presetPostAttemptStats.stats.namespaceEntries ==
+                maximumStats.namespaceEntries;
+        const P6ProviderFillerResult presetCleanup =
+            p6ClearProviderFillers(nonce, activeFillerCount);
+        activeFillerCount = 0;
+        if (presetCleanup.result.outcomeUnknown) {
+            printP6ProviderFailure(
+                nonce, "preset_filler_cleanup", false,
+                presetCleanup.result);
+            return;
+        }
+        if (!cardputer::providerStoreResultSucceeded(presetCleanup.result)) {
+            fillerCleanupSucceeded = false;
+            failureStage = "preset_filler_cleanup";
+            failure = presetCleanup.result;
+            break;
+        }
+        presetRecoveredStats = presetCleanup.stats;
+        if (!presetCapacityPassed ||
+            presetRecoveredStats.availableEntries <=
+                presetRejectedStats.availableEntries) {
+            failureStage = "preset_capacity";
+            failure = cardputer::providerStoreResultSucceeded(
+                          presetRejected.result)
+                ? p6ProviderFailureResult(
+                      cardputer::ProviderStoreError::Corrupt, false, false)
+                : presetRejected.result;
+            break;
+        }
+
+        const cardputer::ProviderSettingsResult inherited =
+            resolveProviderSettings("");
+        const cardputer::ProviderSettingsResult explicitProfile =
+            resolveProviderSettings(String(profileId.c_str()));
+        std::string missingId = "0000000000000000";
+        if (std::any_of(
+                maximumProfiles.profiles.begin(),
+                maximumProfiles.profiles.end(),
+                [&missingId](const cardputer::ApiProfileSummary& profile) {
+                    return profile.id == missingId;
+                })) {
+            missingId = "ffffffffffffffff";
+        }
+        const cardputer::ProviderSettingsResult missing =
+            resolveProviderSettings(String(missingId.c_str()));
+        const cardputer::ProviderAuthorityIdentity modelsAuthorityBefore =
+            availableModelsAuthority;
+        const std::vector<String> modelsBefore = availableModels;
+        availableModelsAuthority = explicitProfile.authority;
+        const bool discoveryPassed =
+            availableModelsMatchProfile(String(profileId.c_str())) &&
+            !availableModelsMatchProfile("");
+        availableModelsAuthority = modelsAuthorityBefore;
+        availableModels = modelsBefore;
+
+        const auto explicitSummary = std::find_if(
+            maximumProfiles.profiles.begin(),
+            maximumProfiles.profiles.end(),
+            [&profileId](const cardputer::ApiProfileSummary& profile) {
+                return profile.id == profileId;
+            });
+        cardputer::ProjectDocument project = {};
+        project.apiProfile = String(profileId.c_str());
+        const bool explicitLabel = explicitSummary !=
+                maximumProfiles.profiles.end() &&
+            deviceProjectApiProfileLabel(project) ==
+                String("API profile: ") +
+                    String(explicitSummary->name.c_str());
+        project.apiProfile = String(missingId.c_str());
+        const bool missingLabel =
+            deviceProjectApiProfileLabel(project) ==
+            "API profile: Unavailable";
+        project.apiProfile = "";
+        const bool inheritedLabel =
+            deviceProjectApiProfileLabel(project) ==
+            "API profile: Global default";
+        const std::vector<String> menuItems = aiMenuItems();
+        const bool menuReachable = std::find(
+            menuItems.begin(), menuItems.end(),
+            String("API profiles & presets")) != menuItems.end();
+        const Screen previousScreen = currentScreen;
+        currentScreen = Screen::AiMenu;
+        const std::uint32_t renderStartedAt = millis();
+        renderAiMenu();
+        renderMs = millis() - renderStartedAt;
+        currentScreen = previousScreen;
+        render();
+        const bool resolverAndUiPassed =
+            cardputer::providerStoreResultSucceeded(inherited.result) &&
+            inherited.authority.profileId ==
+                initialProfiles.defaultProfileId &&
+            cardputer::providerStoreResultSucceeded(explicitProfile.result) &&
+            missing.result.error == cardputer::ProviderStoreError::NotFound &&
+            discoveryPassed && explicitLabel && missingLabel &&
+            inheritedLabel && menuReachable && renderMs <= 250U;
+        if (!resolverAndUiPassed) {
+            failureStage = "resolver_ui";
+            failure = p6ProviderFailureResult(
+                cardputer::ProviderStoreError::Corrupt, false, false);
+            break;
+        }
+        const cardputer::ProviderStoreResult defaultDelete =
+            providerProfileStore.deleteProfile(
+                initialProfiles.defaultProfileId);
+        if (defaultDelete.outcomeUnknown) {
+            printP6ProviderFailure(
+                nonce, "default_delete", false, defaultDelete);
+            return;
+        }
+        if (defaultDelete.error != cardputer::ProviderStoreError::Conflict ||
+            defaultDelete.committed) {
+            failureStage = "default_delete";
+            failure = cardputer::providerStoreResultSucceeded(defaultDelete)
+                ? p6ProviderFailureResult(
+                      cardputer::ProviderStoreError::Corrupt, false, false)
+                : defaultDelete;
+            break;
+        }
+    } while (false);
+
+    if (activeFillerCount > 0) {
+        const P6ProviderFillerResult fillerCleanup =
+            p6ClearProviderFillers(nonce, activeFillerCount);
+        activeFillerCount = 0;
+        if (fillerCleanup.result.outcomeUnknown) {
+            printP6ProviderFailure(
+                nonce, "filler_cleanup", false, fillerCleanup.result);
+            return;
+        }
+        if (!cardputer::providerStoreResultSucceeded(fillerCleanup.result)) {
+            fillerCleanupSucceeded = false;
+            if (std::string(failureStage) == "none") {
+                failureStage = "filler_cleanup";
+                failure = fillerCleanup.result;
+            }
+        }
+    }
+    const cardputer::ProviderStoreResult fixtureCleanup =
+        p6DeleteOwnedProviderFixtures(ownedProfileIds, ownedPresetIds);
+    if (fixtureCleanup.outcomeUnknown) {
+        printP6ProviderFailure(
+            nonce, "fixture_cleanup", false, fixtureCleanup);
+        return;
+    }
+    if (!cardputer::providerStoreResultSucceeded(fixtureCleanup) &&
+        std::string(failureStage) == "none") {
+        failureStage = "fixture_cleanup";
+        failure = fixtureCleanup;
+    }
+    const cardputer::ApiProfilesResult cleanProfiles =
+        providerProfileStore.listProfiles();
+    const cardputer::ModelPresetsResult cleanPresets =
+        providerProfileStore.listModelPresets();
+    const cardputer::ProviderSettingsResult cleanDefault =
+        resolveProviderSettings("");
+    const cardputer::ProviderStorageStatsResult cleanStatsResult =
+        providerProfileStore.storageStats();
+    const cardputer::ProviderStoreResult fillersAbsent =
+        p6VerifyProviderFillerKeysAbsent(nonce, kP6ProviderFillerLimit);
+    const bool capacityRecovered = maximumStats.totalEntries == 0 ||
+        (cardputer::providerStoreResultSucceeded(cleanStatsResult.result) &&
+         cleanStatsResult.stats.availableEntries > maximumStats.availableEntries);
+    const bool baselineRestored = fillerCleanupSucceeded &&
+        cardputer::providerStoreResultSucceeded(fixtureCleanup) &&
+        cardputer::providerStoreResultSucceeded(fillersAbsent) &&
+        p6BaselineProfilesUnchanged(cleanProfiles, baseline) &&
+        cardputer::providerStoreResultSucceeded(cleanPresets.result) &&
+        cleanPresets.presets.empty() &&
+        p6SettingsAuthorityEquals(cleanDefault, baselineDefault) &&
+        settings.apiKey == baselineDefault.settings.apiKey &&
+        settings.apiBaseUrl == baselineDefault.settings.apiBaseUrl &&
+        settings.wifiSsid == baselineWifiSsid &&
+        settings.wifiPassword == baselineWifiPassword &&
+        cardputer::providerStoreResultSucceeded(cleanStatsResult.result) &&
+        cardputer::providerStoreResultSucceeded(baselineStatsResult.result) &&
+        cleanStatsResult.stats.namespaceEntries ==
+            baselineStatsResult.stats.namespaceEntries &&
+        capacityRecovered;
+    if (std::string(failureStage) != "none" || !baselineRestored) {
+        if (cardputer::providerStoreResultSucceeded(failure)) {
+            failure = !cardputer::providerStoreResultSucceeded(fixtureCleanup)
+                ? fixtureCleanup
+                : (!cardputer::providerStoreResultSucceeded(fillersAbsent)
+                       ? fillersAbsent
+                       : (!cardputer::providerStoreResultSucceeded(
+                              cleanStatsResult.result)
+                              ? cleanStatsResult.result
+                              : p6ProviderFailureResult(
+                                    cardputer::ProviderStoreError::Corrupt,
+                                    false, false)));
+        }
+        printP6ProviderFailure(
+            nonce,
+            std::string(failureStage) == "none"
+                ? "baseline_restore" : failureStage,
+            baselineRestored, failure);
+        return;
+    }
+    const cardputer::ProviderStorageStats cleanStats =
+        cleanStatsResult.stats;
+
+    cardputer::ApiProfileInput rebootInput =
+        p6MaximumProfileInput(nonce, 90, 'A');
+    rebootInput.name = p6RebootProfileName(
+        nonce, cleanProfiles.defaultProfileId, 'A');
+    const std::uint32_t rebootCreateStartedAt = millis();
+    const cardputer::ApiProfileMutationResult rebootProfile =
+        providerProfileStore.createProfile(rebootInput);
+    p6ObserveOperation(rebootCreateStartedAt, maximumOperationMs);
+    if (rebootProfile.result.outcomeUnknown) {
+        printP6ProviderFailure(
+            nonce, "reboot_create", false, rebootProfile.result);
+        return;
+    }
+    if (!cardputer::providerStoreResultSucceeded(rebootProfile.result)) {
+        const bool unchanged = p6BaselineProfilesUnchanged(
+            providerProfileStore.listProfiles(), baseline);
+        printP6ProviderFailure(
+            nonce, "reboot_create", unchanged, rebootProfile.result);
+        return;
+    }
+    cardputer::ApiProfileInput resumedInput =
+        p6MaximumProfileInput(nonce, 91, 'B');
+    resumedInput.name = p6RebootProfileName(
+        nonce, cleanProfiles.defaultProfileId, 'B');
+    const std::uint32_t rebootUpdateStartedAt = millis();
+    const cardputer::ApiProfileMutationResult updatedProfile =
+        providerProfileStore.updateProfile(
+            rebootProfile.profile.id, resumedInput);
+    p6ObserveOperation(rebootUpdateStartedAt, maximumOperationMs);
+    if (updatedProfile.result.outcomeUnknown) {
+        printP6ProviderFailure(
+            nonce, "reboot_update", false, updatedProfile.result);
+        return;
+    }
+    if (!cardputer::providerStoreResultSucceeded(updatedProfile.result)) {
+        const cardputer::ProviderStoreResult removed =
+            providerProfileStore.deleteProfile(rebootProfile.profile.id);
+        if (removed.outcomeUnknown) {
+            printP6ProviderFailure(
+                nonce, "reboot_update_cleanup", false, removed);
+            return;
+        }
+        if (!cardputer::providerStoreResultSucceeded(removed)) {
+            printP6ProviderFailure(
+                nonce, "reboot_update_cleanup", false, removed);
+            return;
+        }
+        const bool cleanupComplete =
+            p6BaselineProfilesUnchanged(
+                providerProfileStore.listProfiles(), baseline);
+        printP6ProviderFailure(
+            nonce, "reboot_update", cleanupComplete,
+            updatedProfile.result);
+        return;
+    }
+
+    const cardputer::ProviderSettingsResult staged =
+        resolveProviderSettings(String(rebootProfile.profile.id.c_str()));
+    const cardputer::ProviderSettingsResult stagedDefault =
+        resolveProviderSettings("");
+    const cardputer::ApiProfilesResult stagedProfiles =
+        providerProfileStore.listProfiles();
+    const cardputer::ModelPresetsResult stagedPresets =
+        providerProfileStore.listModelPresets();
+    const auto stagedSummary = std::find_if(
+        stagedProfiles.profiles.begin(), stagedProfiles.profiles.end(),
+        [&rebootProfile](const cardputer::ApiProfileSummary& profile) {
+            return profile.id == rebootProfile.profile.id;
+        });
+    const cardputer::ProviderStoreResult fillersStillAbsent =
+        p6VerifyProviderFillerKeysAbsent(nonce, kP6ProviderFillerLimit);
+    const bool rebootStaged =
+        rebootProfile.result.committed && !rebootProfile.result.outcomeUnknown &&
+        !rebootProfile.profile.isDefault &&
+        rebootProfile.profile.authorityRevision == 1 &&
+        updatedProfile.result.committed &&
+        !updatedProfile.result.outcomeUnknown &&
+        cardputer::providerStoreResultSucceeded(staged.result) &&
+        staged.authority.kind == cardputer::ProviderAuthorityKind::Profile &&
+        staged.authority.profileId == rebootProfile.profile.id &&
+        staged.authority.revision == 2 &&
+        staged.settings.apiBaseUrl == resumedInput.baseUrl.c_str() &&
+        staged.settings.apiKey == resumedInput.apiKey.c_str() &&
+        cardputer::providerStoreResultSucceeded(stagedProfiles.result) &&
+        stagedProfiles.profiles.size() == cleanProfiles.profiles.size() + 1 &&
+        stagedProfiles.defaultProfileId == cleanProfiles.defaultProfileId &&
+        stagedSummary != stagedProfiles.profiles.end() &&
+        stagedSummary->name == resumedInput.name &&
+        stagedSummary->baseUrl == resumedInput.baseUrl &&
+        stagedSummary->authorityRevision == 2 && !stagedSummary->isDefault &&
+        cardputer::providerStoreResultSucceeded(stagedPresets.result) &&
+        stagedPresets.presets.empty() &&
+        p6SettingsAuthorityEquals(stagedDefault, baselineDefault) &&
+        cardputer::providerStoreResultSucceeded(fillersStillAbsent) &&
+        settings.apiKey == baselineDefault.settings.apiKey &&
+        settings.apiBaseUrl == baselineDefault.settings.apiBaseUrl &&
+        settings.wifiSsid == baselineWifiSsid &&
+        settings.wifiPassword == baselineWifiPassword;
+
+    const std::uint32_t heapAfter = ESP.getFreeHeap();
+    const std::uint32_t largestAfter =
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    const std::uint32_t stackFree = uxTaskGetStackHighWaterMark(nullptr);
+    const bool resourcesPassed = rebootStaged &&
+        heapAfter >= kP6ProviderHeapFloorBytes && stackFree > 0 &&
+        maximumOperationMs <= 3000U && renderMs <= 250U;
+    if (!resourcesPassed) {
+        const cardputer::ProviderStoreResult removed =
+            providerProfileStore.deleteProfile(rebootProfile.profile.id);
+        if (removed.outcomeUnknown) {
+            printP6ProviderFailure(
+                nonce, "reboot_stage_cleanup", false, removed);
+            return;
+        }
+        if (!cardputer::providerStoreResultSucceeded(removed)) {
+            printP6ProviderFailure(
+                nonce, "reboot_stage_cleanup", false, removed);
+            return;
+        }
+        const cardputer::ApiProfilesResult restoredProfiles =
+            providerProfileStore.listProfiles();
+        const cardputer::ModelPresetsResult restoredPresets =
+            providerProfileStore.listModelPresets();
+        const bool rebootCleanup =
+            p6BaselineProfilesUnchanged(restoredProfiles, baseline) &&
+            cardputer::providerStoreResultSucceeded(restoredPresets.result) &&
+            restoredPresets.presets.empty() &&
+            std::none_of(
+                restoredProfiles.profiles.begin(),
+                restoredProfiles.profiles.end(),
+                [&rebootProfile](const cardputer::ApiProfileSummary& profile) {
+                    return profile.id == rebootProfile.profile.id;
+                });
+        if (!rebootCleanup) {
+            printP6ProviderFailure(
+                nonce, "reboot_stage_cleanup", false,
+                p6ProviderFailureResult(
+                    cardputer::ProviderStoreError::Corrupt, true, false));
+            return;
+        }
+        printP6ProviderFailure(
+            nonce, rebootStaged ? "resources" : "reboot_stage",
+            true,
+            p6ProviderFailureResult(
+                cardputer::ProviderStoreError::Corrupt, false, false));
+        return;
+    }
+
+    Serial.printf(
+        "P6PROVIDERTEST stage=measured nonce=%s profiles_before=%u profiles_max=%u owned_profiles=%u presets_max=%u total=%u used_before=%u available_before=%u namespace_before=%u used_max=%u available_max=%u namespace_max=%u profile_reject_available=%u profile_recovered_available=%u preset_reject_available=%u preset_recovered_available=%u available_clean=%u namespace_clean=%u heap_before=%u heap_after=%u largest_before=%u largest_after=%u stack_free=%u operation_ms=%u render_ms=%u resources=pass\n",
+        nonce.c_str(),
+        static_cast<unsigned int>(initialProfiles.profiles.size()),
+        static_cast<unsigned int>(cardputer::kMaximumApiProfiles),
+        static_cast<unsigned int>(ownedProfileIds.size()),
+        static_cast<unsigned int>(cardputer::kMaximumModelPresets),
+        static_cast<unsigned int>(maximumStats.totalEntries),
+        static_cast<unsigned int>(baselineStatsResult.stats.usedEntries),
+        static_cast<unsigned int>(baselineStatsResult.stats.availableEntries),
+        static_cast<unsigned int>(baselineStatsResult.stats.namespaceEntries),
+        static_cast<unsigned int>(maximumStats.usedEntries),
+        static_cast<unsigned int>(maximumStats.availableEntries),
+        static_cast<unsigned int>(maximumStats.namespaceEntries),
+        static_cast<unsigned int>(profileRejectedStats.availableEntries),
+        static_cast<unsigned int>(profileRecoveredStats.availableEntries),
+        static_cast<unsigned int>(presetRejectedStats.availableEntries),
+        static_cast<unsigned int>(presetRecoveredStats.availableEntries),
+        static_cast<unsigned int>(cleanStats.availableEntries),
+        static_cast<unsigned int>(cleanStats.namespaceEntries),
+        static_cast<unsigned int>(heapBefore),
+        static_cast<unsigned int>(heapAfter),
+        static_cast<unsigned int>(largestBefore),
+        static_cast<unsigned int>(largestAfter),
+        static_cast<unsigned int>(stackFree),
+        static_cast<unsigned int>(maximumOperationMs),
+        static_cast<unsigned int>(renderMs));
+    Serial.printf("P6PROVIDERTEST stage=reboot nonce=%s\n", nonce.c_str());
+    Serial.flush();
+    delay(200);
+    ESP.restart();
 }
 
 cardputer::OperationResult runSftpTransferRemoteTest(bool& cleanupComplete);
@@ -5410,22 +6682,55 @@ void handleSerialCommand(const String& command)
         while (decoded.endsWith("/")) {
             decoded.remove(decoded.length() - 1);
         }
-        cardputer::Settings updated = settings;
-        updated.apiBaseUrl = decoded;
-        const cardputer::OperationResult result = cardputer::saveSettings(updated);
-        if (result.success) {
-            settings = updated;
+        if (providerProfileStore.state() !=
+            cardputer::ProviderStoreState::Ready) {
+            Serial.printf("APIBASE result=failed error=provider_state_%s\n",
+                          cardputer::providerStoreStateName(
+                              providerProfileStore.state()));
+            return;
+        }
+        const cardputer::ProviderStoreResult updated =
+            providerProfileStore.updateDefaultBaseUrl(
+                std::string(decoded.c_str()));
+        cardputer::OperationResult result = {
+            cardputer::providerStoreResultSucceeded(updated),
+            String(updated.message.c_str()),
+        };
+        if (updated.committed) {
+            const cardputer::ProviderStoreResult loaded =
+                providerProfileStore.loadDefaultInto(settings);
+            if (!cardputer::providerStoreResultSucceeded(loaded)) {
+                result = {false, String(loaded.message.c_str())};
+            }
         }
         Serial.printf("APIBASE result=%s error=%s\n",
                       result.success ? "pass" : "failed",
                       result.success ? "none" : result.error.c_str());
         return;
     }
+    const String p6ProviderPrefix = "P6PROVIDERTEST";
+    if (command.startsWith(p6ProviderPrefix)) {
+        runP6ProviderTest(command.substring(p6ProviderPrefix.length()));
+        return;
+    }
+    const String p6ProviderFinishPrefix = "P6PROVIDERFINISH";
+    if (command.startsWith(p6ProviderFinishPrefix)) {
+        runP6ProviderRebootContinuation(
+            command.substring(p6ProviderFinishPrefix.length()));
+        return;
+    }
     if (command == "CANCELTEST") {
         Serial.println("CANCELTEST stage=chat");
         const std::vector<cardputer::Message> testHistory = {{"user", "cancel"}};
+        const cardputer::ProviderSettingsResult provider =
+            resolveProviderSettings("");
+        if (!cardputer::providerStoreResultSucceeded(provider.result)) {
+            Serial.println("CANCELTEST result=failed stage=provider");
+            return;
+        }
         const cardputer::ChatResult result = cardputer::streamChatCompletion(
-            settings, testHistory, "", [](const std::string&) {}, []() { return true; });
+            provider.settings, testHistory, "", [](const std::string&) {},
+            []() { return true; });
         Serial.println("CANCELTEST stage=search");
         const cardputer::ToolExecutionResult searchResult =
             cardputer::webSearchSettingsAreComplete(settings)

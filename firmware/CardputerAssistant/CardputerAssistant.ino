@@ -7,6 +7,7 @@
 #include <esp_system.h>
 #include <esp32-hal-cpu.h>
 #include <hal/usb_serial_jtag_ll.h>
+#include <nvs.h>
 
 #include "src/api_client.h"
 #include "src/adv_audio_power.h"
@@ -149,10 +150,13 @@ enum class WorkspaceListMode {
 };
 
 cardputer::Settings settings;
+cardputer::ProviderProfileStore providerProfileStore;
 std::vector<cardputer::Message> history;
 std::vector<cardputer::ChatSummary> chats;
 std::vector<cardputer::ProjectSummary> projects;
 std::vector<String> availableModels;
+cardputer::ProviderAuthorityIdentity availableModelsAuthority = {
+    cardputer::ProviderAuthorityKind::None, "", 0};
 std::string inputBuffer;
 std::string persistedDraft;
 std::uint32_t lastDraftAutosaveAt = 0;
@@ -278,6 +282,8 @@ struct DevicePendingContinuationContext {
     String projectId;
     String chatId;
     cardputer::ResolvedProjectRequestPolicy requestPolicy = {"", 0, 0, false};
+    cardputer::ProviderAuthorityIdentity providerAuthority = {
+        cardputer::ProviderAuthorityKind::None, "", 0};
     String globalInstructions;
     std::string scopedInstructions;
     cardputer::ToolMessageIntent intent = kAutomaticToolMessageIntent;
@@ -413,6 +419,10 @@ void renderWorkspaceFileList();
 void openSelectedWorkspaceFile();
 void openProjectList();
 void openAiMenu();
+void runProviderProfiles();
+String deviceProjectApiProfileLabel(
+    const cardputer::ProjectDocument& project);
+String assignDeviceProjectApiProfile(const String& projectId);
 void openToolActivity();
 void openPendingToolPreview();
 void allowPendingToolOnce();
@@ -424,6 +434,7 @@ cardputer::OperationResult captureDevicePendingContext(
     const String& projectId,
     const String& chatId,
     const cardputer::ResolvedProjectRequestPolicy& requestPolicy,
+    const cardputer::ProviderAuthorityIdentity& providerAuthority,
     const String& globalInstructions,
     std::string scopedInstructions,
     const cardputer::ToolMessageIntent& intent);
@@ -1101,6 +1112,7 @@ std::vector<String> projectActionItems()
         "Duplicate project",
         project.project.summary.archived ? "Restore project" : "Archive project",
         "Export project bundle",
+        deviceProjectApiProfileLabel(project.project),
         "Capability policies",
         "Back",
     };
@@ -1614,26 +1626,51 @@ void updateTransientStatus()
     transientStatusValue = "";
 }
 
-void refreshModels()
+cardputer::ProviderSettingsResult resolveProviderSettings(
+    const String& projectProfileId)
+{
+    return providerProfileStore.resolveSettings(
+        settings, std::string(projectProfileId.c_str()));
+}
+
+bool availableModelsMatchProfile(const String& projectProfileId)
+{
+    const cardputer::ProviderSettingsResult resolved =
+        resolveProviderSettings(projectProfileId);
+    return cardputer::providerStoreResultSucceeded(resolved.result) &&
+        cardputer::providerAuthorityIdentitiesEqual(
+            availableModelsAuthority, resolved.authority);
+}
+
+void refreshModels(const String& projectProfileId)
 {
     statusMessage = "Loading models...";
     cardputer::showBusyScreen("MODELS", statusMessage);
     cardputer::markOperation("model_refresh");
-    const cardputer::ModelsResult result = cardputer::fetchModels(settings);
+    cardputer::ProviderSettingsResult provider =
+        resolveProviderSettings(projectProfileId);
+    if (!cardputer::providerStoreResultSucceeded(provider.result)) {
+        cardputer::markOperation("idle");
+        availableModels.clear();
+        availableModelsAuthority = {
+            cardputer::ProviderAuthorityKind::None, "", 0};
+        statusMessage = String(provider.result.message.c_str());
+        Serial.println("WARN event=models_refresh result=provider_unavailable");
+        return;
+    }
+    const cardputer::ModelsResult result =
+        cardputer::fetchModels(provider.settings);
     cardputer::markOperation("idle");
     if (!result.success) {
         availableModels.clear();
+        availableModelsAuthority = {
+            cardputer::ProviderAuthorityKind::None, "", 0};
         statusMessage = result.error;
         Serial.println("WARN event=models_refresh result=failed");
         return;
     }
     availableModels = result.models;
-    const auto selected = std::find(availableModels.begin(), availableModels.end(), settings.model);
-    if (selected == availableModels.end()) {
-        statusMessage = "Configured model not in /v1/models";
-        Serial.println("WARN event=model_validation result=not_found");
-        return;
-    }
+    availableModelsAuthority = provider.authority;
     statusMessage = "";
     Serial.printf("INFO event=models_refresh result=ok count=%u\n",
                   static_cast<unsigned int>(availableModels.size()));
@@ -1724,7 +1761,14 @@ ContextSummaryPageResult generateContextSummaryPage(
     if (!prompt.success) {
         return {false, "", 0, prompt.error.c_str()};
     }
-    cardputer::Settings summarySettings = settings;
+    cardputer::ProviderSettingsResult provider =
+        resolveProviderSettings(project.apiProfile);
+    if (!cardputer::providerStoreResultSucceeded(provider.result)) {
+        return {false, "", 0,
+                "API profile unavailable: " +
+                    String(provider.result.message.c_str())};
+    }
+    cardputer::Settings summarySettings = std::move(provider.settings);
     summarySettings.globalInstructions = "";
     summarySettings.model = cardputer::resolveProjectRequestPolicy(
         settings, project, chat, 0).model;
@@ -1853,7 +1897,16 @@ void executeStoredPromptRequest(const std::string& prompt,
                                 const cardputer::ToolMessageIntent requestIntent,
                                 const cardputer::ToolRequestPlan requestPlan)
 {
-    cardputer::Settings requestSettings = settings;
+    cardputer::ProviderSettingsResult provider =
+        resolveProviderSettings(project.apiProfile);
+    if (!cardputer::providerStoreResultSucceeded(provider.result)) {
+        activeResponse.clear();
+        statusMessage = "API profile unavailable: " +
+            String(provider.result.message.c_str());
+        render();
+        return;
+    }
+    cardputer::Settings requestSettings = std::move(provider.settings);
     requestSettings.model = requestPolicy.model;
     std::string effectiveInstructions = effectiveProjectChatInstructions(
         project, storedChat, requestInstructions);
@@ -1918,6 +1971,7 @@ void executeStoredPromptRequest(const std::string& prompt,
         clearRetryRequestState();
         const cardputer::OperationResult captured = captureDevicePendingContext(
             requestProjectId, requestChatId, requestPolicy,
+            provider.authority,
             requestSettings.globalInstructions, std::move(effectiveInstructions),
             requestIntent);
         if (!captured.success) {
@@ -2415,6 +2469,8 @@ void clearDevicePendingContext()
     devicePendingContext.projectId.clear();
     devicePendingContext.chatId.clear();
     devicePendingContext.requestPolicy = {"", 0, 0, false};
+    devicePendingContext.providerAuthority = {
+        cardputer::ProviderAuthorityKind::None, "", 0};
     devicePendingContext.globalInstructions.clear();
     std::string().swap(devicePendingContext.scopedInstructions);
     devicePendingContext.intent = kAutomaticToolMessageIntent;
@@ -2424,6 +2480,7 @@ cardputer::OperationResult captureDevicePendingContext(
     const String& projectId,
     const String& chatId,
     const cardputer::ResolvedProjectRequestPolicy& requestPolicy,
+    const cardputer::ProviderAuthorityIdentity& providerAuthority,
     const String& globalInstructions,
     std::string scopedInstructions,
     const cardputer::ToolMessageIntent& intent)
@@ -2447,6 +2504,7 @@ cardputer::OperationResult captureDevicePendingContext(
     devicePendingContext.projectId = projectId;
     devicePendingContext.chatId = chatId;
     devicePendingContext.requestPolicy = requestPolicy;
+    devicePendingContext.providerAuthority = providerAuthority;
     devicePendingContext.globalInstructions = globalInstructions;
     devicePendingContext.scopedInstructions = std::move(scopedInstructions);
     devicePendingContext.intent = intent;
@@ -2610,6 +2668,7 @@ struct PendingContinuationInputs {
     cardputer::PendingToolConfirmationReason reason =
         cardputer::PendingToolConfirmationReason::PolicyAsk;
     cardputer::ToolRequestPlan plan = {};
+    cardputer::Settings requestSettings = {};
     String error;
 };
 
@@ -2648,6 +2707,19 @@ PendingContinuationInputs loadPendingContinuationInputs()
         result.error = project.success ? chat.error : project.error;
         return result;
     }
+    cardputer::ProviderSettingsResult provider =
+        resolveProviderSettings(project.project.apiProfile);
+    if (!cardputer::providerStoreResultSucceeded(provider.result)) {
+        result.error = "Pending request API profile is unavailable: " +
+            String(provider.result.message.c_str());
+        return result;
+    }
+    if (!cardputer::providerAuthorityIdentitiesEqual(
+            provider.authority, devicePendingContext.providerAuthority)) {
+        result.error = "Pending request API profile changed";
+        return result;
+    }
+    result.requestSettings = std::move(provider.settings);
     result.plan = cardputer::resolveChatToolRequestPlan(
         settings, project.project, chat.chat, devicePendingContext.intent,
         fileWorkspaceReady,
@@ -2679,15 +2751,13 @@ void showPendingDecisionError(const String& error)
 
 void continuePendingToolDecision(
     cardputer::PendingToolDecisionResult decision,
+    cardputer::Settings requestSettings,
     const cardputer::ToolRequestPlan& continuationPlan,
     const String& warning)
 {
     const String oldPendingId = decision.pending.pendingId;
     const cardputer::PendingToolCallState terminalState = decision.pending.state;
     clearPendingToolPreviewCache();
-    cardputer::Settings requestSettings = settings;
-    requestSettings.model = devicePendingContext.requestPolicy.model;
-    requestSettings.globalInstructions = devicePendingContext.globalInstructions;
     const std::uint32_t contextBudget =
         devicePendingContext.requestPolicy.contextByteBudget;
     const bool ownerIsActive = decision.pending.projectId == activeProjectId &&
@@ -2758,6 +2828,8 @@ void continuePendingToolDecision(
         M5Cardputer.update();
         return cardputerEscapePressed();
     };
+    requestSettings.model = devicePendingContext.requestPolicy.model;
+    requestSettings.globalInstructions = devicePendingContext.globalInstructions;
     cardputer::markOperation("chat_tools");
     const cardputer::ChatResult result =
         cardputer::continueChatCompletionAfterPendingToolResult(
@@ -2894,7 +2966,8 @@ void allowPendingToolOnce()
     }
     const cardputer::ToolRequestPlan continuationPlan = inputs.plan;
     continuePendingToolDecision(
-        std::move(decision), continuationPlan, "");
+        std::move(decision), std::move(inputs.requestSettings),
+        continuationPlan, "");
 }
 
 void allowPendingToolForChat()
@@ -2979,7 +3052,8 @@ void allowPendingToolForChat()
         }
     }
     continuePendingToolDecision(
-        std::move(decision), continuationPlan, warning);
+        std::move(decision), std::move(inputs.requestSettings),
+        continuationPlan, warning);
 }
 
 void denyPendingTool()
@@ -3005,7 +3079,8 @@ void denyPendingTool()
     }
     const cardputer::ToolRequestPlan continuationPlan = inputs.plan;
     continuePendingToolDecision(
-        std::move(decision), continuationPlan, "");
+        std::move(decision), std::move(inputs.requestSettings),
+        continuationPlan, "");
 }
 
 void acknowledgeInterruptedPendingTool()
@@ -3403,7 +3478,8 @@ void setup()
             delay(1000);
         }
     }
-    const cardputer::OperationResult loadResult = cardputer::loadSettings(settings);
+    const cardputer::OperationResult loadResult =
+        cardputer::loadSettings(settings, providerProfileStore);
     if (!loadResult.success) {
         cardputer::showFatalError(loadResult.error);
         Serial.println("FATAL event=settings_load result=failed");
@@ -3429,7 +3505,7 @@ void setup()
     Serial.printf("CONFIG configured=%s\n", cardputer::settingsAreComplete(settings) ? "yes" : "no");
     if (!cardputer::settingsAreComplete(settings)) {
         cardputer::markOperation("provisioning");
-        cardputer::runProvisioningPortal(settings);
+        cardputer::runProvisioningPortal(settings, providerProfileStore);
         cardputer::markOperation("idle");
     }
 

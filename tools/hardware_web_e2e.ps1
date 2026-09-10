@@ -7,7 +7,7 @@ param(
     [int]$BaudRate,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet("projects", "retry", "compaction", "summary-regeneration", "context-history", "context-history-orphan-recover", "archive-quota", "archive-quota-recover", "binary-text", "binary-text-recover", "history-heap", "limits", "chat-scale", "workspace-scale", "file-scale", "unicode-path", "shared-isolation", "large-stream", "atomic-failure", "version-history", "sd-degraded", "instructions", "request-settings", "diagnostics", "ssh", "p4-ssh-output", "workspace-tool", "full")]
+    [ValidateSet("projects", "retry", "compaction", "summary-regeneration", "context-history", "context-history-orphan-recover", "archive-quota", "archive-quota-recover", "binary-text", "binary-text-recover", "history-heap", "limits", "chat-scale", "workspace-scale", "file-scale", "unicode-path", "shared-isolation", "large-stream", "atomic-failure", "version-history", "sd-degraded", "instructions", "request-settings", "p6-providers", "diagnostics", "ssh", "p4-ssh-output", "workspace-tool", "full")]
     [string]$Suite,
 
     [Parameter(Mandatory = $true)]
@@ -16,6 +16,63 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$script:serialReadinessConfirmed = $false
+$script:serialReadinessLost = $false
+$script:webConsoleConfirmedActive = $false
+$script:serialPending = ""
+
+function Read-ClassifiedSerialLines {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.Ports.SerialPort]$Serial,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ResolvedLogPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Context
+    )
+
+    try {
+        $combined = $script:serialPending + $Serial.ReadExisting()
+    }
+    catch {
+        $script:serialReadinessLost = $true
+        throw "Serial read failed during ${Context}: $($_.Exception.Message)"
+    }
+    $parts = $combined -split "`n"
+    $script:serialPending = $parts[-1]
+    $lines = [System.Collections.Generic.List[string]]::new()
+    for ($index = 0; $index -lt $parts.Count - 1; $index++) {
+        $line = $parts[$index].TrimEnd("`r")
+        if ($line.Length -gt 0) {
+            $lines.Add($line)
+        }
+    }
+
+    $readinessLossLine = ""
+    foreach ($line in $lines) {
+        if ($readinessLossLine.Length -eq 0 -and
+            $line -match "Guru Meditation|Brownout|abort\(\)|\bFATAL\b|ESP-ROM:esp32s3|rst:0x") {
+            $readinessLossLine = $line
+        }
+    }
+    if ($readinessLossLine.Length -eq 0 -and
+        $script:serialPending -match "Guru Meditation|Brownout|abort\(\)|\bFATAL\b|ESP-ROM:esp32s3|rst:0x") {
+        $readinessLossLine = $script:serialPending.TrimEnd("`r")
+    }
+    if ($readinessLossLine.Length -gt 0) {
+        $script:serialReadinessLost = $true
+    }
+
+    foreach ($line in $lines) {
+        Add-Content -LiteralPath $ResolvedLogPath -Value $line
+    }
+    if ($readinessLossLine.Length -gt 0) {
+        throw "Device readiness was lost during ${Context}: $readinessLossLine"
+    }
+    return $lines
+}
 
 function Wait-SerialLine {
     param(
@@ -33,28 +90,24 @@ function Wait-SerialLine {
         [string]$ResolvedLogPath
     )
 
-    $pending = ""
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 40
-        $combined = $pending + $Serial.ReadExisting()
-        $parts = $combined -split "`n"
-        $pending = $parts[-1]
-        if ($parts.Count -eq 1) {
-            continue
-        }
-        for ($index = 0; $index -lt $parts.Count - 1; $index++) {
-            $line = $parts[$index].TrimEnd("`r").Trim()
-            if ($line.Length -eq 0) {
-                continue
-            }
-            $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-            Add-Content -LiteralPath $ResolvedLogPath -Value $line
+        $matchedLine = ""
+        $lines = Read-ClassifiedSerialLines -Serial $Serial `
+            -ResolvedLogPath $ResolvedLogPath -Context "waiting for '$Pattern'"
+        foreach ($line in $lines) {
             if ($line -match $Pattern) {
-                return $line
+                if ($matchedLine.Length -eq 0) {
+                    $matchedLine = $line
+                }
             }
+        }
+        if ($matchedLine.Length -gt 0) {
+            return $matchedLine
         }
     }
+    $script:serialReadinessLost = $true
     throw "Timed out after ${TimeoutSeconds}s waiting for serial pattern '$Pattern'"
 }
 
@@ -67,25 +120,80 @@ function Sync-SerialChannel {
         [string]$ResolvedLogPath
     )
 
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
-        $Serial.ReadExisting() | Out-Null
-        $Serial.WriteLine("EXIT")
+    try {
+        Read-ClassifiedSerialLines -Serial $Serial `
+            -ResolvedLogPath $ResolvedLogPath -Context "initial serial drain" | Out-Null
+        $Serial.WriteLine("PING")
         $Serial.BaseStream.Flush()
-        try {
-            Wait-SerialLine -Serial $Serial `
-                -Pattern "^(?:WEB_CONSOLE result=stopped|ERROR event=serial_command reason=unsupported_command)$" `
-                -TimeoutSeconds 20 -ResolvedLogPath $ResolvedLogPath | Out-Null
-            $Serial.WriteLine("PING")
-            $Serial.BaseStream.Flush()
-            Wait-SerialLine -Serial $Serial -Pattern "^PONG$" -TimeoutSeconds 3 `
-                -ResolvedLogPath $ResolvedLogPath | Out-Null
-            return
-        }
-        catch {
-            if ($attempt -eq 3) {
-                throw "Serial channel did not reach normal mode and answer PING before Web E2E"
-            }
-        }
+        Wait-SerialLine -Serial $Serial -Pattern "^PONG$" -TimeoutSeconds 8 `
+            -ResolvedLogPath $ResolvedLogPath | Out-Null
+        $script:serialReadinessConfirmed = $true
+    }
+    catch {
+        $script:serialReadinessLost = $true
+        throw "Serial channel did not answer the single initial PING before Web E2E: $($_.Exception.Message)"
+    }
+}
+
+function Wait-WebConsoleReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.Ports.SerialPort]$Serial,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ResolvedLogPath
+    )
+
+    try {
+        $ready = Wait-SerialLine -Serial $Serial -Pattern "^WEB_CONSOLE result=ready" `
+            -TimeoutSeconds 30 -ResolvedLogPath $ResolvedLogPath
+        $script:webConsoleConfirmedActive = $true
+        return $ready
+    }
+    catch {
+        $script:serialReadinessLost = $true
+        throw
+    }
+}
+
+function Assert-SerialWriteAllowed {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.Ports.SerialPort]$Serial,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ResolvedLogPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Context
+    )
+
+    if (-not $script:serialReadinessConfirmed -or $script:serialReadinessLost) {
+        throw "Serial write is forbidden during $Context because normal readiness is not confirmed"
+    }
+    Read-ClassifiedSerialLines -Serial $Serial `
+        -ResolvedLogPath $ResolvedLogPath -Context "before $Context" | Out-Null
+}
+
+function Write-SerialCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.Ports.SerialPort]$Serial,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Command,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Context
+    )
+
+    try {
+        $Serial.WriteLine($Command)
+        $Serial.BaseStream.Flush()
+    }
+    catch {
+        $script:serialReadinessLost = $true
+        throw "Serial write failed during ${Context}: $($_.Exception.Message)"
     }
 }
 
@@ -670,6 +778,128 @@ function Remove-P2AtomicFailureLedgerArtifacts {
     }
 }
 
+function Read-P6ProviderLedger {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LedgerPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedNonce
+    )
+
+    $resolved = [System.IO.Path]::GetFullPath($LedgerPath)
+    if (-not $resolved.EndsWith(
+            [System.IO.Path]::Combine("artifacts", "p6-02-provider-ledger.json"),
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "P6-02 ledger path is outside the exact artifacts target"
+    }
+    if (-not (Test-Path -LiteralPath $resolved)) {
+        throw "P6-02 ledger is absent"
+    }
+    $ledger = Get-Content -LiteralPath $resolved -Raw -Encoding UTF8 |
+        ConvertFrom-Json
+    $required = @(
+        "version", "nonce", "profile_name", "preset_name", "project_title",
+        "baseline_ready", "baseline_profile_ids", "baseline_preset_ids",
+        "baseline_project_ids", "original_default_profile_id",
+        "original_project_id", "profile_create_pending", "preset_create_pending",
+        "project_create_pending", "owned_profile_id", "owned_preset_id",
+        "owned_project_id", "cleanup_complete")
+    $properties = @($ledger.PSObject.Properties.Name)
+    foreach ($name in $required) {
+        if ($properties -notcontains $name) {
+            throw "P6-02 ledger is missing required field '$name'"
+        }
+    }
+    if ($ledger.version -ne 1 -or [string]$ledger.nonce -ne $ExpectedNonce -or
+        [string]$ledger.nonce -notmatch '^[0-9]{8,20}$' -or
+        [string]$ledger.profile_name -ne "P6 provider $ExpectedNonce" -or
+        [string]$ledger.preset_name -ne "P6 preset $ExpectedNonce" -or
+        [string]$ledger.project_title -ne "P6 provider project $ExpectedNonce" -or
+        $ledger.baseline_ready -isnot [bool] -or
+        $ledger.profile_create_pending -isnot [bool] -or
+        $ledger.preset_create_pending -isnot [bool] -or
+        $ledger.project_create_pending -isnot [bool] -or
+        $ledger.cleanup_complete -isnot [bool]) {
+        throw "P6-02 ledger has an invalid typed header"
+    }
+    $providerIds = @($ledger.baseline_profile_ids) +
+        @($ledger.baseline_preset_ids) +
+        @([string]$ledger.original_default_profile_id) +
+        @([string]$ledger.owned_profile_id) +
+        @([string]$ledger.owned_preset_id)
+    foreach ($id in $providerIds) {
+        if ($id.Length -gt 0 -and $id -notmatch '^[0-9a-f]{16}$') {
+            throw "P6-02 ledger contains an unsafe provider ID"
+        }
+    }
+    $projectIds = @($ledger.baseline_project_ids) +
+        @([string]$ledger.original_project_id) +
+        @([string]$ledger.owned_project_id)
+    foreach ($id in $projectIds) {
+        if ($id.Length -gt 0 -and
+            ($id.Length -gt 180 -or $id -notmatch '^[A-Za-z0-9._-]+$')) {
+            throw "P6-02 ledger contains an unsafe Project ID"
+        }
+    }
+    if (-not [bool]$ledger.baseline_ready -or
+        @($ledger.baseline_profile_ids) -notcontains
+            [string]$ledger.original_default_profile_id -or
+        @($ledger.baseline_project_ids) -notcontains
+            [string]$ledger.original_project_id) {
+        throw "P6-02 ledger baseline identities are inconsistent"
+    }
+    if ([bool]$ledger.cleanup_complete -and
+        ([bool]$ledger.profile_create_pending -or
+         [bool]$ledger.preset_create_pending -or
+         [bool]$ledger.project_create_pending -or
+         [string]$ledger.owned_profile_id -ne "" -or
+         [string]$ledger.owned_preset_id -ne "" -or
+         [string]$ledger.owned_project_id -ne "")) {
+        throw "P6-02 ledger cleanup state is inconsistent"
+    }
+    return $ledger
+}
+
+function Get-P6ProviderProbeSecret {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Nonce
+    )
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes("provider-$Nonce")
+        $digest = $sha.ComputeHash($bytes)
+        return "p6-$([Convert]::ToHexString($digest).ToLowerInvariant())"
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Assert-P6ProviderSecretAbsent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Paths,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Secret
+    )
+
+    foreach ($path in $Paths) {
+        if ((Test-Path -LiteralPath $path) -and
+            [System.IO.File]::ReadAllText($path).Contains($Secret)) {
+            foreach ($ownedPath in $Paths) {
+                if (Test-Path -LiteralPath $ownedPath) {
+                    Remove-Item -LiteralPath $ownedPath
+                }
+            }
+            throw "P6-02 provider secret appeared in retained local output"
+        }
+    }
+}
+
 $resolvedLogPath = [System.IO.Path]::GetFullPath($LogPath)
 $logDirectory = [System.IO.Path]::GetDirectoryName($resolvedLogPath)
 if (-not [string]::IsNullOrEmpty($logDirectory)) {
@@ -754,7 +984,6 @@ $binaryTextWebClean = $false
 $binaryTextLedgerPath = Join-Path (
     Get-Location).Path "artifacts\p2-29-binary-text-ledger.json"
 $webConsoleRequested = $false
-$webConsoleStarted = $false
 $webConsoleStopped = $false
 $sdFaultActive = $false
 $p4SshOutputFixtureOwned = $false
@@ -771,8 +1000,42 @@ $requestSettingsNonce = if ($Suite -eq "request-settings") {
 else {
     ""
 }
+$p6ProviderNonce = if ($Suite -eq "p6-providers") {
+    [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString(
+        [System.Globalization.CultureInfo]::InvariantCulture)
+}
+else {
+    ""
+}
+$p6ProviderLedgerPath = Join-Path (
+    Get-Location).Path "artifacts\p6-02-provider-ledger.json"
+$p6ProviderLedgerTempPath = "$p6ProviderLedgerPath.node.tmp"
+$p6ProviderNodeStdoutPath = "$resolvedLogPath.node.out"
+$p6ProviderNodeStderrPath = "$resolvedLogPath.node.err"
+$p6ProviderArtifactsReserved = $false
+$p6ProviderLedgerPresent = $false
+$p6ProviderWebClean = $false
+$p6ProviderSecret = if ($Suite -eq "p6-providers") {
+    Get-P6ProviderProbeSecret -Nonce $p6ProviderNonce
+}
+else {
+    ""
+}
+$finalizerFailures = [System.Collections.Generic.List[string]]::new()
 
 try {
+    if ($Suite -eq "p6-providers") {
+        foreach ($ownedPath in @(
+                $p6ProviderLedgerPath,
+                $p6ProviderLedgerTempPath,
+                $p6ProviderNodeStdoutPath,
+                $p6ProviderNodeStderrPath)) {
+            if (Test-Path -LiteralPath $ownedPath) {
+                throw "P6-02 exact-owned artifact already exists; refusing a new mutation: $ownedPath"
+            }
+        }
+        $p6ProviderArtifactsReserved = $true
+    }
     $serial.Open()
     Start-Sleep -Seconds 12
     Sync-SerialChannel -Serial $serial -ResolvedLogPath $resolvedLogPath
@@ -837,11 +1100,12 @@ try {
 
             $webConsoleRequested = $true
             $webConsoleStopped = $false
-            $serial.WriteLine("CONSOLE")
-            $serial.BaseStream.Flush()
-            $ready = Wait-SerialLine -Serial $serial -Pattern "^WEB_CONSOLE result=ready" `
-                -TimeoutSeconds 30 -ResolvedLogPath $resolvedLogPath
-            $webConsoleStarted = $true
+            Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
+                -Context "Web Console start"
+            Write-SerialCommand -Serial $serial -Command "CONSOLE" `
+                -Context "Web Console start"
+            $ready = Wait-WebConsoleReady -Serial $serial `
+                -ResolvedLogPath $resolvedLogPath
             Write-Host $ready
 
             $nodeStdoutPath = "$resolvedLogPath.$($contract.state).node.out"
@@ -871,12 +1135,15 @@ try {
                 throw "SD-degraded Web E2E failed for $($contract.state) with code $($nodeProcess.ExitCode)"
             }
 
-            $serial.WriteLine("EXIT")
-            $serial.BaseStream.Flush()
+            Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
+                -Context "Web Console shutdown"
+            Write-SerialCommand -Serial $serial -Command "EXIT" `
+                -Context "Web Console shutdown"
             $stopped = Wait-SerialLine -Serial $serial `
                 -Pattern "^WEB_CONSOLE result=stopped$" -TimeoutSeconds 20 `
                 -ResolvedLogPath $resolvedLogPath
             $webConsoleStopped = $true
+            $script:webConsoleConfirmedActive = $false
             Write-Host $stopped
 
             $serial.WriteLine("P2SDFAULTCLEAR")
@@ -950,11 +1217,12 @@ try {
             $contextHistoryLedgerPresent = $true
             $webConsoleRequested = $true
             $webConsoleStopped = $false
-            $serial.WriteLine("CONSOLE")
-            $serial.BaseStream.Flush()
-            $ready = Wait-SerialLine -Serial $serial -Pattern "^WEB_CONSOLE result=ready" `
-                -TimeoutSeconds 30 -ResolvedLogPath $resolvedLogPath
-            $webConsoleStarted = $true
+            Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
+                -Context "Web Console recovery start"
+            Write-SerialCommand -Serial $serial -Command "CONSOLE" `
+                -Context "Web Console recovery start"
+            $ready = Wait-WebConsoleReady -Serial $serial `
+                -ResolvedLogPath $resolvedLogPath
             Write-Host $ready
 
             $recoveryStdoutPath = "$resolvedLogPath.history.recovery.node.out"
@@ -986,17 +1254,19 @@ try {
                 throw "P2-27 Web recovery failed closed; retained exact ledger"
             }
 
-            $serial.WriteLine("EXIT")
-            $serial.BaseStream.Flush()
+            Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
+                -Context "Web Console recovery shutdown"
+            Write-SerialCommand -Serial $serial -Command "EXIT" `
+                -Context "Web Console recovery shutdown"
             $stopped = Wait-SerialLine -Serial $serial `
                 -Pattern "^WEB_CONSOLE result=stopped$" -TimeoutSeconds 20 `
                 -ResolvedLogPath $resolvedLogPath
             $webConsoleStopped = $true
+            $script:webConsoleConfirmedActive = $false
             Write-Host $stopped
             Remove-Item -LiteralPath $contextHistoryLedgerPath
             $contextHistoryLedgerPresent = $false
             $contextHistoryWebClean = $false
-            $webConsoleStarted = $false
         }
         $contextHistoryNonce = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString(
             [System.Globalization.CultureInfo]::InvariantCulture)
@@ -1097,11 +1367,12 @@ try {
             $unicodePathSetupAttempted = $true
             $webConsoleRequested = $true
             $webConsoleStopped = $false
-            $serial.WriteLine("CONSOLE")
-            $serial.BaseStream.Flush()
-            $ready = Wait-SerialLine -Serial $serial -Pattern "^WEB_CONSOLE result=ready" `
-                -TimeoutSeconds 30 -ResolvedLogPath $resolvedLogPath
-            $webConsoleStarted = $true
+            Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
+                -Context "Web Console recovery start"
+            Write-SerialCommand -Serial $serial -Command "CONSOLE" `
+                -Context "Web Console recovery start"
+            $ready = Wait-WebConsoleReady -Serial $serial `
+                -ResolvedLogPath $resolvedLogPath
             Write-Host $ready
 
             $recoveryStdoutPath = "$resolvedLogPath.recovery.node.out"
@@ -1134,12 +1405,15 @@ try {
                 throw "P2-19 Web recovery failed closed; retained exact ledger"
             }
 
-            $serial.WriteLine("EXIT")
-            $serial.BaseStream.Flush()
+            Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
+                -Context "Web Console recovery shutdown"
+            Write-SerialCommand -Serial $serial -Command "EXIT" `
+                -Context "Web Console recovery shutdown"
             $stopped = Wait-SerialLine -Serial $serial `
                 -Pattern "^WEB_CONSOLE result=stopped$" -TimeoutSeconds 20 `
                 -ResolvedLogPath $resolvedLogPath
             $webConsoleStopped = $true
+            $script:webConsoleConfirmedActive = $false
             Write-Host $stopped
             $serial.WriteLine("P2UNICODECLEAN$recoveryNonce")
             $serial.BaseStream.Flush()
@@ -1156,7 +1430,6 @@ try {
             $unicodePathSetupAttempted = $false
             $unicodePathCorpusClean = $false
             $unicodePathWebClean = $false
-            $webConsoleStarted = $false
         }
         $unicodePathNonce = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString(
             [System.Globalization.CultureInfo]::InvariantCulture)
@@ -1227,11 +1500,12 @@ try {
             Write-Host $recovery
             $webConsoleRequested = $true
             $webConsoleStopped = $false
-            $serial.WriteLine("CONSOLE")
-            $serial.BaseStream.Flush()
-            $ready = Wait-SerialLine -Serial $serial -Pattern "^WEB_CONSOLE result=ready" `
-                -TimeoutSeconds 30 -ResolvedLogPath $resolvedLogPath
-            $webConsoleStarted = $true
+            Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
+                -Context "Web Console recovery start"
+            Write-SerialCommand -Serial $serial -Command "CONSOLE" `
+                -Context "Web Console recovery start"
+            $ready = Wait-WebConsoleReady -Serial $serial `
+                -ResolvedLogPath $resolvedLogPath
             Write-Host $ready
 
             $recoveryStdoutPath = "$resolvedLogPath.shared.recovery.node.out"
@@ -1265,18 +1539,20 @@ try {
                 throw "P2-20 Web recovery failed closed; retained exact ledger"
             }
 
-            $serial.WriteLine("EXIT")
-            $serial.BaseStream.Flush()
+            Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
+                -Context "Web Console recovery shutdown"
+            Write-SerialCommand -Serial $serial -Command "EXIT" `
+                -Context "Web Console recovery shutdown"
             $stopped = Wait-SerialLine -Serial $serial `
                 -Pattern "^WEB_CONSOLE result=stopped$" -TimeoutSeconds 20 `
                 -ResolvedLogPath $resolvedLogPath
             $webConsoleStopped = $true
+            $script:webConsoleConfirmedActive = $false
             Write-Host $stopped
             Remove-Item -LiteralPath $sharedIsolationLedgerPath
             $sharedIsolationLedgerPresent = $false
             $sharedIsolationWebClean = $false
             $sharedIsolationDeviceClean = $false
-            $webConsoleStarted = $false
         }
         $sharedIsolationNonce = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString(
             [System.Globalization.CultureInfo]::InvariantCulture)
@@ -1437,14 +1713,15 @@ try {
         Write-Host $setup
     }
     Start-Sleep -Milliseconds 1000
-    $serial.ReadExisting() | Out-Null
+    Read-ClassifiedSerialLines -Serial $serial `
+        -ResolvedLogPath $resolvedLogPath -Context "pre-Web Console drain" | Out-Null
     $webConsoleRequested = $true
     $webConsoleStopped = $false
-    $serial.WriteLine("CONSOLE")
-    $serial.BaseStream.Flush()
-    $ready = Wait-SerialLine -Serial $serial -Pattern "^WEB_CONSOLE result=ready" `
-        -TimeoutSeconds 30 -ResolvedLogPath $resolvedLogPath
-    $webConsoleStarted = $true
+    Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
+        -Context "Web Console start"
+    Write-SerialCommand -Serial $serial -Command "CONSOLE" `
+        -Context "Web Console start"
+    $ready = Wait-WebConsoleReady -Serial $serial -ResolvedLogPath $resolvedLogPath
     Write-Host $ready
 
     $nodeStdoutPath = "$resolvedLogPath.node.out"
@@ -1508,6 +1785,11 @@ try {
     if ($Suite -eq "binary-text-recover") {
         $nodeArguments += @("--binary-text-ledger", $binaryTextLedgerPath)
     }
+    if ($Suite -eq "p6-providers") {
+        $nodeArguments += @(
+            "--p6-provider-nonce", $p6ProviderNonce,
+            "--p6-provider-ledger", $p6ProviderLedgerPath)
+    }
     $nodeProcess = Start-Process -FilePath "node" `
         -ArgumentList $nodeArguments `
         -WorkingDirectory (Get-Location).Path `
@@ -1517,12 +1799,21 @@ try {
         -PassThru `
         -Wait
     $nodeExitCode = $nodeProcess.ExitCode
+    if ($Suite -eq "p6-providers" -and
+        (Test-Path -LiteralPath $p6ProviderLedgerPath)) {
+        $p6ProviderLedgerPresent = $true
+    }
     $nodeOutput = @()
     if (Test-Path -LiteralPath $nodeStdoutPath) {
         $nodeOutput += Get-Content -LiteralPath $nodeStdoutPath -Encoding UTF8
     }
     if (Test-Path -LiteralPath $nodeStderrPath) {
         $nodeOutput += Get-Content -LiteralPath $nodeStderrPath -Encoding UTF8
+    }
+    if ($Suite -eq "p6-providers") {
+        Assert-P6ProviderSecretAbsent `
+            -Paths @($nodeStdoutPath, $nodeStderrPath, $resolvedLogPath) `
+            -Secret $p6ProviderSecret
     }
     foreach ($line in $nodeOutput) {
         Add-Content -LiteralPath $resolvedLogPath -Value $line
@@ -1558,6 +1849,45 @@ try {
     }
     if ($nodeExitCode -ne 0) {
         throw "Hardware Web E2E exited with code $nodeExitCode"
+    }
+    if ($Suite -eq "p6-providers") {
+        $resultLines = @(Get-Content -LiteralPath $nodeStdoutPath -Encoding UTF8)
+        if ($resultLines.Count -ne 1) {
+            throw "P6-02 provider suite must emit exactly one JSON evidence line"
+        }
+        $evidence = $resultLines[0] | ConvertFrom-Json
+        $providerEvidence = $evidence.providers
+        if ($evidence.result -ne "pass" -or $evidence.suite -ne $Suite -or
+            $providerEvidence.authentication_and_csrf -ne "pass" -or
+            $providerEvidence.missing_key_nonmutation -ne "pass" -or
+            $providerEvidence.profile_crud_public_state -ne "pass" -or
+            $providerEvidence.default_and_project_state -ne "pass" -or
+            $providerEvidence.connector_failure_outcomes -ne "pass" -or
+            $providerEvidence.settings_provider_isolation -ne "pass" -or
+            $providerEvidence.preset_crud_and_apply -ne "pass" -or
+            $providerEvidence.unavailable_reference -ne "pass" -or
+            $providerEvidence.secret_non_disclosure -ne "pass" -or
+            $providerEvidence.cleanup -ne "pass" -or
+            [int64]$providerEvidence.profile_create_ms -lt 0 -or
+            [int64]$providerEvidence.profile_create_ms -gt 45000 -or
+            [int64]$providerEvidence.preset_apply_ms -lt 0 -or
+            [int64]$providerEvidence.preset_apply_ms -gt 45000 -or
+            [int64]$providerEvidence.resources.after.free_heap -lt (70 * 1024) -or
+            [int64]$providerEvidence.resources.after.largest_heap -lt (28 * 1024) -or
+            [int64]$providerEvidence.resources.after.stack_free -le 0) {
+            throw "P6-02 provider Web evidence contract is incomplete"
+        }
+        $completedLedger = Read-P6ProviderLedger `
+            -LedgerPath $p6ProviderLedgerPath -ExpectedNonce $p6ProviderNonce
+        if (-not [bool]$completedLedger.cleanup_complete) {
+            throw "P6-02 provider ledger does not prove exact-owned cleanup"
+        }
+        Assert-P6ProviderSecretAbsent `
+            -Paths @($nodeStdoutPath, $nodeStderrPath, $resolvedLogPath) `
+            -Secret $p6ProviderSecret
+        Remove-Item -LiteralPath $p6ProviderLedgerPath
+        $p6ProviderLedgerPresent = $false
+        $p6ProviderWebClean = $true
     }
     if ($Suite -in @("archive-quota", "archive-quota-recover")) {
         $resultLines = @(Get-Content -LiteralPath $nodeStdoutPath -Encoding UTF8)
@@ -1728,11 +2058,14 @@ try {
         throw "P2-21 Node suite did not prove exact bounded Web access"
     }
 
-    $serial.WriteLine("EXIT")
-    $serial.BaseStream.Flush()
+    Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
+        -Context "Web Console shutdown"
+    Write-SerialCommand -Serial $serial -Command "EXIT" `
+        -Context "Web Console shutdown"
     $stopped = Wait-SerialLine -Serial $serial -Pattern "^WEB_CONSOLE result=stopped$" `
         -TimeoutSeconds 20 -ResolvedLogPath $resolvedLogPath
     $webConsoleStopped = $true
+    $script:webConsoleConfirmedActive = $false
     Write-Host $stopped
     if ($Suite -eq "p4-ssh-output" -and $p4SshOutputFixtureOwned) {
         Remove-P4SshOutputFixture -Serial $serial -ResolvedLogPath $resolvedLogPath
@@ -1923,32 +2256,68 @@ try {
     Write-Host "CARDMIND_WEB_E2E result=pass suite=$Suite log=$resolvedLogPath"
 }
 finally {
-    if ($serial.IsOpen) {
-        if ($webConsoleRequested -and -not $webConsoleStopped) {
-            try {
-                $serial.WriteLine("EXIT")
-                $serial.BaseStream.Flush()
-                Wait-SerialLine -Serial $serial `
-                    -Pattern '^(?:WEB_CONSOLE result=stopped|ERROR event=serial_command reason=unsupported_command)$' `
-                    -TimeoutSeconds 20 -ResolvedLogPath $resolvedLogPath | Out-Null
-                $webConsoleStopped = $true
+    if ($Suite -eq "p6-providers" -and $p6ProviderArtifactsReserved -and
+        (Test-Path -LiteralPath $p6ProviderLedgerPath)) {
+        try {
+            $finalLedger = Read-P6ProviderLedger `
+                -LedgerPath $p6ProviderLedgerPath -ExpectedNonce $p6ProviderNonce
+            if ([bool]$finalLedger.cleanup_complete) {
+                Remove-Item -LiteralPath $p6ProviderLedgerPath
+                $p6ProviderLedgerPresent = $false
+                $p6ProviderWebClean = $true
             }
-            catch {
-                Write-Warning "Could not request Web Console shutdown: $($_.Exception.Message)"
+            else {
+                $finalizerFailures.Add(
+                    "P6-02 exact-owned Web cleanup is incomplete; ledger retained")
             }
         }
+        catch {
+            $finalizerFailures.Add(
+                "P6-02 ledger finalization: $($_.Exception.Message)")
+        }
+    }
+    if ($serial.IsOpen) {
+        if ($script:webConsoleConfirmedActive -and
+            $script:serialReadinessConfirmed -and
+            -not $script:serialReadinessLost) {
+            try {
+                Assert-SerialWriteAllowed -Serial $serial `
+                    -ResolvedLogPath $resolvedLogPath `
+                    -Context "Web Console failure shutdown"
+                Write-SerialCommand -Serial $serial -Command "EXIT" `
+                    -Context "Web Console failure shutdown"
+                Wait-SerialLine -Serial $serial `
+                    -Pattern '^WEB_CONSOLE result=stopped$' `
+                    -TimeoutSeconds 20 -ResolvedLogPath $resolvedLogPath | Out-Null
+                $webConsoleStopped = $true
+                $script:webConsoleConfirmedActive = $false
+            }
+            catch {
+                $finalizerFailures.Add(
+                    "Web Console shutdown: $($_.Exception.Message)")
+            }
+        }
+        elseif ($script:webConsoleConfirmedActive) {
+            $finalizerFailures.Add(
+                "Web Console remained active after normal Device readiness was lost; EXIT was not sent")
+        }
         if ($p4SshOutputFixtureOwned -and -not $p4SshOutputFixtureClean -and
-            (-not $webConsoleRequested -or $webConsoleStopped)) {
+            $script:serialReadinessConfirmed -and
+            -not $script:serialReadinessLost -and
+            -not $script:webConsoleConfirmedActive) {
             try {
                 Remove-P4SshOutputFixture -Serial $serial -ResolvedLogPath $resolvedLogPath
                 $p4SshOutputFixtureClean = $true
                 $p4SshOutputFixtureOwned = $false
             }
             catch {
-                Write-Warning "Could not complete P4-05 SSH output cleanup: $($_.Exception.Message)"
+                $finalizerFailures.Add(
+                    "P4-05 SSH output cleanup: $($_.Exception.Message)")
             }
         }
-        if ($sdFaultActive -and (-not $webConsoleRequested -or $webConsoleStopped)) {
+        if ($sdFaultActive -and $script:serialReadinessConfirmed -and
+            -not $script:serialReadinessLost -and
+            -not $script:webConsoleConfirmedActive) {
             try {
                 $serial.WriteLine("P2SDFAULTCLEAR")
                 $serial.BaseStream.Flush()
@@ -1958,11 +2327,14 @@ finally {
                 $sdFaultActive = $false
             }
             catch {
-                Write-Warning "Could not clear the P2-23 microSD diagnostic fault: $($_.Exception.Message)"
+                $finalizerFailures.Add(
+                    "P2-23 microSD diagnostic fault cleanup: $($_.Exception.Message)")
             }
         }
         if ($sdDegradedFixtureSetupAttempted -and -not $sdDegradedFixtureClean -and
-            -not $sdFaultActive -and (-not $webConsoleRequested -or $webConsoleStopped)) {
+            -not $sdFaultActive -and $script:serialReadinessConfirmed -and
+            -not $script:serialReadinessLost -and
+            -not $script:webConsoleConfirmedActive) {
             try {
                 $serial.WriteLine("P2ATOMICCLEAN$sdDegradedNonce")
                 $serial.BaseStream.Flush()
@@ -1979,11 +2351,14 @@ finally {
                 $sdDegradedFixtureClean = $true
             }
             catch {
-                Write-Warning "Could not complete P2-23 read fixture cleanup: $($_.Exception.Message)"
+                $finalizerFailures.Add(
+                    "P2-23 read fixture cleanup: $($_.Exception.Message)")
             }
         }
         if ($workspaceScaleCorpusReady -and -not $workspaceScaleCorpusClean -and
-            (-not $webConsoleRequested -or $webConsoleStopped)) {
+            $script:serialReadinessConfirmed -and
+            -not $script:serialReadinessLost -and
+            -not $script:webConsoleConfirmedActive) {
             try {
                 $serial.WriteLine("P2FILESCALECLEAN$workspaceScaleNonce")
                 $serial.BaseStream.Flush()
@@ -2001,12 +2376,15 @@ finally {
                 }
             }
             catch {
-                Write-Warning "Could not complete P2-17 corpus cleanup: $($_.Exception.Message)"
+                $finalizerFailures.Add(
+                    "P2-17 corpus cleanup: $($_.Exception.Message)")
             }
         }
         if ($unicodePathSetupAttempted -and $unicodePathWebClean -and
             -not $unicodePathCorpusClean -and
-            (-not $webConsoleRequested -or $webConsoleStopped)) {
+            $script:serialReadinessConfirmed -and
+            -not $script:serialReadinessLost -and
+            -not $script:webConsoleConfirmedActive) {
             try {
                 $serial.WriteLine("P2UNICODECLEAN$unicodePathNonce")
                 $serial.BaseStream.Flush()
@@ -2024,12 +2402,15 @@ finally {
                 }
             }
             catch {
-                Write-Warning "Could not complete P2-19 Unicode cleanup: $($_.Exception.Message)"
+                $finalizerFailures.Add(
+                    "P2-19 Unicode cleanup: $($_.Exception.Message)")
             }
         }
         if ($sharedIsolationLedgerPresent -and $sharedIsolationWebClean -and
             -not $sharedIsolationDeviceClean -and
-            (-not $webConsoleRequested -or $webConsoleStopped)) {
+            $script:serialReadinessConfirmed -and
+            -not $script:serialReadinessLost -and
+            -not $script:webConsoleConfirmedActive) {
             try {
                 $serial.WriteLine("P2SHAREDCLEAN$sharedIsolationNonce")
                 $serial.BaseStream.Flush()
@@ -2047,12 +2428,15 @@ finally {
                 $sharedIsolationLedgerPresent = $false
             }
             catch {
-                Write-Warning "Could not complete P2-20 Shared cleanup: $($_.Exception.Message)"
+                $finalizerFailures.Add(
+                    "P2-20 Shared cleanup: $($_.Exception.Message)")
             }
         }
         if ($largeStreamLedgerPresent -and $largeStreamSetupAttempted -and
             -not $largeStreamClean -and
-            (-not $webConsoleRequested -or $webConsoleStopped)) {
+            $script:serialReadinessConfirmed -and
+            -not $script:serialReadinessLost -and
+            -not $script:webConsoleConfirmedActive) {
             try {
                 $serial.WriteLine("P2LARGECLEAN$largeStreamNonce")
                 $serial.BaseStream.Flush()
@@ -2071,12 +2455,15 @@ finally {
                 $largeStreamLedgerPresent = $false
             }
             catch {
-                Write-Warning "Could not complete P2-21 large fixture cleanup: $($_.Exception.Message)"
+                $finalizerFailures.Add(
+                    "P2-21 large fixture cleanup: $($_.Exception.Message)")
             }
         }
         if ($atomicFailureLedgerPresent -and $atomicFailureSetupAttempted -and
             -not $atomicFailureClean -and
-            (-not $webConsoleRequested -or $webConsoleStopped)) {
+            $script:serialReadinessConfirmed -and
+            -not $script:serialReadinessLost -and
+            -not $script:webConsoleConfirmedActive) {
             try {
                 $serial.WriteLine("P2ATOMICCLEAN$atomicFailureNonce")
                 $serial.BaseStream.Flush()
@@ -2095,10 +2482,80 @@ finally {
                 $atomicFailureLedgerPresent = $false
             }
             catch {
-                Write-Warning "Could not complete P2-22 atomic fixture cleanup: $($_.Exception.Message)"
+                $finalizerFailures.Add(
+                    "P2-22 atomic fixture cleanup: $($_.Exception.Message)")
             }
+        }
+        if ($p4SshOutputFixtureOwned -and -not $p4SshOutputFixtureClean) {
+            $finalizerFailures.Add("P4-05 SSH output fixture remains owned")
+        }
+        if ($sdFaultActive) {
+            $finalizerFailures.Add("P2-23 microSD diagnostic fault remains active")
+        }
+        if ($sdDegradedFixtureSetupAttempted -and -not $sdDegradedFixtureClean) {
+            $finalizerFailures.Add("P2-23 read fixture cleanup remains incomplete")
+        }
+        if ($workspaceScaleCorpusReady -and -not $workspaceScaleCorpusClean) {
+            $finalizerFailures.Add("P2-17 corpus cleanup remains incomplete")
+        }
+        if ($unicodePathSetupAttempted -and $unicodePathWebClean -and
+            -not $unicodePathCorpusClean) {
+            $finalizerFailures.Add("P2-19 Unicode cleanup remains incomplete")
+        }
+        if ($sharedIsolationLedgerPresent -and $sharedIsolationWebClean -and
+            -not $sharedIsolationDeviceClean) {
+            $finalizerFailures.Add("P2-20 Shared cleanup remains incomplete")
+        }
+        if ($largeStreamLedgerPresent -and $largeStreamSetupAttempted -and
+            -not $largeStreamClean) {
+            $finalizerFailures.Add("P2-21 large fixture cleanup remains incomplete")
+        }
+        if ($atomicFailureLedgerPresent -and $atomicFailureSetupAttempted -and
+            -not $atomicFailureClean) {
+            $finalizerFailures.Add("P2-22 atomic fixture cleanup remains incomplete")
         }
         $serial.Close()
     }
     $serial.Dispose()
+    if ($Suite -eq "p6-providers" -and $p6ProviderSecret.Length -gt 0) {
+        try {
+            $p6OutputPaths = @($resolvedLogPath)
+            if ($p6ProviderArtifactsReserved) {
+                $p6OutputPaths += @(
+                    $p6ProviderNodeStdoutPath,
+                    $p6ProviderNodeStderrPath)
+            }
+            Assert-P6ProviderSecretAbsent `
+                -Paths $p6OutputPaths -Secret $p6ProviderSecret
+        }
+        catch {
+            $finalizerFailures.Add($_.Exception.Message)
+        }
+        $p6ProviderSecret = ""
+    }
+    if ($Suite -eq "p6-providers" -and $p6ProviderArtifactsReserved) {
+        if (Test-Path -LiteralPath $p6ProviderLedgerTempPath) {
+            $finalizerFailures.Add(
+                "P6-02 temporary ledger remains; exact-owned evidence retained")
+        }
+        foreach ($capturePath in @(
+                $p6ProviderNodeStdoutPath,
+                $p6ProviderNodeStderrPath)) {
+            try {
+                if (Test-Path -LiteralPath $capturePath) {
+                    Remove-Item -LiteralPath $capturePath
+                }
+                if (Test-Path -LiteralPath $capturePath) {
+                    throw "capture remains after removal: $capturePath"
+                }
+            }
+            catch {
+                $finalizerFailures.Add(
+                    "P6-02 Node capture cleanup: $($_.Exception.Message)")
+            }
+        }
+    }
+    if ($finalizerFailures.Count -gt 0) {
+        throw "Hardware Web E2E finalization failed: $($finalizerFailures -join '; ')"
+    }
 }

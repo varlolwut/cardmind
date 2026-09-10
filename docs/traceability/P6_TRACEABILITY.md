@@ -59,7 +59,7 @@ Status values are `pending`, `in_progress`, and `completed`.
 | ID | Atomic boundary | Required observation | Status |
 | --- | --- | --- | --- |
 | P6-01 | Canonical phase transition and pre-edit freeze: confirm remote `develop`; inventory every required P3-P5 user-facing action; obtain Architect's consolidated replacement brief and independent visual red-team; create a materially different replacement artifact; freeze scope, non-goals, proof matrix, resource budget and first production-row write set for Architect GO | Exact baseline and branch evidence; complete action-to-surface inventory including project creation, Shared-workspace file creation/upload, chat creation/management and Settings; reviewed replacement brief; independent red-team verdict; Architect acceptance of the interactive artifact against complete functional coverage, current UX/design-system evidence, Web Console/ESP32 Cardputer feasibility and visual quality; reviewed first-row design/proof/write set before production | completed |
-| P6-02 | Add the bounded API-profile and model-preset contract through existing settings, persistence, Device and Web owners | Measured NVS capacity; explicit count/length limits; selection/default behavior; malformed/full-storage failure; reboot persistence; Device/Web parity; exact cleanup and resources | pending |
+| P6-02 | Add the bounded API-profile and model-preset contract through existing settings, persistence, Device and Web owners | Measured NVS capacity; explicit count/length limits; selection/default behavior; malformed/full-storage failure; reboot persistence; Device/Web parity; exact cleanup and resources | completed |
 | P6-03 | Add configurable authentication lifetime and independent multi-tab browser presence | Four exact lifetime choices; expiry and until-reboot semantics; visible-tab heartbeat; last-tab waiting within 30 seconds without auth loss; multi-tab correctness; reboot and stale-token behavior | pending |
 | P6-04 | Preserve active project, active view and drafts through the existing Web reconnect path | Same-address reconnect after transient disconnect and Python handoff; active project/view/draft restored; stale or missing state fails explicitly; no exact-scroll claim | pending |
 | P6-05 | Bring the Web Console to the Architect-reviewed replacement direction, add explicit discovered-network Wi-Fi selection through the smallest reviewed existing-owner backend mapping, and finish desktop/tablet/phone polish through the existing asset boundary | Every required Web capability reachable; explicit Wi-Fi scan/select/hidden-manual/connect states and other degraded states; stable-ID interaction checks; 1280, 900 and 390 px screenshots without overlap; soak and resource evidence | pending |
@@ -1973,3 +1973,749 @@ Runtime production, real-Device and phase-completion acceptance remain owned by 
 Only this trace is row-owned repository content; the external prototype and disposable diagnostics
 remain outside the commit. The publication window intentionally has no `in_progress` matrix row until
 the exact local commit is pushed and its remote SHA is verified.
+
+## P6-02 API-profile and model-preset pre-edit package
+
+**Activated:** 2026-09-10T11:28:24+03:00 after P6-01 commit
+`bd8668de82edb0fca344f8d76210b1cb0215334d` was pushed to
+`feature/phase-6-ui-stable-baseline` and its exact remote SHA was verified. P6-02 is the sole
+`in_progress` row. No production, test, build, browser or Device mutation has occurred for this row.
+
+**Task clock and hypothesis:** the activation timestamp above is the observed timestamp of the sole
+matrix activation edit and is the task-clock start. The current hypothesis is that the smallest complete
+implementation is one fixed-slot NVS collection with COW only where a profile's separate metadata and
+secret records require it, native single-key preset updates, `Settings` as a refreshed hot request tuple,
+the existing `ProjectDocument.apiProfile` field as a stable-ID reference, and exactly one profile
+resolution immediately before every model-provider request. The expected evidence is that this avoids a
+second settings framework, keeps secrets out of lists and project bundles, prevents stale ordinary
+settings saves from changing provider authority, makes capacity failure non-destructive, and lets presets
+reuse the existing atomic `saveProject` owner.
+
+**Thirty-minute checkpoint:** at 2026-09-10T11:59:50+03:00 the phase task reported a concrete
+contract discrepancy to Architect: the accepted P6-01 Web artifact showed project-profile assignment,
+the Device artifact did not, while the canonical P6-02 row and Phase 6 parity rule require both. The
+same checkpoint asked for decisions on inheritance, deletion, migration, presets, discovery and the
+proposed bounds rather than guessing. Architect's response was received by
+2026-09-10T12:06:01+03:00 and supplied the ownership decision below. This was an ambiguity resolution,
+not production pre-edit `GO`; inventory, the proof matrix and a fresh independent review remain gates.
+
+### Locked contract and non-goals
+
+- A configured installation has exactly one global default API profile. A blank
+  `ProjectDocument.apiProfile` inherits that default. A nonblank value is an exact stable ID; malformed,
+  missing, incomplete or deleted explicit references fail locally before any provider HTTP request and
+  never substitute the default. Existing arbitrary dormant/imported values remain loadable and visible
+  as unavailable until the user explicitly reassigns them.
+- Both Web and Device expose profile create/edit, explicit `Use as default`, deletion and project
+  assignment through their existing Settings/AI and Project Actions owners. Selecting a row or choosing
+  `New` is inert until the named save/apply action succeeds. The P6-01 prototype remains closed and is
+  not rewritten to retroactively depict this production work.
+- The default profile cannot be deleted; another existing profile must first be selected explicitly.
+  Any non-default profile may be deleted after the existing surface confirmation. Project metadata is
+  not scanned, indexed, cascaded, rewritten or silently cleared. A surviving reference to a deleted
+  profile remains unavailable until explicit reassignment.
+- API profiles have exact 16-character lowercase-hex IDs, unique within the fixed collection. Profile
+  names are valid UTF-8 of 1-48 bytes without CR/LF; base URLs retain the current 12-180-byte
+  `https://` contract without spaces, query or fragment; API keys are write-only opaque values of
+  8-512 bytes without CR/LF. Blank secret input while editing preserves the selected profile's key;
+  create requires a key. The 512-byte ceiling contains the existing Web Console's 192-byte input
+  contract while bounding the new COW peak; an oversized legacy singleton is never truncated or deleted.
+- From the first P6-02 firmware boot, ordinary `saveSettings(const Settings&)` persists only
+  non-provider settings and cannot write `assistant/api_key`, `assistant/base_url` or profile records in
+  any provider-store state. The dedicated provisioning/bootstrap commit is the sole scalar-form
+  credential ingress and creates or updates the default profile before its existing restart. Device and
+  Web profile commits and the default switch use dedicated profile operations. The existing serial
+  `APIBASEHEX` diagnostic may update the current default through that dedicated operation only in `Ready`;
+  it rejects `Unconfigured`, `LegacyRetained` and `AuthorityUncertain` before any NVS write. A successful
+  edit of the active default or a successful default switch reloads the Device `settings` or Web
+  `consoleSettings` hot tuple after durable commit; ordinary failures retain the old tuple, while
+  `AuthorityUncertain` blocks provider use until boot resolves actual authority.
+- Only an absent schema key permits pre-authority behavior. Legacy migration validation or capacity
+  rejection returns the typed `LegacyRetained` state: normal requests continue using the unchanged
+  canonical singleton, a structured warning and profile-management response expose only the reason and
+  never secret material, the same complete migration may be retried, and no schema marker is issued.
+  This is an explicit transition authority, not fallback from an authoritative new format. A present
+  schema key with a wrong NVS type/version is a hard storage error and never reopens legacy authority.
+- The implementation limit is three API profiles. This is a provisional capacity lock, not retained
+  measurement: it closes only after the final-core Device evidence shows the real aggregate NVS state,
+  all three maximum-shape slots, one maximum-shape COW update and the low-capacity rejection path.
+- Model presets are value templates only. Up to six fixed slots hold exact 16-character lowercase-hex
+  IDs, valid UTF-8 names of 1-48 bytes, valid UTF-8 model IDs of 1-120 bytes without CR/LF, and output
+  values from 128 through 8192. There is no preset default or persisted project reference. `New` and
+  selection are inert; `Apply` copies only `model` and `maximumOutputTokens` into a freshly loaded
+  project through `saveProject`, and any failure leaves the previous project values authoritative.
+- Global model discovery resolves the global default profile. Project, Chat and preset discovery resolve
+  the active/selected project's effective profile. Callers pass only a saved stable reference or project
+  scope; keys never enter a URL, request argument, JSON response, project file, bundle or diagnostic.
+  The global `Settings` object is not mutated to impersonate a project profile, and there is one profile
+  resolver shared by Device and Web request/discovery paths.
+- Updating a profile name alone leaves its provider-authority revision unchanged. A base-URL or secret
+  change increments that revision. A same-boot Pending continuation captures a non-secret typed authority
+  identity and re-resolves the secret just in time: `Ready` uses effective profile ID plus authority
+  revision; `LegacyRetained` uses a fixed legacy kind plus a boot-local generation counter, never a secret
+  or secret-derived hash. Successful same-boot migration changes the kind and stales legacy Pending. A
+  project reassignment, deleted profile, changed base URL/key, or default change for an inheriting project
+  likewise stales Pending before provider HTTP; an explicit project's unrelated default change does not.
+- STT, Search and TTS settings remain independent. This row adds no paginated collection, profile
+  framework, provider plugin, per-profile model default, encrypted export, secret migration/export,
+  project reference index, route generator, background scan, USB preparation, new SD root or second
+  request-policy resolver. Existing model, instructions, tool-policy, SSH, Wi-Fi and optional-service
+  ownership remains unchanged.
+
+### Existing owner and consumer inventory
+
+- `Settings.apiKey`, `Settings.apiBaseUrl` and `Settings.model` are currently scalar. `storage.cpp`
+  reads/writes `assistant/api_key`, `assistant/base_url` and `assistant/model`; every ordinary Device or
+  Web settings save currently rewrites the scalar pair, including unrelated Device, network and Web
+  commits. Provisioning and existing Device/Web settings editors are the only credential producers, and
+  the serial `APIBASEHEX` diagnostic also reaches that scalar save. The new owner must remove the pair
+  from ordinary saves, move UI/diagnostic mutations to dedicated profile operations, and make
+  `loadSettings` supply the resolved default tuple without adding profile vectors or retained extra
+  secrets to `Settings`. Provisioning remains a dedicated commit followed by restart; Web Console close
+  already reloads Device settings, while successful live Device/Web default changes reload their own hot
+  tuple immediately.
+- `ProjectDocument.apiProfile` is already validated as a bounded optional string, serialized, loaded,
+  duplicated and preserved by project bundle import/export. No runtime request, model discovery or UI
+  currently consumes it. Its non-secret bundle representation remains unchanged; only newly submitted
+  assignments are constrained to blank or an existing stable profile ID.
+- `resolveProjectRequestPolicy` owns model/context/output/compaction precedence only. Every Device and
+  Web initial request, retry, compaction-summary request and Pending continuation currently clones global
+  `Settings` and overrides only `model`; those are all consumers of the one new JIT profile resolver.
+  STT, TTS, Web Search and tool-routing consumers continue to receive their existing independent fields.
+- Device ownership is the existing `AiMenu`, modal selection/text-input primitives, Project Actions and
+  global/project/chat model picker. The accepted modal primitives already provide bounded input and
+  masked secret entry. No new top-level carousel destination or parallel input/navigation framework is
+  required.
+- Web ownership is the existing authenticated Settings state/commit surface, raw Project Settings save,
+  `/api/models`, route guard and embedded HTML asset. Public state currently returns only whether the
+  scalar key exists. P6-02 adds bounded public metadata only, stable-ID controls and single-purpose
+  create/update/default/delete/create-preset/update-preset/delete-preset/apply endpoints. Every mutating
+  handler personally requires the existing session plus CSRF check. NVS-only mutations do not acquire an
+  SD lease; assignment and preset Apply retain the existing project-write owner and SD failure mapping.
+- `saveProject` already writes project metadata then its index and rolls metadata back when the index
+  mutation fails. This is the sole preset-Apply and project-assignment commit owner. Existing arbitrary
+  imported profile references are not revalidated during unrelated project saves.
+- The default NVS partition is shared with `assistant`, `cardmind_ssh`, `cardmind_py` and vendor Wi-Fi
+  namespaces. The exact partition is 0x5000 bytes. P4's observed 1,675-byte SSH-key success and
+  16,384-byte replacement rejection prove prior failure preservation only; they are not treated as a
+  current free-capacity measurement.
+
+### Pinned vendor semantics and fixed storage design
+
+The exact installed source is M5Stack ESP32 package 3.2.1 with ESP-IDF release-v5.4
+`idf-release_v5.4-2f7dcd86-v1`. `Preferences.cpp` commits every `putString`, `putBytes`, scalar put and
+`remove` but collapses NVS errors to zero/false; it is therefore not the profile-store write API.
+The new owner uses raw ESP-IDF NVS calls so the exact result survives. The pinned `nvs.h` limits
+keys/namespaces to 15 characters, defines one 32-byte entry as the allocation unit, charges blobs two
+overhead entries plus one per 32 bytes, exposes aggregate `nvs_get_stats.available_entries`, and requires
+at least one available entry even for a scalar update. Its documented `ESP_ERR_NVS_REMOVE_FAILED` means
+the requested value may already have been written and the interrupted update completes after NVS
+reinitialization; code must not report old authority or delete either possible winner on that result. One
+NVS page contains 126 entries. A native single-key update recovers as either the old or new valid value;
+multi-key profile authority still needs an explicit generation selector.
+
+The smallest design uses namespace `cardmind_api` and no stored count. Three profile selectors point to
+fixed A/B generations. A profile generation contains a metadata blob and a separate secret blob;
+list/state reads only the selected metadata. Metadata carries version, stable ID, authority revision,
+exact secret length, name and base URL. The matching secret record carries version, authority revision,
+exact length and the key. A request loads only the selected generation and rejects a revision/length
+mismatch. Each of the six preset slots is instead one self-contained versioned native NVS blob with ID,
+name, model and output: it has no selector, second generation or orphan protocol because no cross-key
+invariant or persisted reference requires one. The schema marker is written last during first migration;
+the default stable ID is a separate verified string. Any authoritative wrong NVS type, selector, version,
+length, duplicate ID, default mismatch or record validation failure is an explicit storage error with no
+legacy/default substitution. Typed results distinguish validation, not-found/conflict, capacity, corrupt,
+definite storage failure, `LegacyRetained`, committed-with-cleanup-failure and `AuthorityUncertain` rather
+than collapsing an NVS result to false. Before creating a missing namespace or issuing any provider NVS
+mutation, the owner computes that operation's exact additional entry requirement from the encoded record
+sizes, including its authority record, and reads aggregate `available_entries`. A lower measured value
+returns `Capacity` before the first provider write. A later vendor write error is never relabeled as that
+preflight outcome.
+
+At maximum values, profile metadata is at most 253 bytes (10 NVS entries), its secret record is at most
+519 bytes (19 entries), and the selector consumes one entry: 30 entries per active profile, 90 for three.
+A single preset blob is at most 191 bytes (8 entries), 48 for six. The 16-character default string uses
+two entries; schema and namespace use one each. The maximum active footprint is therefore 142 entries. A
+maximum profile COW write needs at most 30 additional available entries before old-generation cleanup,
+for a 172-entry active-plus-peak bound; the smaller native preset replacement needs at most eight new
+entries. `available_entries`, not nominal partition bytes or `free_entries`, is the runtime gate;
+ESP-IDF's reserved GC space is already excluded from `available_entries`. Real measurements must record
+partition total/used/available plus this namespace's used entries before fixtures, at maximum shape, at
+profile/preset replacement or rejection, and after cleanup.
+
+### Legal persistence transitions and crash windows
+
+1. **Singleton migration:** only an absent schema key leaves legacy `assistant/api_key` and `base_url`
+   authoritative. The new default secret, metadata and selector are written/read back, the default ID is
+   written/read back, and schema version 1 is issued last. Deterministic validation or exact aggregate
+   capacity preflight rejection returns `LegacyRetained`, preserves the unchanged singleton and performs
+   no provider NVS write, including namespace creation. An uncertain
+   candidate/selector/default write aborts before the marker, preserves legacy authority and defers all
+   candidate cleanup until a later boot has completed NVS initialization. An uncertain schema write
+   returns `AuthorityUncertain`, permits no provider HTTP or mutation retry in that boot, and leaves both
+   legacy and new records untouched. On the next normal boot, an absent marker selects legacy and permits
+   exact partial-key cleanup, a valid marker selects and validates the new collection, and a present
+   wrong-type/version marker hard-fails. Only a verified valid marker makes the new collection
+   authoritative; legacy keys are then ignored, removed and verified absent. Interrupted legacy cleanup
+   leaves harmless duplicates for the next exact boot cleanup and never reopens legacy authority.
+2. **Profile create/update:** the empty/inactive generation is removed and verified absent before staging
+   its complete secret and metadata. The selector is not issued until both target records read back and
+   validate. A definite target-write failure leaves the old selector authoritative; a target
+   `ESP_ERR_NVS_REMOVE_FAILED` also cannot change that selector but leaves the possible inactive orphan
+   untouched until boot initialization resolves it. A verified selector commit makes the new generation
+   authoritative and only then permits old-generation cleanup. Selector `ESP_ERR_NVS_NOT_ENOUGH_SPACE`
+   leaves the old selector; `ESP_ERR_NVS_REMOVE_FAILED` or any post-issue outcome that cannot prove
+   noncommit returns `AuthorityUncertain`, leaves both generations untouched and is resolved from the
+   actual selector after the next normal NVS initialization. A later cleanup failure is
+   committed-with-cleanup-failure; it is never presented as if the old value won.
+3. **Default switch:** the requested existing complete stable ID is checked before the default-string
+   update. A definite pre-issue/capacity rejection preserves the old default; a verified commit selects
+   the new ID and refreshes the caller's hot default tuple. An uncertain write returns
+   `AuthorityUncertain`, performs no cleanup or hot-tuple claim, and boot resolves the actual old/new ID.
+   Profile records do not move or copy.
+4. **Profile delete:** deleting the current default is rejected before mutation. Removing and verifying a
+   non-default profile selector is the authority transition. Verified removal makes the stable ID
+   unavailable before exact generation cleanup; definite pre-issue rejection preserves it. Uncertain
+   erase returns `AuthorityUncertain`, leaves both generations untouched and lets boot decide from the
+   actual selector whether the profile exists. Project references are deliberately untouched.
+5. **Preset mutation:** create/update is one native NVS blob write. Verified commit/readback selects the
+   new valid blob; `ESP_ERR_NVS_NOT_ENOUGH_SPACE` preserves the old blob; `ESP_ERR_NVS_REMOVE_FAILED` or
+   another unresolved post-issue outcome returns `AuthorityUncertain` and boot validates whichever old or
+   new value NVS retained. Delete uses the same verified/uncertain distinction for its one key. There is
+   no selector or generation cleanup. Apply never changes the preset and uses the existing SD project
+   transaction; an SD/full/index failure preserves the project's old model/output.
+6. **Settings authority and hot copies:** ordinary `saveSettings` never changes provider credentials,
+   regardless of stale scalar values in its argument. Dedicated provisioning, profile/default and
+   diagnostic operations are the only producers, but `APIBASEHEX` is accepted only in `Ready`; every
+   other initialization state returns a typed local rejection before NVS access, leaving the
+   legacy-kind/boot-generation Pending identity unchanged. After a verified Device or Web change to the
+   active default, that surface reloads the committed default tuple; failed commits retain its previous
+   tuple. Web Console close retains its existing full `loadSettings` refresh and provisioning restarts so
+   boot performs the refresh. Non-default edits/deletes cause no hot-default churn. An uncertain store
+   state makes JIT resolution fail locally even if an old tuple remains in RAM.
+7. **Request/Pending:** initial request and model discovery resolve the current typed authority before
+   HTTP. Pending continuation loads the owning project again, resolves its current authority once,
+   compares profile ID/revision or the legacy-kind/boot-generation identity with the RAM capture, and only
+   then constructs the request `Settings` copy. A successful same-boot legacy migration, relevant default
+   switch, assignment, deletion or authority edit stales the continuation. Reboot already removes RAM-only
+   continuation context; no durable Pending secret, secret-derived identity or replay path is added.
+
+### Frozen proportional proof matrix
+
+| Contract / forbidden effect | Smallest evidence before closure |
+| --- | --- |
+| Validation, IDs, record codecs, count and length boundaries | Host tests call production validation/codec for exact min/max, over-limit, malformed type/version/length/revision, duplicate/default and preset-output cases. |
+| Migration, schema and transition authority | Host outcome tests preserve exact `esp_err_t` classification and the focused final-core serial selector verifies absent-schema migration, `LegacyRetained` validation/capacity preflight rejection with unchanged singleton and zero provider writes, secret-free warning/management reporting, valid-schema boot authority, present-invalid hard failure and planned single reboot resolution from deliberately prepared old/new selector states. `ESP_ERR_NVS_REMOVE_FAILED` classification is `AuthorityUncertain`, with no cleanup, retry or HTTP in that boot; it is not deliberately provoked on Device. Output contains only booleans/counts/stats, never secret bytes, values, paths or lengths. Failure of normal readiness after the planned reboot terminates this path without any reset/recovery escalation. |
+| Measured 3/6 capacity and full-storage behavior | On the same upload, collision-checked exact-owned maximum-shape synthetic profiles/presets plus bounded filler prove the 142-entry active shape and drive aggregate `available_entries` below the exact computed profile-COW need and separately below the exact native preset-replacement need. Each attempt must return `Capacity` before any provider NVS write and preserve prior authority; `AuthorityUncertain` fails this oracle. Record aggregate and namespace entry counts before/max/rejection, then remove and verify all filler plus recovered aggregate capacity before the separate planned reboot-persistence step. No extra build/upload exists only for statistics. |
+| Default, explicit missing reference and Pending binding | Host codec plus focused Device/Web runtime checks prove blank inheritance, exact explicit selection, default-delete rejection, allowed non-default deletion, local unavailable error before HTTP, and stale continuation after assignment/ID/authority changes. A `LegacyRetained` request can become Pending using only legacy-kind/boot-generation; unchanged legacy continues, while successful same-boot migration stales it. No project scan/rewrite, secret capture or secret-derived hash occurs. |
+| Settings producer isolation and hot tuple | Host/integration checks save unrelated Device/network/Web settings with deliberately stale scalar credentials and prove profile/legacy authority is byte-for-byte unchanged. Focused Device/Web checks prove a verified active-default edit/switch refreshes the local hot tuple, non-default mutation does not, ordinary failure retains it, and `AuthorityUncertain` prevents HTTP rather than trusting RAM. Provisioning restart is covered separately; `APIBASEHEX` proves one `Ready` update and pre-write typed rejection in `Unconfigured`, `LegacyRetained` and `AuthorityUncertain`. |
+| Preset inert selection and Apply | Host validation plus real `saveProject` integration proves selection/New has no write, success copies only model/output, and injected existing SD-write failure preserves the prior project bytes/state. |
+| Web contract and secret non-disclosure | Static UI/route tests prove only stable IDs, route/control reachability and generated-asset consistency. In the existing focused authenticated HTTP lifecycle, unauthenticated and bad-CSRF profile/preset mutations reject with state unchanged; create without a key rejects; blank-key edit preserves exactly the selected profile's key; and a nonce secret appears only in its exact write-only mutation form body, never in local request/response JSON, URL, local headers, state, serial output or later responses. The expected outbound provider `Authorization` header is excluded from this absence oracle. The same real hardware lifecycle exercises CRUD/default/delete/assignment/preset Apply and exact cleanup while one Web Console serial owner remains active until HTTP ends; no new journey framework or source snapshot is added. |
+| Provider consumer completeness | A read-only caller inventory names every Device and Web initial request, retry, compaction-summary request, Pending continuation, global discovery and project/chat/preset discovery call site and verifies each reaches the single JIT resolver instead of retaining the global tuple. Focused real request-path evidence executes one inherited-default project and one distinct explicit-profile project through that production resolver, observes only an expected-profile boolean plus provider result, and proves no silent default substitution. |
+| Device parity and resources | Source reachability checks plus focused real-Device selector/render observations cover AI profile/preset actions, Project assignment and global versus project discovery. Record free heap, largest block, stack margin and bounded operation/render latency against the 70-KiB floor. Full P6 visual redesign remains P6-06. |
+| Exact-owned cleanup | The fixture ledger restores the original default by stable ID, removes only nonce-owned profiles, presets and filler, verifies them absent, verifies aggregate capacity recovery, and internally confirms unchanged API credentials and Wi-Fi configuration without emitting them. Cleanup failure fails the suite. |
+
+### Expected row-owned write set and pre-edit gate
+
+The expected production boundary is one cohesive `src/provider_profiles.h/.cpp` owner; integration in
+`storage.cpp/.h`, `provisioning.cpp/.h`, `CardputerAssistant.ino`, `DeviceMenus.ino`, `FileTools.ino`,
+`NetworkSetup.ino`, a small `ProviderProfiles.ino` modal workflow, `KeyboardNavigation.ino`,
+`VoiceAndSpeech.ino`, `web_console.cpp/.h`, `web_console_routes.h/.cpp`,
+`web_console_state.h/.cpp`, and the Web asset plus its generated embedded header. The proportional
+retained proof boundary is `host_tests.cpp`, its existing CI
+compile list in `.github/workflows/firmware.yml`, Web static tests, the focused hardware Web runner, the
+existing serial regression runner and one focused `SerialDiagnostics.ino` selector. The workflow change is
+exactly one source-link entry for `provider_profiles.cpp`; it adds no job, dependency, command or build
+plumbing. `project_storage`, bundles, API client, tool policy, optional providers and P6-01 are unchanged
+unless a concrete pre-edit reviewer blocker proves an omitted existing consumer.
+
+The fresh independent persistent/security-sensitive pre-edit reviewer returned `STOP` by
+2026-09-10T12:55:34+03:00 against the actual sources: preset A/B machinery was unnecessary, collapsed
+`ESP_ERR_NVS_REMOVE_FAILED` made the authority transitions unsafe, ordinary settings saves/hot copies had
+unfrozen ownership, and `LegacyRetained` Pending/proof was incomplete. The corrected design, transitions,
+capacity count and proof matrix above resolve those exact blockers. The same reviewer performed the one
+permitted verification of its own corrections and returned `GO` at 2026-09-10T13:04:46+03:00 with no
+remaining blocker. The package now awaits Architect's personal reconciliation and explicit production
+pre-edit `GO`; until then production and test files remain frozen.
+
+Architect returned `P6-02 PRE-EDIT STOP` at 2026-09-10T13:10:34+03:00 after personally checking that the
+independent blockers were resolved. The remaining bounded corrections were: reject `APIBASEHEX` outside
+`Ready`; move Web security/secret claims from static assertions to the existing real HTTP lifecycle;
+require low-capacity preflight to return `Capacity` before any Device write and clean filler before the
+separate reboot step; name the one workflow source-link edit; and make the complete provider caller
+inventory plus inherited/explicit real resolution observable. Those corrections are now frozen above.
+No further independent review is required; production/tests/build/Device remain frozen pending
+Architect's focused recheck and explicit `P6-02 PRE-EDIT GO`.
+
+Architect personally returned `P6-02 PRE-EDIT GO` at 2026-09-10T13:16:12+03:00 after checking the
+corrected lines, actual producer/consumer paths and pinned ESP-IDF semantics. The accepted boundary is
+exactly the locked contract, storage design, transitions, proof matrix and write set above. P6-02 remains
+the sole `in_progress` row. Production edits may now begin; any responsibility/write-set growth or changed
+vendor semantics freezes them again and returns to Architect.
+
+Implementation checkpoint 2026-09-10T14:05:24+03:00: the active hypothesis was that the new raw-IDF
+NVS owner preserved the frozen authority state machine while existing request callers were being rebound.
+A bounded read-only code audit falsified five details inside P6-02 ownership before any build or Device
+action: migration selector/default uncertainty was collapsed to `LegacyRetained`; the retained-legacy
+identity used a constant rather than a boot generation; legacy cleanup could open a missing namespace
+read-write before an existence probe; ready-store transport/read failures were mislabeled `Corrupt`; and
+namespace measurement omitted its namespace entry. The correction keeps any uncertain authority from
+HTTP until a normal boot, creates one nonzero in-memory legacy generation per store boot, probes legacy
+storage read-only before cleanup, reserves `Corrupt` for proven malformed records, and reports the
+namespace entry explicitly. Successful migration also preserves its committed disposition through the
+post-commit inspection. This is a same-row root-cause correction within the frozen write set, not a scope
+or ownership change; Web/runtime integration remains paused until the corrected boundary is checked.
+
+Architect returned `P6-02 IMPLEMENTATION STOP` at 2026-09-10T14:42:10+03:00 and froze further
+integration, tests, build and Device work after personally reconciling the current store boundary. The
+single root cause was that preparation of an inactive/non-authoritative generation and cleanup after an
+already committed authority switch shared one cleanup result. The bounded correction separates fresh
+`Unconfigured` bootstrap from actual legacy migration; returns fresh validation, capacity, open and
+staging failures in `Unconfigured` with their real typed operation result; adds one boot-local profile-
+mutation latch for uncertain candidate preparation/staging and unresolved post-authority cleanup while
+leaving selected-profile reads/JIT resolution usable; makes preparation removal uncommitted and keeps
+post-authority cleanup `committed` with `CleanupFailed`; and requires a complete metadata-plus-secret
+profile read at both checks before changing the default. The latch is initialized only with the store at
+normal boot and no same-boot path clears it. The actual caller inventory also proved four necessary
+existing-owner paths omitted from the original list: `provisioning.h`, `web_console.h`, `FileTools.ino`
+and `NetworkSetup.ino`. Those four paths are now the only accepted write-set addition in the frozen list
+above; they contain narrow signature/caller rebinding and add no responsibility. The corrected store
+diff and this mapping must return to Architect before broader integration resumes.
+
+Architect personally returned `P6-02 IMPLEMENTATION GO` at 2026-09-10T14:50:59+03:00 after inspecting
+the corrected store/header, the exact four added caller/header owners and the trace mapping. The verdict
+confirmed that all five STOP items are resolved in the actual source, `git diff --check` has no whitespace
+error, and no route, schema, framework or unrelated responsibility was added. P6-02 integration and its
+frozen proportional proof may resume in the same row; any further responsibility/write-set growth or
+changed vendor semantics freezes production again.
+
+Architect returned `P6-02 TEST-GATE STOP` at 2026-09-10T15:27:37+03:00 before any test, build or Device
+run. The first Web static-test draft had crossed the frozen proportional boundary by slicing production
+handler/helper source and duplicating provider-state and payload implementation fragments. That source-
+snapshot draft was removed without replacement. The retained static delta is limited to stable control
+IDs, required input attributes, specialized-route reachability and generated-asset equality. General-
+settings provider isolation, inert selection and key-draft clearing, secret absence, authenticated/CSRF
+mutation behavior, project assignment and preset Apply remain owned by the already frozen real
+authenticated HTTP/Web lifecycle; production validation and codecs remain owned by host tests. Further
+production or test execution stays frozen until Architect reviews this reduced proof boundary.
+
+Architect personally returned `P6-02 TEST-GATE GO` at 2026-09-10T15:29:49+03:00 after inspecting the
+reduced static-test diff and the proof-ownership correction above. The accepted retained delta contains
+only stable profile/preset/project-assignment controls and required input attributes, the eight
+specialized route registrations, the necessary adaptation of the pre-existing secret-draft presence
+fragment, and the existing generated-asset equality check. No new handler, helper, state, payload,
+ordering or literal source snapshot remains, and no replacement harness was added. Implementation and
+the frozen proportional proof sequence may resume; source-snapshot assertions remain prohibited.
+
+Architect returned `P6-02 IMPLEMENTATION STOP` at 2026-09-10T15:49:21+03:00 and froze production,
+tests, build and Device work after finding that both Pending paths discarded the provider `Settings`
+which had already been resolved and authority-checked before the approval/tool effect, then repeated the
+provider resolution after that effect. The bounded correction carries that transient resolved value in
+the Device/Web Pending-input result, moves it into the continuation after the decision, and removes the
+second provider resolution and its avoidable post-effect failure window. Device no longer reloads the
+project solely for that second resolution; Web retains its existing post-decision project/chat history
+load but performs no second secret/NVS provider read. The one pre-effect stable-ID/revision or
+legacy-kind/boot-generation comparison remains the authority gate. No durable identity, lock, retry,
+transaction or proof framework was added. Tests, build and Device remain frozen pending Architect's
+focused recheck of only this correction.
+
+Architect personally returned `P6-02 IMPLEMENTATION GO` at 2026-09-10T15:53:23+03:00 after inspecting
+only the corrected Device/Web Pending seams and this trace mapping. Each surface now performs exactly
+one provider resolve and authority comparison before the decision/tool effect, moves the same transient
+resolved `Settings` through all three decision paths, and performs no provider NVS/secret read after the
+effect. Device removed its redundant project reload; Web retains only its existing history/project
+reload. The focused diff has no whitespace error and adds no durable field, lock, retry, transaction or
+test responsibility. The same row and its frozen proportional proof sequence may resume.
+
+The fresh independent persistent/security-sensitive code review returned `STOP`, recorded at
+2026-09-10T16:22:02+03:00, before upload or Device work. Four same-row blockers are frozen: inherited
+default resolution currently converts a definite profile-storage read failure into `Corrupt` instead of
+preserving the typed storage/uncertain result; the raw Project-settings completion owner can persist an
+API-profile assignment without first requiring the existing personal session and CSRF check; committed
+profile update/delete cleanup failures are rendered as ordinary failed mutations even though the new
+authority already won; and the already frozen focused serial runner plus authenticated hardware-Web
+lifecycle have not yet been implemented in their named existing harness owners. The bounded correction
+will reserve `Corrupt` for proven missing/malformed default authority, reject unauthenticated raw
+completion before mutation, expose committed-with-cleanup-warning while refreshing authoritative UI
+state, and add only the frozen P6-02 selectors/lifecycle to `SerialDiagnostics.ino`,
+`tools/device_regression.ps1` and `tools/hardware_web_e2e.mjs`/`.ps1`. Production, build and COM8 work
+remain frozen until these blockers are corrected and the same reviewer performs its single permitted
+blocker recheck.
+
+Architect assigned the pre-existing focused Web-runner lifecycle defects to P6-02 at
+2026-09-10T16:47:52+03:00 because P6-02 had already frozen
+`tools/hardware_web_e2e.ps1`/`.mjs` as required proof owners; this does not reopen a P2/P4 product
+row and leaves P6-02 as the sole `in_progress` row. The permitted correction is confined to the
+existing harness files: use one fixed total serial-wait deadline; perform one initial `PING` with no
+retry or pre-readiness `EXIT`; track confirmed normal readiness, readiness loss and confirmed Web
+Console start; never write serial after readiness loss; request shutdown only after confirmed start
+while still responsive and accept only exact `WEB_CONSOLE result=stopped`; make cleanup or shutdown
+failure fail the suite rather than warn; and clear the parsed installation-credential container and
+password reference immediately after login. The already frozen `p6-providers` selector/lifecycle may
+be added without changing dormant legacy suites or introducing another runner/helper framework.
+Only syntax/static lifecycle checks are permitted before the same independent reviewer's single
+blocker recheck and Architect's focused recheck; production builds, upload and COM8 remain frozen.
+
+Architect approved one bounded unavailable-reference compatibility correction at
+2026-09-10T17:28:14+03:00 after the actual browser/backend path showed that the new renderer rejected
+an arbitrary dormant/imported `ProjectDocument.apiProfile` value and the Project-settings form would
+resubmit that unavailable value into the new canonical-ID assignment validator. The existing persisted
+contract deliberately permits a valid UTF-8 value through 120 bytes so imports and deleted references
+remain visible and fail closed until explicit reassignment. The asset-only correction therefore accepts
+that exact stored boundary for display through `textContent` and omits the API-profile header when the
+unchanged disabled unavailable option remains selected, causing the existing backend
+`apiProfileProvided == false` path to preserve it. Explicit Inherit and a selected available stable ID
+retain their current validation. This adds no storage/backend owner, codec, module or compatibility
+framework and joins the already frozen unavailable-reference Web observation; the embedded asset will
+be regenerated with the consolidated P6-02 correction package.
+
+Task-clock checkpoint 2026-09-10T18:08:55+03:00: primary active work remains on the focused P6-02
+harness blocker correction. Architect's new source-level evidence narrowed the current root cause to
+serial timeout/write failures that did not first mark readiness lost, batch/partial-line handling that
+could accept a completion before a reset in the same read, and login cleanup that ran only after a
+successful authentication response. The materially corrected approach carries one serial partial buffer,
+classifies the complete batch before accepting a match, marks loss before logging or cleanup, wraps each
+shared Web Console start/stop write, and clears parsed credentials in `finally`. Only syntax/static
+lifecycle checks follow; build, upload and COM8 remain frozen pending the same independent reviewer's
+single blocker recheck and Architect's focused recheck.
+
+Architect personally returned `P6-02 REDUCED PROOF-DESIGN GO` at
+2026-09-10T18:33:39+03:00 after checking the roadmap contract and the actual
+`initialize`/`inspectReadyStore` boot ordering. The product contract and fail-closed persistence behavior
+are unchanged; only the Device proof is reduced to preserve live authority. No boot hook, RTC state,
+automatic recovery, credential copy, extra namespace or runner framework is permitted. The existing
+`SerialDiagnostics.ino` selector may create one collision-checked nonce-owned non-default profile, stage
+only that fixture's inactive generation and selector, emit one exact reboot marker, and restart once.
+`tools/device_regression.ps1` may permit that single boot, require the complete batch and carried partial
+to be free of panic, `FATAL` and a second reset before accepting the fixed-deadline `READY`, then send the
+same nonce-bound continuation exactly once. Failed readiness ends the path without `PING`, cleanup,
+reset, reupload or another serial write; a remaining nonce-owned fixture is an honestly failed proof, not
+completion or recovery. The original default stable ID, credentials and Wi-Fi stay untouched.
+
+The production-codec arithmetic of 142 active and 172 active-plus-profile-COW entries remains a verified
+upper bound, not a Device equality claim. Final-core evidence instead records the real baseline, every
+available nonce-owned maximum-shape profile slot plus six maximum-shape presets, the exact 30-entry
+profile and eight-entry preset update preflight rejections, and recovered aggregate capacity. A full
+existing profile inventory is a pre-mutation capacity/precondition failure; the proof never edits a
+protected profile to manufacture the theoretical count. Destructive live-schema migration replay is
+also removed. Migration ordering, invalid schema and typed vendor outcomes retain production-codec and
+focused source-review evidence; the real first normal migration/Ready boot is observed only when it
+occurs naturally. This limitation must remain explicit and no injected migration-failure claim may be
+made. The primary-active reboot-design interval was about 25 minutes from the 18:08:55 root-cause
+checkpoint, so no 60-minute pivot threshold was reached. Build, upload and COM8 remain frozen pending
+the original independent reviewer's single blocker recheck and Architect's focused GO.
+
+Architect issued a focused selector `STOP` before execution at
+2026-09-10T19:12:25+03:00. Source review found that the WIP proof collapsed raw candidate and selector
+write uncertainty into booleans and could then mutate NVS during cleanup; its 256-byte filler could not
+reliably cross the eight-entry production preflight; and prefix-only matching could delete a profile
+before complete nonce-owned identity was established. No build, upload, COM8 command or Device mutation
+had run. Production remains frozen.
+
+The accumulated primary-active proof-correction interval conservatively reached the 60-minute pivot
+boundary across the 18:08:55 through 19:12:25 checkpoints. The prior raw-generation replay approach is
+therefore stopped rather than extended with more diagnostic transaction machinery. The materially
+smaller proposed proof keeps the measured 30/8 capacity cases but uses one bounded sequence of
+collision-checked one-entry nonce filler keys and the existing public production write-disposition
+classifiers; any `outcomeUnknown` emits one typed non-secret failure and permits no later mutation. For
+reboot persistence it creates one exact nonce-owned non-default profile through the production store,
+updates it through the production store, restarts once, and binds name, stable ID, expected maximum-shape
+authority data, default ID and reset reason before exact-owned deletion. It drops raw inactive-generation
+and selector injection plus the Device `generation_cleanup` claim; unchanged crash ordering remains
+covered only by production-codec host tests and focused source review. Any pre-existing nonce prefix is
+a no-mutation collision. This pivot requires Architect approval before further proof edits.
+
+Architect returned `P6-02 PIVOT GO` at 2026-09-10T19:20:10+03:00 for proof implementation only; this is
+not build, Device, execution, closure or publication approval. The complete visible Phase 6 plan was
+restored with P6-02 as its sole `in_progress` row before resuming edits. The accepted proof deletes all
+raw profile-key discovery, inactive-generation staging and selector flipping. It uses only the production
+store's create, update, resolve and delete operations for one nonce-owned non-default profile, and reports
+physical `persistence=pass` rather than `generation_cleanup`. The row's new COW/crash semantics retain
+source, codec and typed error-classification evidence with the explicit limitation that no injected-crash
+runtime claim is made.
+
+The two existing serial owners receive separate single-purpose selectors: `P6PROVIDERTEST<nonce>` always
+begins a fresh run and rejects any pre-existing matching A/B nonce without mutation;
+`P6PROVIDERFINISH<nonce>` is sent exactly once only after the runner observes the planned marker, exact
+normal software `BOOT` and fixed-deadline `READY`. Finish must bind one unique exact B name, stable ID,
+maximum-shape base/key, revision, non-default state, original default suffix and software reset before
+deletion. Fillers are one-entry scalar nonce-owned keys whose required count is bounded from measured NVS
+availability and collision-checked before mutation. Existing public write-disposition classifiers and
+typed results govern every raw filler set/commit/verify/cleanup; any unknown outcome emits one non-secret
+typed failure and permits no later mutation, reboot or cleanup. Definite failures may clean only exact-owned
+fixtures. The frozen proof write set remains `SerialDiagnostics.ino`, `tools/device_regression.ps1` and
+this trace update; build, upload and COM8 remain frozen pending the original code reviewer's single recheck
+and Architect's focused execution GO.
+
+Static correction checkpoint 2026-09-10T20:05:53+03:00: the accepted pivot is implemented without the
+removed raw namespace/key discovery, inactive-generation staging or selector mutation. The focused
+firmware review removed the final unused raw-namespace symbol, made exact-owned fixture cleanup stop only
+on an unknown outcome while continuing safe cleanup after definite failures, and made reboot-stage cleanup
+failures and resource-oracle mismatches report their own typed non-secret failure instead of masking them.
+A bounded independent runner audit then found three same-owner lifecycle defects before execution: shared
+readiness classification omitted `FATAL`, Web serial framing trimmed surrounding whitespace before exact
+marker comparison, and credential URL/password validation could fail before the clearing `finally` block.
+The corrected runners classify `FATAL` in complete and carried data, remove only a trailing CR, and put
+credential parsing, validation and login inside one unconditional clearing boundary.
+
+Observed device-free evidence is: both PowerShell files parse with zero errors; `node --check` passes for
+the hardware Web runner; `WEB_CONSOLE_UI_TEST result=pass`; a disposable invocation of the production
+PowerShell parser accepts the exact `persistence=pass` envelope and rejects both the removed
+`generation_cleanup` field and whitespace-padded final output; and `git diff --check` reports no whitespace
+error (only the repository's existing line-ending warnings). No build, upload, COM8, HTTP or browser
+mutation ran. The corrected blocker package now awaits the original independent code reviewer's single
+recheck; Architect execution approval remains a separate later gate.
+
+The original independent P6-02 code reviewer completed its single blocker recheck at
+2026-09-10T20:26:41+03:00 and returned exact `GO` with no remaining blocker. The separate bounded runner
+reviewer also returned `GO` after verifying only its three corrected lifecycle findings and repeating the
+two PowerShell parser checks plus `node --check`. This is review evidence for the frozen correction, not
+execution or closure approval; build, upload, COM8 and HTTP remain stopped pending Architect's focused
+execution verdict.
+
+Architect personally returned exact `P6-02 EXECUTION GO` at 2026-09-10T20:31:58+03:00 after inspecting
+the actual corrected worktree, canonical matrix and visible plan, independent review verdicts, static
+evidence and whitespace check. The reviewed correction hashes were
+`SerialDiagnostics.ino` `D8CF2A7C8EE03C0589B8D227555350D36E171212C4F0E652A327CF22B7E660FA`,
+`device_regression.ps1` `133F1C8945E646EAB0575398D7B8448932F30D842CB540753788F93CDC8662E4`,
+`hardware_web_e2e.ps1` `FC207BA97E95D5ECB205F94D6E70E541E76BBC17C793110171138624794FD01D`
+and `hardware_web_e2e.mjs` `5D07552CF60A8E2481D1FFCDC24E8B3141E0526F854CEF6C489AC6A3655420A0`.
+The complete canonical visible plan was restored again before execution with P6-02 as its sole
+`in_progress` row. Approved execution is limited to pin validation, cheap strict host/static checks, one
+exact pinned compile and options inspection, one upload, then only the frozen focused serial and
+authenticated hardware-Web `p6-providers` paths. This is not closure, completion, staging, commit or
+publication approval. Any unexpected readiness loss ends that path without another probe, reset,
+reupload or recovery; the no-injected-crash runtime limitation and codec-derived-only 142/172 bounds
+remain explicit.
+
+Execution evidence checkpoint 2026-09-10T20:42:13+03:00: the approved bounded execution completed
+without expanding the proof matrix. The exact library-pin check passed. Both PowerShell runners parsed,
+`node --check tools/hardware_web_e2e.mjs` passed, `WEB_CONSOLE_UI_TEST result=pass`, the strict focused
+serial parser retained its exact positive and two negative outcomes, and `git diff --check` reported no
+whitespace error. The first disposable host-test invocation failed before compilation because its Bash
+output-path variable arrived empty; no ELF was created. Replacing only that invocation boundary with an
+exact validated `/tmp/cardmind-host-tests-p602-<timestamp>` path and trap cleanup produced
+`host_tests: PASS`, and the current CI source inventory includes `provider_profiles.cpp`.
+
+One exact pinned compile then succeeded with FQBN
+`m5stack:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=custom`: the sketch used 3,622,042 bytes
+(21%) of program storage and 65,876 bytes (20%) of global-variable storage, leaving 261,804 bytes for
+local variables. Inspection of generated `build/p3-phase/build.options.json` proved the exact FQBN,
+exactly one resolved M5Stack hardware core, and version `3.2.1`. The single approved COM8 upload then
+succeeded, with every written data hash verified. Its final `Hard resetting with RTC WDT` line was the
+uploader's normal completion step, not a later readiness probe or recovery action; no second upload,
+reset, probe or recovery action ran.
+
+The sole focused serial run, retained in `artifacts/p6-02-providers-device.log`, ran from
+2026-09-10T20:39:58.6858175+03:00 through 20:40:18.3905031+03:00 and returned
+`CARDMIND_REGRESSION result=pass cases=1`. Its nonce-bound measured envelope observed one pre-existing
+profile, two exact-owned profiles, the three-profile maximum, six presets, NVS total 630, available
+entries 192 before and after exact cleanup, and namespace count 14 before and after cleanup. The
+profile-capacity rejection occurred at 29 available entries and recovered to 84; the preset-capacity
+rejection occurred at 7 and recovered to 84. The measured boundary used 107 ms for the operation and
+20 ms to render, with free heap 119,884 before and 113,512 after, largest block 58,356 before and 47,092
+after, and 7,300 bytes of free stack. The planned reboot produced exactly one
+`BOOT firmware=1.12.1 reset_reason=3`, normal startup, then exact `READY`; the nonce-bound finish returned
+`reboot=pass persistence=pass resolver=pass default=pass cleanup=pass`, with free heap 116,204, largest
+block 54,260 and free stack 7,816. No unexpected readiness loss occurred.
+
+The sole focused authenticated hardware-Web run, retained in `artifacts/p6-02-providers-web.log`, kept
+one serial owner from `WEB_CONSOLE result=ready` through exact `WEB_CONSOLE result=stopped` and ran from
+2026-09-10T20:41:34.2097613+03:00 through 20:42:13.0384197+03:00. Its one JSON evidence envelope and
+final runner result both passed authentication/CSRF rejection, missing-key nonmutation, profile CRUD and
+public state, default/project binding, connector-failure outcomes, unrelated settings isolation, preset
+CRUD/Apply, unavailable-reference failure, secret non-disclosure and exact cleanup. Profile creation took
+35 ms and preset Apply 1,112 ms. Resource observations changed from free heap 97,556, largest block
+34,804 and free stack 5,720 to 94,572, 31,732 and 4,936 respectively, remaining above the frozen gates.
+The exact-owned ledger was verified complete and removed; the runner-retained Node stdout artifact is
+569 bytes, stderr is empty, and neither is row-owned commit content. The runtime secret oracle passed
+before the credential variable was cleared. API credentials and Wi-Fi configuration were not changed.
+
+These observations prove the frozen normal-write, deterministic-capacity, physical reboot-persistence,
+real authenticated Web lifecycle, resource and cleanup cases. They do not create an injected-crash
+runtime claim: COW/crash ordering remains covered only by the production codec/host boundary and focused
+source review, while the 142-entry active and 172-entry active-plus-maximum-profile-COW bounds remain
+codec-derived rather than physical capacity counts. P6-02 remains the sole `in_progress` row pending
+proof audit and Architect's personal closure review; nothing is staged, committed or pushed.
+
+Closure-reconciliation STOP checkpoint 2026-09-10T21:12:04+03:00: primary line-by-line review found
+that Web preset Apply could return HTTP 500 after `saveProject` had already made the new model/output
+authoritative, and that provisioning could collapse a committed provider cleanup warning into HTTP 400
+without scheduling its required restart. A fresh proof red-team independently returned `STOP` on the
+preset path and also found three proof-owner defects: the fixed ledger `.node.tmp` path was opened with
+truncation without collision or failure cleanup, Node stdout/stderr captures remained after the run, and
+the nonce probe secret was cleared before Console shutdown so later serial output escaped the final
+absence oracle. A separate provisioning review already dispatched before the consolidated verdict
+independently returned `STOP` on the same committed/no-restart transition. The proof red-team otherwise
+accepted the retained Device/Web envelopes, resources, planned reboot, Console lifecycle and fixture
+cleanup. The inaccurate wording in the preceding checkpoint was corrected: 142 is the codec-derived
+active NVS-entry bound and 172 is active plus one maximum-profile COW, not profile/preset byte counts.
+
+Architect returned `P6-02 CLOSURE STOP` for this one same-row blocker batch. The clarified contract is
+that load or save failure before `saveProject` preserves old project authority, while any failure after
+a verified commit is explicitly reported as applied-with-refresh-warning and never as rollback. A
+committed Apply must immediately update the Device/Web hot model and output values used by the next
+request, advance the Web project/chat observation revisions at that authority point, and then attempt
+canonical project and project-list refresh once. Neither surface may reproduce `saveProject`'s stored
+revision/timestamp arithmetic. The Web asset must preserve the committed response and render a later
+`refreshChat` failure as an applied-with-refresh-warning result.
+
+The provisioning correction removes the new one-caller wrapper instead of adding another result type.
+Its sole caller retains the typed provider result: an uncommitted or authority-uncertain provider failure
+stops before ordinary settings and schedules no restart; successful or committed-with-cleanup-warning
+provider authority calls ordinary `saveSettings` exactly once. A later ordinary-settings failure reports
+the partial result without claiming all settings saved or scheduling a recovery restart. When ordinary
+settings verify, the caller updates its hot settings, returns a visible saved-with-cleanup-warning when
+needed, and schedules the existing five-second restart exactly once. It performs no provider retry,
+cleanup retry, compensation or cross-store transaction.
+
+The proof-owner correction reserves and collision-checks the exact main ledger, fixed `.node.tmp` and
+Node capture sidecars before Device mutation. Node creates the temporary ledger exclusively and removes
+only a temp this invocation created when its write/rename fails; the wrapper removes and verifies its
+reserved temp and captures on every outcome. The probe secret remains live through exact Console shutdown
+and all final serial output, the absence oracle scans the finalized log and captures, and only then is
+the probe cleared and the captures removed. The current failed-proof residue is exactly one 569-byte
+stdout capture and one empty stderr capture; the main ledger and `.node.tmp` are absent. They remain
+untouched until the correction is approved.
+
+The proposed correction write set is limited to `ProviderProfiles.ino`, `src/web_console.cpp`,
+`src/provisioning.cpp`, removal of the one-caller helper from `src/storage.cpp/.h`, the Web asset and
+generated header, `tools/hardware_web_e2e.mjs/.ps1`, and this trace. The frozen proof delta is an exact
+changed-branch review without physical failure injection or another harness; PowerShell parsing,
+`node --check`, asset consistency/UI stable checks, focused host tests and whitespace checks; then only
+after independent blocker rechecks and Architect execution GO, one exact compile/options check and at
+most one upload plus one authenticated hardware-Web `p6-providers` run. Prior NVS capacity, reboot,
+serial CRUD, cleanup and resource evidence remains valid; the focused serial provider run is not
+repeated. Production and runner edits remain frozen pending Architect's verdict on this correction
+design/proof delta.
+
+Architect returned `P6-02 CORRECTION DESIGN GO` for the consolidated three-part delta. One exact
+downstream amendment is frozen inside the existing Web owner: because a post-Apply canonical reload
+failure deliberately leaves only the committed model/output in the hot project while its stored summary
+revision remains unknown, raw Project Settings completion must freshly `loadProject` before it reads,
+mutates or saves any project field. A read failure rejects before any write; a success uses that canonical
+document for `saveProject`. This prevents a later stale cached summary revision from becoming a save
+input without duplicating `saveProject` revision/timestamp arithmetic, adding a flag or changing the
+storage owner. The complete canonical visible plan was restored with P6-02 as its sole `in_progress`
+row. Production correction is now authorized only inside the frozen write set. Cheap syntax, asset,
+host and whitespace checks plus the two existing reviewers' one blocker recheck are authorized; compile,
+upload and the one replacement hardware-Web run remain frozen pending a separate Architect execution
+verdict. The focused serial provider run must not be repeated.
+
+The user's latest explicit clarification is to preserve what has already been written. It supersedes the
+brief proof-pruning request: no production, test, selector, runner, ledger or helper is removed, replaced
+or simplified merely to reduce complexity. The approved correction remains an in-place repair of only
+the concrete Apply, canonical Project-save input, provisioning outcome, temp/capture ownership and final
+secret-scan defects above. No new test case, runner, ledger protocol, framework or cleanup refactor is
+added. Cheap checks remain authorized after the correction; expensive execution remains separately
+gated, and P6-02 remains the sole `in_progress` row.
+
+Correction evidence checkpoint 2026-09-10T21:39:11+03:00: the in-place correction preserves all
+existing production, helper, selector, test and ledger surfaces. Device preset Apply updates the hot
+model/output immediately after the authoritative Project save and retains its existing committed-warning
+reload branch. Web preset Apply updates the hot model/output and Project/chat observation revisions at
+that same commit point; canonical reload and Project-list refresh failures are accumulated into an HTTP
+200 committed warning. The existing WebUI requires `committed=true`, preserves the backend warning and
+reports a later chat refresh failure as an applied-with-refresh-warning outcome. Raw Project Settings now
+loads the canonical active Project before reading inherited fields or constructing its sole save input,
+and a failed load returns before any write.
+
+The retained `saveProvisionedSettings` helper now returns the typed provider result. It advances to the
+ordinary settings save only for provider success or exactly `CleanupFailed + committed`; every
+`AuthorityUncertain` result returns before that save even when a prior schema write set its `committed`
+field. Ordinary settings are saved exactly once on the allowed branches. Their failure returns a
+distinct partial-storage error with no restart; their success preserves the committed cleanup warning so
+the existing provisioning caller updates hot settings, sends a truthful HTTP 200 warning and schedules
+the existing five-second restart once. No provider retry, cleanup retry, compensation or new result type
+was added.
+
+The existing hardware-Web runner now collision-checks the exact P6 ledger, fixed Node temporary ledger
+and both capture paths before Device mutation. The Node ledger writer uses exclusive temporary creation,
+closes and removes only a temporary file created by that invocation on failure, and leaves a cleanup
+failure explicit. The wrapper retains an unexpected remaining temporary ledger as failure evidence,
+keeps the derived probe live through exact Console shutdown, scans the finalized log and reserved
+captures only after serial shutdown, then clears the probe and removes and verifies its reserved capture
+files. A pre-existing collision is never marked owned or removed. The previously observed residue is
+unchanged while execution remains gated: the main ledger and fixed temporary ledger are absent, while
+the exact stdout/stderr captures remain at 569 and 0 bytes respectively.
+
+The regenerated Web asset measured 140,513 source bytes and 35,085 gzip bytes; a second generation was
+byte-identical with SHA-256
+`4E6AC62C9994613CEBD7963C06D55724B6398FCE41E32442997102D614F538EC`. Both PowerShell runners parsed,
+`node --check tools/hardware_web_e2e.mjs` passed, `WEB_CONSOLE_UI_TEST result=pass`, and
+`git diff --check` reported no whitespace error. The first correction host invocation again exposed the
+PowerShell-to-WSL empty-variable boundary and failed before compilation with no ELF created. The
+materially different literal, collision-checked `/tmp/cardmind-host-tests-p602-correction-20260910-232100`
+invocation then returned `host_tests: PASS` and verified removal of its exact ELF.
+
+The existing proof red-team reviewer performed its one blocker recheck against the actual corrected
+Apply, WebUI, runner and 142/172 wording and returned explicit `GO`. The existing provisioning-order
+reviewer used its recheck to identify a reachable schema-committed `AuthorityUncertain` path that the
+first gate had admitted to ordinary settings. That concrete STOP was resolved by restricting the helper
+gate to provider success or exactly committed cleanup failure; the corrected source and subsequent
+whitespace/staging check are clean. No further reviewer loop, build, upload, serial run, HTTP run or
+Device action has occurred. P6-02 remains `in_progress` pending Architect's separate execution verdict.
+
+Architect personally inspected the final provisioning gate and sole consumer, verified all ten reported
+worktree hashes and the exact artifact inventory, and returned `P6-02 CORRECTION EXECUTION GO`. The full
+canonical visible plan was restored again before execution with P6-02 as its sole `in_progress` row. The
+approved execution remained limited to exact old-capture cleanup, one pinned compile and options gate,
+at most one upload and exactly one replacement authenticated hardware-Web `p6-providers` run. It did not
+authorize closure, completion, staging, commit or publication.
+
+Before execution, the two previously retained exact-owned captures were resolved to absolute paths under
+this repository, required to remain exactly 569 and 0 bytes, removed individually and verified absent.
+The main ledger and fixed Node temporary ledger were already absent. These disposable captures are not
+recoverable, and no canonical log, configuration or Device state was removed by that cleanup.
+
+The sole corrected pinned compile succeeded with exact FQBN
+`m5stack:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=custom`. The sketch uses 3,623,546 bytes
+(21%) of program storage and 65,876 bytes (20%) of global-variable storage, leaving 261,804 bytes for
+local variables. `build/p3-phase/build.options.json` is 1,736 bytes with SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`; its FQBN matches exactly and its
+two hardware-folder references resolve to one unique
+`toolchain/data/packages/m5stack/hardware/esp32/3.2.1` directory, with no other M5Stack core. The uploaded
+application binary is 3,623,728 bytes with SHA-256
+`3AF818C62A976807E4F8419DC79FFDF898323869C058F38652AAABC5841A3A06`; the ELF is 45,881,836 bytes with
+SHA-256 `D69D250ECBA3A2CD8A54448DAE92232EA45D9E824113853E8AEFFE9DB6C41FC8`.
+
+The single permitted COM8 upload completed successfully with each written data hash verified. Its final
+`Hard resetting with RTC WDT` was the uploader's normal completion action. No later upload, reset,
+separate readiness probe, recovery step or focused serial-provider run occurred.
+
+The replacement authenticated hardware-Web run in `artifacts/p6-02-providers-web.log` ran from
+2026-09-10T18:49:00.0380628Z through 18:49:39.3558279Z. The retained 1,366-byte log has SHA-256
+`580606C3657D292CA167686398D7276F939974B58EA8B47EDF4F1DFC36D33D43` and contains exactly one normal
+`WEB_CONSOLE result=ready`, one P6 provider result envelope, one exact
+`WEB_CONSOLE result=stopped` and one final pass. Authentication/CSRF, missing-key non-mutation,
+profile CRUD/public state, default/Project state, connector failures, Settings-provider isolation,
+preset CRUD/Apply, unavailable references, secret non-disclosure and cleanup all returned `pass`.
+Profile creation measured 35 ms and preset Apply 1,147 ms. Same-run resources moved from
+97,572/31,732/5,704 bytes free-heap/largest-block/stack-margin to 94,740/31,732/4,936 bytes: a 2,832-byte
+free-heap reduction, no largest-block loss and a 768-byte stack-margin reduction, all inside the frozen
+floor/loss limits.
+
+Final read-only reconciliation found no provider ledger, fixed temporary ledger, stdout capture or
+stderr capture. The runner's final generated-secret scan and exact-owned cleanup therefore completed
+before its pass. The nine reviewed production/Web/runner hashes were unchanged by execution. An initial
+external log checker expected the console-only `suite=` wording in the retained final line and rejected
+the otherwise correct log; inspection assigned that to the checker, whose read-only pattern was changed
+to the runner's actual retained `completed=` contract and then passed. No product, test, runner or
+evidence log was changed for that oracle correction. Prior accepted serial NVS-capacity, CRUD, reboot,
+cleanup and resource evidence remains applicable with its explicit no-injected-crash and codec-derived
+142/172 limitations. P6-02 remains `in_progress` pending Architect's personal closure review.
+
+Architect personally completed the mandatory review of the actual row-owned diff, producer/consumer
+paths, vendor semantics, retained tests, raw compile/upload and runtime evidence, cleanup, resources and
+residual risk and returned explicit `P6-02 CLOSURE GO`. The review independently verified the exact
+3.2.1 build/options and binary hashes, the replacement hardware-Web log and production-route coverage,
+the prior unchanged Device capacity/reboot evidence, final secret scan, absence of every exact-owned
+ledger/temp/capture, and the final provisioning `AuthorityUncertain` gate. It accepted only the stated
+proportional limitations: no physical injected NVS uncertainty/crash, committed-cleanup or post-commit
+refresh fault claim; no claim that the corrected Device/provisioning warning branches were physically
+exercised; 142/172 remain entry upper bounds rather than measured byte counts; and full visual/soak/phase
+regression remains P6-08. No further test or harness work is required for this row.
+
+P6-02 completed at 2026-09-10T22:00:46+03:00. P6-03 remains `pending` during the required zero-active-row
+publication window and may become `in_progress` only after this exact row-only commit is pushed and its
+remote branch SHA is verified through the authenticated GitHub API.

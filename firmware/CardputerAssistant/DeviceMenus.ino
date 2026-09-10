@@ -24,6 +24,7 @@ std::vector<String> aiMenuItems()
         "Defaults for new chats",
         "Pending confirmations",
         "Activity",
+        "API profiles & presets",
         "Back to carousel",
     };
 }
@@ -612,14 +613,15 @@ void openWebConsole(Screen returnScreen)
     const String previousWifiSsid = settings.wifiSsid;
     const String previousWifiPassword = settings.wifiPassword;
     const cardputer::WebConsoleResult result = cardputer::runWebConsole(
-        settings, activeChatId, kFirmwareVersion);
+        settings, providerProfileStore, activeChatId, kFirmwareVersion);
     cachedSshToolProfileId = sshStorageReady
         ? cardputer::sshToolAvailableProfileId() : 0;
     cardputer::markOperation("idle");
     if (!result.success) {
         menuStatus = result.error;
     } else {
-        const cardputer::OperationResult settingsResult = cardputer::loadSettings(settings);
+        const cardputer::OperationResult settingsResult =
+            cardputer::loadSettings(settings, providerProfileStore);
         const cardputer::OperationResult runtimeResult = settingsResult.success
             ? applyDisplayAndCpuSettings(settings)
             : settingsResult;

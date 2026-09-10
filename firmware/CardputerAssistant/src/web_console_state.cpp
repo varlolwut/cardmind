@@ -282,6 +282,7 @@ OperationResult buildWebConsoleSshState(
 
 OperationResult buildWebConsoleSettingsState(
     const Settings& settings,
+    const WebConsoleProviderState& providerState,
     const WebConsoleRuntimeState& runtime,
     std::uint32_t revision,
     JsonDocument& document)
@@ -310,6 +311,29 @@ OperationResult buildWebConsoleSettingsState(
         settings.projectChatHistoryQuotaBytes;
     document["api_base_url"] = settings.apiBaseUrl;
     document["api_key_configured"] = settings.apiKey.length() >= 8;
+    document["provider_state"] = providerStoreStateName(providerState.state);
+    document["provider_message"] = providerState.message;
+    document["api_profile_limit"] = kMaximumApiProfiles;
+    document["model_preset_limit"] = kMaximumModelPresets;
+    document["default_api_profile_id"] = providerState.defaultProfileId;
+    JsonArray apiProfiles = document["api_profiles"].to<JsonArray>();
+    for (const ApiProfileSummary& profile : providerState.profiles) {
+        JsonObject item = apiProfiles.add<JsonObject>();
+        item["id"] = profile.id;
+        item["name"] = profile.name;
+        item["api_base_url"] = profile.baseUrl;
+        item["authority_revision"] = profile.authorityRevision;
+        item["is_default"] = profile.isDefault;
+        item["api_key_configured"] = true;
+    }
+    JsonArray presets = document["model_presets"].to<JsonArray>();
+    for (const ModelPresetRecord& preset : providerState.presets) {
+        JsonObject item = presets.add<JsonObject>();
+        item["id"] = preset.id;
+        item["name"] = preset.name;
+        item["model"] = preset.model;
+        item["maximum_output_tokens"] = preset.maximumOutputTokens;
+    }
     document["stt_base_url"] = settings.sttBaseUrl;
     document["stt_model"] = settings.sttModel;
     document["stt_key_configured"] = settings.sttApiKey.length() >= 8;

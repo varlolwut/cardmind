@@ -61,6 +61,7 @@ constexpr const char* kPromptFrameContentType =
 constexpr const char* kToolIntentHeader = "X-CardMind-Tool-Intent";
 constexpr const char* kToolPolicyHeader = "X-CardMind-Tool-Policy";
 constexpr const char* kSshProfileHeader = "X-CardMind-Ssh-Profile-Encoded";
+constexpr const char* kApiProfileHeader = "X-CardMind-Api-Profile";
 constexpr std::size_t kMaximumWebFileChunkBytes = 12288;
 
 struct RawTextRequestState {
@@ -107,6 +108,8 @@ struct WebPendingContinuationContext {
     String projectId;
     String chatId;
     ResolvedProjectRequestPolicy requestPolicy = {"", 0, 0, false};
+    ProviderAuthorityIdentity providerAuthority = {
+        ProviderAuthorityKind::None, "", 0};
     String globalInstructions;
     std::string requestInstructions;
     ToolMessageIntent intent = {ToolMessageIntentMode::Auto, 0};
@@ -118,11 +121,13 @@ struct WebPendingContinuationInputs {
     PendingToolConfirmationReason reason =
         PendingToolConfirmationReason::PolicyAsk;
     ToolRequestPlan plan = {};
+    Settings requestSettings = {};
     String error;
 };
 
 WebServer server(80);
 Settings consoleSettings;
+ProviderProfileStore* consoleProviderStore = nullptr;
 ChatDocument activeChat;
 ProjectDocument activeProject;
 std::vector<ProjectSummary> consoleProjects;
@@ -208,6 +213,10 @@ std::uint32_t passwordRevealUntil = 0;
 String consoleQrPayload;
 String firmwareVersion;
 bool pythonRestartRequested = false;
+
+ProviderSettingsResult resolveConsoleProvider(const ProjectDocument& project);
+ProviderSettingsResult resolveConsoleProviderId(const String& profileId);
+void sendProviderStoreError(const ProviderStoreResult& result);
 
 const char* webSshStageName(WebSshStage stage)
 {
@@ -357,6 +366,8 @@ void clearWebPendingContext()
     webPendingContext.projectId = "";
     webPendingContext.chatId = "";
     webPendingContext.requestPolicy = {"", 0, 0, false};
+    webPendingContext.providerAuthority = {
+        ProviderAuthorityKind::None, "", 0};
     webPendingContext.globalInstructions = "";
     std::string().swap(webPendingContext.requestInstructions);
     webPendingContext.intent = {ToolMessageIntentMode::Auto, 0};
@@ -404,6 +415,7 @@ void releaseConsoleSessionState()
     exitRequested = false;
     pythonRestartRequested = false;
     consoleSettings = Settings{};
+    consoleProviderStore = nullptr;
     activeChat = ChatDocument{};
     activeProject = ProjectDocument{};
     std::vector<ProjectSummary>().swap(consoleProjects);
@@ -558,6 +570,7 @@ WebStorageAccess webStorageAccessForRoute(WebConsoleRouteHandler route)
         case WebConsoleRouteHandler::ArchiveProject:
         case WebConsoleRouteHandler::DeleteProject:
         case WebConsoleRouteHandler::ProjectLinkUpdate:
+        case WebConsoleRouteHandler::ModelPresetApply:
         case WebConsoleRouteHandler::Prompt:
         case WebConsoleRouteHandler::PromptRawComplete:
         case WebConsoleRouteHandler::PromptRetry:
@@ -905,6 +918,7 @@ OperationResult captureWebPendingContext(
     const String& projectId,
     const String& chatId,
     const ResolvedProjectRequestPolicy& requestPolicy,
+    const ProviderAuthorityIdentity& providerAuthority,
     const String& globalInstructions,
     std::string requestInstructions,
     const ToolMessageIntent& intent)
@@ -932,6 +946,7 @@ OperationResult captureWebPendingContext(
     webPendingContext.projectId = projectId;
     webPendingContext.chatId = chatId;
     webPendingContext.requestPolicy = requestPolicy;
+    webPendingContext.providerAuthority = providerAuthority;
     webPendingContext.globalInstructions = globalInstructions;
     webPendingContext.requestInstructions = std::move(requestInstructions);
     webPendingContext.intent = intent;
@@ -982,6 +997,18 @@ WebPendingContinuationInputs loadWebPendingContinuationInputs()
         result.error = "Pending request is no longer resumable";
         return result;
     }
+    ProviderSettingsResult provider = resolveConsoleProvider(project.project);
+    if (!providerStoreResultSucceeded(provider.result)) {
+        result.error = "Pending request API profile is unavailable: " +
+            String(provider.result.message.c_str());
+        return result;
+    }
+    if (!providerAuthorityIdentitiesEqual(
+            provider.authority, webPendingContext.providerAuthority)) {
+        result.error = "Pending request API profile changed";
+        return result;
+    }
+    result.requestSettings = std::move(provider.settings);
     const SdStorageStatus storage = inspectSdStorage();
     const bool readable = storage.state == SdStorageState::Ready ||
                           storage.state == SdStorageState::Full;
@@ -1306,6 +1333,23 @@ std::string effectiveProjectChatInstructions(const ProjectDocument& project,
         chat.contextSummary);
 }
 
+ProviderSettingsResult resolveConsoleProvider(const ProjectDocument& project)
+{
+    return resolveConsoleProviderId(project.apiProfile);
+}
+
+ProviderSettingsResult resolveConsoleProviderId(const String& profileId)
+{
+    if (consoleProviderStore == nullptr) {
+        return {{ProviderStoreError::Storage, false, false,
+                 "Provider profile storage is unavailable"},
+                consoleSettings,
+                {ProviderAuthorityKind::None, "", 0}};
+    }
+    return consoleProviderStore->resolveSettings(
+        consoleSettings, std::string(profileId.c_str()));
+}
+
 WebContextSummaryResult generateWebContextSummary(
     const std::string& previousSummary,
     const std::vector<Message>& messages)
@@ -1330,7 +1374,13 @@ WebContextSummaryResult generateWebContextSummary(
         return {false, {}, 0, prompt.error.c_str()};
     }
     const std::uint32_t includedMessages = prompt.includedMessages;
-    Settings summarySettings = consoleSettings;
+    ProviderSettingsResult provider = resolveConsoleProvider(activeProject);
+    if (!providerStoreResultSucceeded(provider.result)) {
+        return {false, {}, 0,
+                "API profile unavailable: " +
+                    String(provider.result.message.c_str())};
+    }
+    Settings summarySettings = std::move(provider.settings);
     summarySettings.globalInstructions = "";
     summarySettings.model = resolveProjectRequestPolicy(
         consoleSettings, activeProject, activeChat, 0).model;
@@ -1731,6 +1781,15 @@ void handleState()
         document["project_title"] = activeProject.summary.title;
         document["project_archived"] = activeProject.summary.archived;
         document["project_model"] = activeProject.model;
+        document["project_api_profile_id"] = activeProject.apiProfile;
+        const ProviderSettingsResult provider =
+            resolveConsoleProvider(activeProject);
+        document["api_profile_available"] =
+            providerStoreResultSucceeded(provider.result);
+        document["effective_api_profile_id"] = provider.authority.profileId;
+        document["api_profile_error"] =
+            providerStoreResultSucceeded(provider.result)
+                ? String() : String(provider.result.message.c_str());
         document["project_instructions"] = activeProject.instructions;
         document["context_byte_budget"] = activeProject.contextByteBudget;
         document["maximum_output_tokens"] = activeProject.maximumOutputTokens;
@@ -1807,8 +1866,37 @@ void handleState()
         document["ssh_open_ms"] = openMs;
         document["ssh_worker_stack_free"] = workerStackFree;
     } else if (view == "settings") {
+        if (consoleProviderStore == nullptr) {
+            sendWebJsonError(server, 500,
+                             "Provider profile storage is unavailable");
+            return;
+        }
+        WebConsoleProviderState providerState = {
+            consoleProviderStore->state(),
+            consoleProviderStore->stateMessage(),
+            {}, "", {},
+        };
+        if (providerState.state == ProviderStoreState::Ready) {
+            ApiProfilesResult profiles = consoleProviderStore->listProfiles();
+            ModelPresetsResult presets =
+                providerStoreResultSucceeded(profiles.result)
+                    ? consoleProviderStore->listModelPresets()
+                    : ModelPresetsResult{profiles.result, {}};
+            if (!providerStoreResultSucceeded(profiles.result) ||
+                !providerStoreResultSucceeded(presets.result)) {
+                sendProviderStoreError(
+                    providerStoreResultSucceeded(profiles.result)
+                        ? presets.result : profiles.result);
+                return;
+            }
+            providerState.profiles = std::move(profiles.profiles);
+            providerState.defaultProfileId =
+                std::move(profiles.defaultProfileId);
+            providerState.presets = std::move(presets.presets);
+        }
         const OperationResult built = buildWebConsoleSettingsState(
-            consoleSettings, runtime, settingsRevision, document);
+            consoleSettings, providerState, runtime, settingsRevision,
+            document);
         if (!built.success) {
             sendWebJsonError(server, 500, built.error);
             return;
@@ -1849,6 +1937,14 @@ void streamStoredWebPrompt(const ChatDocument& storedChat,
 {
     const ResolvedProjectRequestPolicy requestPolicy = resolveProjectRequestPolicy(
         consoleSettings, activeProject, storedChat, requestOutputTokens);
+    ProviderSettingsResult provider = resolveConsoleProvider(activeProject);
+    if (!providerStoreResultSucceeded(provider.result)) {
+        sendWebJsonError(
+            server, 409,
+            "API profile unavailable: " +
+                String(provider.result.message.c_str()));
+        return;
+    }
     ContextWindowResult requestFit = fitOwnedMessagesToByteBudget(
         std::move(requestMessages), requestPolicy.contextByteBudget);
     if (requestFit.retained.empty() ||
@@ -1874,7 +1970,7 @@ void streamStoredWebPrompt(const ChatDocument& storedChat,
         activeResponse += text;
         sendWebSse(server, "delta", text, "");
     };
-    Settings requestSettings = consoleSettings;
+    Settings requestSettings = std::move(provider.settings);
     requestSettings.model = requestPolicy.model;
     const std::string effectiveInstructions = effectiveProjectChatInstructions(
         activeProject, storedChat, requestInstructions);
@@ -1926,7 +2022,8 @@ void streamStoredWebPrompt(const ChatDocument& storedChat,
     if (result.outcome == ChatCompletionOutcome::AwaitingConfirmation) {
         const OperationResult captured = captureWebPendingContext(
             requestProjectId, requestChatId, requestPolicy,
-            consoleSettings.globalInstructions, requestInstructions,
+            provider.authority, consoleSettings.globalInstructions,
+            requestInstructions,
             toolPlan.intent);
         clearFailedWebRequestInstructions();
         activeResponse.clear();
@@ -2259,6 +2356,7 @@ bool validatePendingActionRequest(String& pendingId)
 
 void continueWebPendingDecision(
     PendingToolDecisionResult decision,
+    Settings requestSettings,
     const ToolRequestPlan& continuationPlan,
     const String& warning)
 {
@@ -2313,9 +2411,6 @@ void continueWebPendingDecision(
         renderConsoleScreen();
         return;
     }
-    Settings requestSettings = consoleSettings;
-    requestSettings.model = webPendingContext.requestPolicy.model;
-    requestSettings.globalInstructions = webPendingContext.globalInstructions;
     activeResponse.clear();
     consoleStatus = "Continuing response...";
     renderConsoleScreen();
@@ -2336,6 +2431,8 @@ void continueWebPendingDecision(
     bool workspaceFilesChanged = decision.toolResult.success &&
         (decision.pending.continuation.call.name == "write_file" ||
          decision.pending.continuation.call.name == "append_file");
+    requestSettings.model = webPendingContext.requestPolicy.model;
+    requestSettings.globalInstructions = webPendingContext.globalInstructions;
     markOperation("web_console_tools");
     const ChatResult result = continueChatCompletionAfterPendingToolResult(
         requestSettings, continuationMessages, scopedInstructions,
@@ -2442,7 +2539,7 @@ void handlePendingAllowOnce()
 {
     String requestedId;
     if (!validatePendingActionRequest(requestedId)) return;
-    const WebPendingContinuationInputs inputs =
+    WebPendingContinuationInputs inputs =
         loadWebPendingContinuationInputs();
     if (!inputs.success || !inputs.error.isEmpty() ||
         inputs.pendingId != requestedId) {
@@ -2476,14 +2573,15 @@ void handlePendingAllowOnce()
     }
     const ToolRequestPlan continuationPlan = inputs.plan;
     continueWebPendingDecision(
-        std::move(decision), continuationPlan, "");
+        std::move(decision), std::move(inputs.requestSettings),
+        continuationPlan, "");
 }
 
 void handlePendingAllowChat()
 {
     String requestedId;
     if (!validatePendingActionRequest(requestedId)) return;
-    const WebPendingContinuationInputs inputs =
+    WebPendingContinuationInputs inputs =
         loadWebPendingContinuationInputs();
     if (!inputs.success || !inputs.error.isEmpty() ||
         inputs.pendingId != requestedId) {
@@ -2562,14 +2660,15 @@ void handlePendingAllowChat()
         }
     }
     continueWebPendingDecision(
-        std::move(decision), continuationPlan, warning);
+        std::move(decision), std::move(inputs.requestSettings),
+        continuationPlan, warning);
 }
 
 void handlePendingDeny()
 {
     String requestedId;
     if (!validatePendingActionRequest(requestedId)) return;
-    const WebPendingContinuationInputs inputs =
+    WebPendingContinuationInputs inputs =
         loadWebPendingContinuationInputs();
     if (!inputs.success || !inputs.error.isEmpty() ||
         inputs.pendingId != requestedId) {
@@ -2588,7 +2687,8 @@ void handlePendingDeny()
     }
     const ToolRequestPlan continuationPlan = inputs.plan;
     continueWebPendingDecision(
-        std::move(decision), continuationPlan, "");
+        std::move(decision), std::move(inputs.requestSettings),
+        continuationPlan, "");
 }
 
 void handlePendingAcknowledge()
@@ -2716,11 +2816,23 @@ void handleProjectSettingsRawData()
 
 void handleProjectSettingsRawComplete()
 {
+    if (!requestHasValidCsrf()) {
+        resetRawTextRequest();
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
     RawTextRequestResult request = consumeRawTextRequest();
     if (!request.success) {
         sendWebJsonError(server, request.errorStatus, request.error);
         return;
     }
+    ProjectDocumentResult canonical =
+        loadProject(activeProject.summary.id);
+    if (!canonical.success) {
+        sendWebJsonError(server, 500, canonical.error);
+        return;
+    }
+    ProjectDocument updated = std::move(canonical.project);
     const DecodedHeaderResult decodedModel = decodePercentEncodedHeader(
         server.header("X-CardMind-Model-Encoded"), 120);
     if (!decodedModel.success) {
@@ -2736,13 +2848,13 @@ void handleProjectSettingsRawComplete()
         ? decodeScopedToolPermissionPolicy(
               encodedToolPolicy.c_str(), encodedToolPolicy.length())
         : ScopedToolPermissionPolicyDecodeResult{
-              activeProject.toolPolicy, ToolPolicyCodecError::None};
+              updated.toolPolicy, ToolPolicyCodecError::None};
     if (decodedToolPolicy.error != ToolPolicyCodecError::None) {
         sendWebJsonError(server, 400, "Project tool policy is invalid");
         return;
     }
     const bool sshProfileProvided = server.hasHeader(kSshProfileHeader);
-    String requestedSshProfile = activeProject.sshProfile;
+    String requestedSshProfile = updated.sshProfile;
     if (sshProfileProvided) {
         const String encodedSshProfile = server.header(kSshProfileHeader);
         if (!encodedSshProfile.startsWith("v1:")) {
@@ -2755,6 +2867,39 @@ void handleProjectSettingsRawComplete()
             requestedSshProfile.c_str(), requestedSshProfile.length())) {
         sendWebJsonError(server, 400, "Project SSH profile ID is invalid");
         return;
+    }
+    const bool apiProfileProvided = server.hasHeader(kApiProfileHeader);
+    String requestedApiProfile = updated.apiProfile;
+    if (apiProfileProvided) {
+        requestedApiProfile = server.header(kApiProfileHeader);
+        if (requestedApiProfile == "inherit") {
+            requestedApiProfile = "";
+        } else if (!isValidProviderStableId(
+                       std::string(requestedApiProfile.c_str()))) {
+            sendWebJsonError(server, 400, "Project API profile ID is invalid");
+            return;
+        } else if (consoleProviderStore == nullptr) {
+            sendWebJsonError(server, 500,
+                             "Provider profile storage is unavailable");
+            return;
+        } else {
+            const ApiProfilesResult profiles =
+                consoleProviderStore->listProfiles();
+            if (!providerStoreResultSucceeded(profiles.result)) {
+                sendProviderStoreError(profiles.result);
+                return;
+            }
+            const bool found = std::any_of(
+                profiles.profiles.begin(), profiles.profiles.end(),
+                [&requestedApiProfile](const ApiProfileSummary& profile) {
+                    return profile.id == requestedApiProfile.c_str();
+                });
+            if (!found) {
+                sendWebJsonError(server, 409,
+                                 "Project API profile is unavailable");
+                return;
+            }
+        }
     }
     std::uint32_t contextBytes = 0;
     std::uint32_t outputTokens = 0;
@@ -2770,34 +2915,20 @@ void handleProjectSettingsRawComplete()
                          "Project settings contain invalid instructions, model or budgets");
         return;
     }
-    std::string previousInstructions = std::move(activeProject.instructions);
-    const String previousModel = activeProject.model;
-    const std::uint32_t previousContextBytes = activeProject.contextByteBudget;
-    const std::uint32_t previousOutputTokens = activeProject.maximumOutputTokens;
-    const bool previousAutomaticCompaction = activeProject.automaticCompaction;
-    const ScopedToolPermissionPolicy previousToolPolicy =
-        activeProject.toolPolicy;
-    const String previousSshProfile = activeProject.sshProfile;
-    activeProject.instructions = std::move(request.body);
-    activeProject.model = model;
-    activeProject.contextByteBudget = contextBytes;
-    activeProject.maximumOutputTokens = outputTokens;
-    activeProject.automaticCompaction = automaticCompaction == "1";
-    activeProject.toolPolicy = decodedToolPolicy.policy;
-    activeProject.sshProfile = requestedSshProfile;
-    OperationResult result = saveProject(activeProject);
+    updated.instructions = std::move(request.body);
+    updated.model = model;
+    updated.contextByteBudget = contextBytes;
+    updated.maximumOutputTokens = outputTokens;
+    updated.automaticCompaction = automaticCompaction == "1";
+    updated.toolPolicy = decodedToolPolicy.policy;
+    updated.sshProfile = requestedSshProfile;
+    updated.apiProfile = requestedApiProfile;
+    OperationResult result = saveProject(updated);
     if (!result.success) {
-        activeProject.instructions = std::move(previousInstructions);
-        activeProject.model = previousModel;
-        activeProject.contextByteBudget = previousContextBytes;
-        activeProject.maximumOutputTokens = previousOutputTokens;
-        activeProject.automaticCompaction = previousAutomaticCompaction;
-        activeProject.toolPolicy = previousToolPolicy;
-        activeProject.sshProfile = previousSshProfile;
         sendWebJsonError(server, 500, result.error);
         return;
     }
-    ProjectDocumentResult stored = loadProject(activeProject.summary.id);
+    ProjectDocumentResult stored = loadProject(updated.summary.id);
     if (!stored.success) {
         sendWebJsonError(server, 500, stored.error);
         return;
@@ -3527,6 +3658,340 @@ void handleDeleteChat()
     sendWebJson(server, 200, document);
 }
 
+int providerStoreErrorStatus(ProviderStoreError error)
+{
+    switch (error) {
+        case ProviderStoreError::InvalidInput:
+            return 400;
+        case ProviderStoreError::NotFound:
+            return 404;
+        case ProviderStoreError::Conflict:
+            return 409;
+        case ProviderStoreError::Capacity:
+            return 507;
+        case ProviderStoreError::LegacyRetained:
+        case ProviderStoreError::AuthorityUncertain:
+        case ProviderStoreError::Corrupt:
+            return 503;
+        case ProviderStoreError::Storage:
+        case ProviderStoreError::CleanupFailed:
+            return 500;
+        case ProviderStoreError::None:
+            return 500;
+    }
+    return 500;
+}
+
+void sendProviderStoreError(const ProviderStoreResult& result)
+{
+    sendWebJsonError(server, providerStoreErrorStatus(result.error),
+                     String(result.message.c_str()));
+}
+
+bool requireProviderMutation()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return false;
+    }
+    if (consoleProviderStore == nullptr) {
+        sendWebJsonError(server, 500,
+                         "Provider profile storage is unavailable");
+        return false;
+    }
+    return true;
+}
+
+ProviderStoreResult reloadConsoleDefaultProvider()
+{
+    if (consoleProviderStore == nullptr) {
+        return {ProviderStoreError::Storage, false, false,
+                "Provider profile storage is unavailable"};
+    }
+    return consoleProviderStore->loadDefaultInto(consoleSettings);
+}
+
+void sendApiProfileResult(const ApiProfileSummary& profile,
+                          const String& warning)
+{
+    JsonDocument document;
+    document["ok"] = true;
+    document["committed"] = true;
+    if (!warning.isEmpty()) {
+        document["warning"] = warning;
+    }
+    JsonObject item = document["profile"].to<JsonObject>();
+    item["id"] = profile.id;
+    item["name"] = profile.name;
+    item["api_base_url"] = profile.baseUrl;
+    item["authority_revision"] = profile.authorityRevision;
+    item["is_default"] = profile.isDefault;
+    item["api_key_configured"] = true;
+    sendWebJson(server, 200, document);
+}
+
+void sendModelPresetResult(const ModelPresetRecord& preset)
+{
+    JsonDocument document;
+    document["ok"] = true;
+    JsonObject item = document["preset"].to<JsonObject>();
+    item["id"] = preset.id;
+    item["name"] = preset.name;
+    item["model"] = preset.model;
+    item["maximum_output_tokens"] = preset.maximumOutputTokens;
+    sendWebJson(server, 200, document);
+}
+
+void handleApiProfileCreate()
+{
+    if (!requireProviderMutation()) return;
+    const ApiProfileInput input = {
+        std::string(server.arg("name").c_str()),
+        std::string(normalizedBaseUrl(server.arg("api_base_url")).c_str()),
+        std::string(server.arg("api_key").c_str()),
+    };
+    const ApiProfileMutationResult created =
+        consoleProviderStore->createProfile(input);
+    if (created.result.committed) ++settingsRevision;
+    if (!providerStoreResultSucceeded(created.result)) {
+        sendProviderStoreError(created.result);
+        return;
+    }
+    sendApiProfileResult(created.profile, "");
+}
+
+void handleApiProfileUpdate()
+{
+    if (!requireProviderMutation()) return;
+    const std::string id(server.arg("id").c_str());
+    const ApiProfileInput input = {
+        std::string(server.arg("name").c_str()),
+        std::string(normalizedBaseUrl(server.arg("api_base_url")).c_str()),
+        std::string(server.arg("api_key").c_str()),
+    };
+    const ApiProfileMutationResult updated =
+        consoleProviderStore->updateProfile(id, input);
+    ProviderStoreResult hotReload = validProviderStoreResult();
+    if (updated.result.committed) {
+        ++settingsRevision;
+        if (updated.profile.isDefault) {
+            hotReload = reloadConsoleDefaultProvider();
+        }
+    }
+    if (!providerStoreResultSucceeded(updated.result) &&
+        !updated.result.committed) {
+        sendProviderStoreError(updated.result);
+        return;
+    }
+    String warning;
+    if (!providerStoreResultSucceeded(updated.result)) {
+        warning = String("API profile was saved, but cleanup did not finish: ") +
+                  String(updated.result.message.c_str());
+    }
+    if (!providerStoreResultSucceeded(hotReload)) {
+        if (!warning.isEmpty()) warning += " ";
+        warning += String("The saved default is authoritative, but active settings reload failed: ") +
+                   String(hotReload.message.c_str());
+    }
+    sendApiProfileResult(updated.profile, warning);
+}
+
+void handleApiProfileDefault()
+{
+    if (!requireProviderMutation()) return;
+    const ProviderStoreResult updated =
+        consoleProviderStore->setDefaultProfile(
+            std::string(server.arg("id").c_str()));
+    ProviderStoreResult hotReload = validProviderStoreResult();
+    if (updated.committed) {
+        ++settingsRevision;
+        hotReload = reloadConsoleDefaultProvider();
+    }
+    if (!providerStoreResultSucceeded(updated)) {
+        sendProviderStoreError(updated);
+        return;
+    }
+    if (!providerStoreResultSucceeded(hotReload)) {
+        sendProviderStoreError(hotReload);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["default_profile_id"] = server.arg("id");
+    sendWebJson(server, 200, document);
+}
+
+void handleApiProfileDelete()
+{
+    if (!requireProviderMutation()) return;
+    const String id = server.arg("id");
+    if (id.isEmpty() || server.arg("confirm_id") != id) {
+        sendWebJsonError(server, 400,
+                         "API profile deletion confirmation does not match");
+        return;
+    }
+    const ProviderStoreResult deleted =
+        consoleProviderStore->deleteProfile(std::string(id.c_str()));
+    if (deleted.committed) ++settingsRevision;
+    if (!providerStoreResultSucceeded(deleted) && !deleted.committed) {
+        sendProviderStoreError(deleted);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["committed"] = true;
+    document["deleted_profile_id"] = id;
+    if (!providerStoreResultSucceeded(deleted)) {
+        document["warning"] =
+            String("API profile was deleted, but cleanup did not finish: ") +
+            String(deleted.message.c_str());
+    }
+    sendWebJson(server, 200, document);
+}
+
+struct ModelPresetInputResult {
+    bool success;
+    ModelPresetInput input;
+    String error;
+};
+
+ModelPresetInputResult parseModelPresetInput(
+    const String& name,
+    const String& model,
+    const String& maximumOutputTokens)
+{
+    std::uint32_t outputTokens = 0;
+    if (!parseUnsignedArgument(maximumOutputTokens, outputTokens)) {
+        return {false, {"", "", 0},
+                "Model preset output tokens must be an unsigned integer"};
+    }
+    return {true,
+            {std::string(name.c_str()), std::string(model.c_str()),
+             outputTokens},
+            ""};
+}
+
+void handleModelPresetCreate()
+{
+    if (!requireProviderMutation()) return;
+    const ModelPresetInputResult parsed = parseModelPresetInput(
+        server.arg("name"), server.arg("model"),
+        server.arg("maximum_output_tokens"));
+    if (!parsed.success) {
+        sendWebJsonError(server, 400, parsed.error);
+        return;
+    }
+    const ModelPresetMutationResult created =
+        consoleProviderStore->createModelPreset(parsed.input);
+    if (created.result.committed) ++settingsRevision;
+    if (!providerStoreResultSucceeded(created.result)) {
+        sendProviderStoreError(created.result);
+        return;
+    }
+    sendModelPresetResult(created.preset);
+}
+
+void handleModelPresetUpdate()
+{
+    if (!requireProviderMutation()) return;
+    const ModelPresetInputResult parsed = parseModelPresetInput(
+        server.arg("name"), server.arg("model"),
+        server.arg("maximum_output_tokens"));
+    if (!parsed.success) {
+        sendWebJsonError(server, 400, parsed.error);
+        return;
+    }
+    const ModelPresetMutationResult updated =
+        consoleProviderStore->updateModelPreset(
+            std::string(server.arg("id").c_str()), parsed.input);
+    if (updated.result.committed) ++settingsRevision;
+    if (!providerStoreResultSucceeded(updated.result)) {
+        sendProviderStoreError(updated.result);
+        return;
+    }
+    sendModelPresetResult(updated.preset);
+}
+
+void handleModelPresetDelete()
+{
+    if (!requireProviderMutation()) return;
+    const String id = server.arg("id");
+    if (id.isEmpty() || server.arg("confirm_id") != id) {
+        sendWebJsonError(server, 400,
+                         "Model preset deletion confirmation does not match");
+        return;
+    }
+    const ProviderStoreResult deleted =
+        consoleProviderStore->deleteModelPreset(std::string(id.c_str()));
+    if (deleted.committed) ++settingsRevision;
+    if (!providerStoreResultSucceeded(deleted)) {
+        sendProviderStoreError(deleted);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["deleted_preset_id"] = id;
+    sendWebJson(server, 200, document);
+}
+
+void handleModelPresetApply()
+{
+    if (!requireProviderMutation()) return;
+    const std::string id(server.arg("id").c_str());
+    const ModelPresetsResult presets = consoleProviderStore->listModelPresets();
+    if (!providerStoreResultSucceeded(presets.result)) {
+        sendProviderStoreError(presets.result);
+        return;
+    }
+    const auto selected = std::find_if(
+        presets.presets.begin(), presets.presets.end(),
+        [&id](const ModelPresetRecord& preset) { return preset.id == id; });
+    if (selected == presets.presets.end()) {
+        sendWebJsonError(server, 404, "Model preset is unavailable");
+        return;
+    }
+    ProjectDocumentResult current = loadProject(activeProject.summary.id);
+    if (!current.success) {
+        sendWebJsonError(server, 500, current.error);
+        return;
+    }
+    ProjectDocument candidate = std::move(current.project);
+    candidate.model = String(selected->model.c_str());
+    candidate.maximumOutputTokens = selected->maximumOutputTokens;
+    OperationResult saved = saveProject(candidate);
+    if (!saved.success) {
+        sendWebJsonError(server, 500, saved.error);
+        return;
+    }
+    activeProject.model = candidate.model;
+    activeProject.maximumOutputTokens = candidate.maximumOutputTokens;
+    ++projectRevision;
+    ++chatRevision;
+    String warning;
+    current = loadProject(candidate.summary.id);
+    if (!current.success) {
+        warning = "Model preset was applied, but active project reload failed: " +
+                  current.error;
+    } else {
+        activeProject = std::move(current.project);
+    }
+    saved = refreshProjects();
+    if (!saved.success) {
+        if (!warning.isEmpty()) warning += " ";
+        warning += "Project list refresh failed: " + saved.error;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["committed"] = true;
+    document["project_id"] = activeProject.summary.id;
+    document["model"] = candidate.model;
+    document["maximum_output_tokens"] = candidate.maximumOutputTokens;
+    if (!warning.isEmpty()) {
+        document["warning"] = warning;
+    }
+    sendWebJson(server, 200, document);
+}
+
 void handleSettings()
 {
     if (!requestHasValidCsrf()) {
@@ -3573,12 +4038,6 @@ void handleSettings()
     } else if (!wifiPassword.isEmpty()) {
         updated.wifiPassword = wifiPassword;
     }
-    String apiKey = server.arg("api_key");
-    apiKey.trim();
-    if (!apiKey.isEmpty()) {
-        updated.apiKey = apiKey;
-    }
-    updated.apiBaseUrl = normalizedBaseUrl(server.arg("api_base_url"));
     updated.model = server.arg("model");
     updated.model.trim();
     if (updated.model.length() > 120) {
@@ -3731,13 +4190,32 @@ void handleModels()
         sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    const ModelsResult result = fetchModels(consoleSettings);
+    const String scope = server.arg("scope");
+    const String explicitProfileId = server.arg("profile_id");
+    if ((!scope.isEmpty() && scope != "global" && scope != "project") ||
+        (scope == "project" && !explicitProfileId.isEmpty())) {
+        sendWebJsonError(server, 400, "Model discovery scope is invalid");
+        return;
+    }
+    const String profileId = scope == "project"
+        ? activeProject.apiProfile : explicitProfileId;
+    ProviderSettingsResult provider = resolveConsoleProviderId(profileId);
+    if (!providerStoreResultSucceeded(provider.result)) {
+        sendWebJsonError(
+            server, 409,
+            "API profile unavailable: " +
+                String(provider.result.message.c_str()));
+        return;
+    }
+    const ModelsResult result = fetchModels(provider.settings);
     if (!result.success) {
         sendWebJsonError(server, 502, result.error);
         return;
     }
     JsonDocument document;
     document["ok"] = true;
+    document["profile_id"] = provider.authority.profileId;
+    document["authority_revision"] = provider.authority.revision;
     JsonArray models = document["models"].to<JsonArray>();
     for (const auto& model : result.models) {
         models.add(model);
@@ -5075,7 +5553,9 @@ void updateConsoleSerial()
 
 }  // namespace
 
-WebConsoleResult runWebConsole(const Settings& settings, const String& initialChatId,
+WebConsoleResult runWebConsole(const Settings& settings,
+                               ProviderProfileStore& providerStore,
+                               const String& initialChatId,
                                const String& version)
 {
     if (WiFi.status() != WL_CONNECTED) {
@@ -5085,6 +5565,7 @@ WebConsoleResult runWebConsole(const Settings& settings, const String& initialCh
     Serial.println("WEB_CONSOLE stage=load_password");
     Serial.flush();
     consoleSettings = settings;
+    consoleProviderStore = &providerStore;
     firmwareVersion = version;
     OperationResult result = loadSetupAccessPointPassword(accessPassword);
     if (!result.success || accessPassword.isEmpty()) {
@@ -5207,6 +5688,14 @@ WebConsoleResult runWebConsole(const Settings& settings, const String& initialCh
             handleClearChat,
             handleArchivedMessages,
             handleSettings,
+            handleApiProfileCreate,
+            handleApiProfileUpdate,
+            handleApiProfileDefault,
+            handleApiProfileDelete,
+            handleModelPresetCreate,
+            handleModelPresetUpdate,
+            handleModelPresetDelete,
+            handleModelPresetApply,
             handleModels,
             handleDiagnosticsDownload,
             handleDiagnosticMetrics,

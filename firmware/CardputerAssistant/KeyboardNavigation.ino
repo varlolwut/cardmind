@@ -111,8 +111,9 @@ void handleKeyboard()
                 renderProjectActions();
                 return;
             }
-            if (availableModels.empty()) {
-                refreshModels();
+            if (availableModels.empty() ||
+                !availableModelsMatchProfile(project.project.apiProfile)) {
+                refreshModels(project.project.apiProfile);
                 if (availableModels.empty()) {
                     menuStatus = statusMessage;
                     renderProjectActions();
@@ -204,6 +205,9 @@ void handleKeyboard()
             menuStatus = exported.success ? "Exported as " + filename : exported.error;
             renderProjectActions();
         } else if (enterPressed && projectActionsIndex == 10) {
+            menuStatus = assignDeviceProjectApiProfile(selectedProjectId);
+            renderProjectActions();
+        } else if (enterPressed && projectActionsIndex == 11) {
             capabilityPolicyIndex = 0;
             menuStatus = "";
             currentScreen = Screen::ProjectToolPolicy;
@@ -643,8 +647,9 @@ void handleKeyboard()
                 renderChatActions();
                 return;
             }
-            if (availableModels.empty()) {
-                refreshModels();
+            if (availableModels.empty() ||
+                !availableModelsMatchProfile(activeProjectDocument.apiProfile)) {
+                refreshModels(activeProjectDocument.apiProfile);
                 if (availableModels.empty()) {
                     menuStatus = statusMessage;
                     renderChatActions();
@@ -1497,7 +1502,7 @@ void handleKeyboard()
                 openModelPicker(Screen::AiMenu);
             } else if (aiMenuIndex == 1) {
                 cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings);
+                cardputer::runProvisioningPortal(settings, providerProfileStore);
                 cachedSshToolProfileId = sshStorageReady
                     ? cardputer::sshToolAvailableProfileId() : 0;
                 cardputer::markOperation("idle");
@@ -1523,6 +1528,10 @@ void handleKeyboard()
                 openPendingToolPreview();
             } else if (aiMenuIndex == 6) {
                 openToolActivity();
+            } else if (aiMenuIndex == 7) {
+                runProviderProfiles();
+                menuStatus = "";
+                renderAiMenu();
             } else {
                 currentScreen = Screen::MainCarousel;
                 menuStatus = "";
@@ -1755,7 +1764,7 @@ void handleKeyboard()
                 renderVoiceMenu();
             } else if (voiceMenuIndex == 2) {
                 cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings);
+                cardputer::runProvisioningPortal(settings, providerProfileStore);
                 cachedSshToolProfileId = sshStorageReady
                     ? cardputer::sshToolAvailableProfileId() : 0;
                 cardputer::markOperation("idle");
@@ -1887,7 +1896,7 @@ void handleKeyboard()
                 ESP.restart();
             } else if (webConsoleMenuIndex == 5) {
                 cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings);
+                cardputer::runProvisioningPortal(settings, providerProfileStore);
                 cachedSshToolProfileId = sshStorageReady
                     ? cardputer::sshToolAvailableProfileId() : 0;
                 cardputer::markOperation("idle");
@@ -2091,7 +2100,7 @@ void handleKeyboard()
                 renderDeviceMenu();
             } else if (deviceMenuIndex == 5) {
                 cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings);
+                cardputer::runProvisioningPortal(settings, providerProfileStore);
                 cachedSshToolProfileId = sshStorageReady
                     ? cardputer::sshToolAvailableProfileId() : 0;
                 cardputer::markOperation("idle");

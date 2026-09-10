@@ -1,4 +1,4 @@
-import { open, readFile, rename } from 'node:fs/promises';
+import { open, readFile, rename, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 const credentialPath = new URL('../.secrets/ui-test-credentials.json', import.meta.url);
@@ -52,6 +52,17 @@ function projectSettingsRequest(values) {
     'X-CardMind-Output-Tokens': values.maximum_output_tokens,
     'X-CardMind-Auto-Compact': values.automatic_compaction,
   });
+}
+
+function projectProviderSettingsRequest(values, apiProfileId) {
+  const options = projectSettingsRequest(values);
+  return {
+    ...options,
+    headers: {
+      ...options.headers,
+      'X-CardMind-Api-Profile': apiProfileId,
+    },
+  };
 }
 
 function chatInstructionsRequest(instructions) {
@@ -5158,6 +5169,884 @@ async function verifyHistoryHeapAndUtf8Identity(baseUrl, auth, nonce) {
   return {...evidence, cleanup: 'pass'};
 }
 
+const p6ProviderIdPattern = /^[0-9a-f]{16}$/;
+
+function p6ProfileName(nonce) {
+  return `P6 provider ${nonce}`;
+}
+
+function p6PresetName(nonce) {
+  return `P6 preset ${nonce}`;
+}
+
+function p6ProjectTitle(nonce) {
+  return `P6 provider project ${nonce}`;
+}
+
+function requireP6ProviderId(value, field) {
+  if (typeof value !== 'string' || !p6ProviderIdPattern.test(value)) {
+    throw new Error(`P6-02 ${field} is not a canonical stable ID`);
+  }
+  return value;
+}
+
+function p6ProviderSnapshot(document) {
+  if (document === null || typeof document !== 'object' ||
+      document.provider_state !== 'ready' ||
+      document.api_profile_limit !== 3 || document.model_preset_limit !== 6 ||
+      !Array.isArray(document.api_profiles) ||
+      document.api_profiles.length > document.api_profile_limit ||
+      !Array.isArray(document.model_presets) ||
+      document.model_presets.length > document.model_preset_limit) {
+    throw new Error('P6-02 settings returned invalid provider collection state');
+  }
+  const profiles = document.api_profiles.map((profile) => {
+    const id = requireP6ProviderId(profile?.id, 'profile ID');
+    if (typeof profile.name !== 'string' || typeof profile.api_base_url !== 'string' ||
+        typeof profile.api_key_configured !== 'boolean' ||
+        typeof profile.is_default !== 'boolean' ||
+        !Number.isSafeInteger(profile.authority_revision) ||
+        profile.authority_revision < 1 ||
+        Object.prototype.hasOwnProperty.call(profile, 'api_key')) {
+      throw new Error('P6-02 settings returned an invalid profile summary');
+    }
+    return {
+      id,
+      name: profile.name,
+      api_base_url: profile.api_base_url,
+      api_key_configured: profile.api_key_configured,
+      is_default: profile.is_default,
+      authority_revision: profile.authority_revision,
+    };
+  }).sort((left, right) => left.id.localeCompare(right.id));
+  const presets = document.model_presets.map((preset) => {
+    const id = requireP6ProviderId(preset?.id, 'preset ID');
+    if (typeof preset.name !== 'string' || typeof preset.model !== 'string' ||
+        !Number.isSafeInteger(preset.maximum_output_tokens)) {
+      throw new Error('P6-02 settings returned an invalid preset summary');
+    }
+    return {
+      id,
+      name: preset.name,
+      model: preset.model,
+      maximum_output_tokens: preset.maximum_output_tokens,
+    };
+  }).sort((left, right) => left.id.localeCompare(right.id));
+  const defaultProfileId = requireP6ProviderId(
+    document.default_api_profile_id, 'default profile ID');
+  if (!profiles.some((profile) =>
+    profile.id === defaultProfileId && profile.is_default) ||
+      profiles.some((profile) =>
+        profile.is_default !== (profile.id === defaultProfileId))) {
+    throw new Error('P6-02 default profile identity is inconsistent');
+  }
+  return {
+    state: document.provider_state,
+    default_profile_id: defaultProfileId,
+    profiles,
+    presets,
+  };
+}
+
+function requireP6ProviderSnapshotEqual(actual, expected, label) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`P6-02 ${label} changed provider authority or collection state`);
+  }
+}
+
+function objectContainsExactKey(value, key) {
+  if (Array.isArray(value)) {
+    return value.some((item) => objectContainsExactKey(item, key));
+  }
+  if (value === null || typeof value !== 'object') return false;
+  if (Object.prototype.hasOwnProperty.call(value, key)) return true;
+  return Object.values(value).some((item) => objectContainsExactKey(item, key));
+}
+
+function requireP6SecretAbsent(value, secret, label) {
+  if (JSON.stringify(value).includes(secret) || objectContainsExactKey(value, 'api_key')) {
+    throw new Error(`P6-02 secret disclosure detected in ${label}`);
+  }
+}
+
+function authenticatedOptions(auth, options, csrf) {
+  const headers = new Headers(options.headers);
+  headers.set('Cookie', auth.cookie);
+  headers.set('X-CardMind-CSRF', csrf);
+  return {...options, headers};
+}
+
+async function expectP6HttpStatus(baseUrl, path, options, status, secret) {
+  const response = await fetchWithin(
+    new URL(path, baseUrl), options, maximumRequestMs);
+  const body = await response.text();
+  if (secret !== '' && body.includes(secret)) {
+    throw new Error('P6-02 secret disclosure detected in an HTTP failure');
+  }
+  if (response.status !== status) {
+    throw new Error(
+      `P6-02 ${path} returned HTTP ${response.status}; expected ${status}`,
+    );
+  }
+}
+
+async function p6SecretMutationJson(baseUrl, auth, path, options, secret) {
+  const response = await fetchWithin(
+    new URL(path, baseUrl),
+    authenticatedOptions(auth, options, auth.csrf),
+    maximumRequestMs,
+  );
+  const body = await response.text();
+  if (body.includes(secret)) {
+    throw new Error('P6-02 secret disclosure detected in a mutation response');
+  }
+  if (!response.ok) {
+    throw new Error(`P6-02 ${path} failed with HTTP ${response.status}`);
+  }
+  let document;
+  try {
+    document = JSON.parse(body);
+  } catch {
+    throw new Error(`P6-02 ${path} returned invalid JSON`);
+  }
+  requireP6SecretAbsent(document, secret, `${path} response`);
+  return document;
+}
+
+async function expectP6AuthenticatedFailure(
+  baseUrl, auth, path, options, status, secret) {
+  await expectP6HttpStatus(
+    baseUrl,
+    path,
+    authenticatedOptions(auth, options, auth.csrf),
+    status,
+    secret,
+  );
+}
+
+function validateP6ProviderLedger(document, expectedNonce) {
+  if (document === null || typeof document !== 'object' || Array.isArray(document) ||
+      document.version !== 1 || !/^[0-9]{8,20}$/.test(document.nonce) ||
+      document.nonce !== expectedNonce ||
+      document.profile_name !== p6ProfileName(document.nonce) ||
+      document.preset_name !== p6PresetName(document.nonce) ||
+      document.project_title !== p6ProjectTitle(document.nonce) ||
+      typeof document.baseline_ready !== 'boolean' ||
+      !Array.isArray(document.baseline_profile_ids) ||
+      !Array.isArray(document.baseline_preset_ids) ||
+      !Array.isArray(document.baseline_project_ids) ||
+      typeof document.original_default_profile_id !== 'string' ||
+      typeof document.original_project_id !== 'string' ||
+      typeof document.profile_create_pending !== 'boolean' ||
+      typeof document.preset_create_pending !== 'boolean' ||
+      typeof document.project_create_pending !== 'boolean' ||
+      typeof document.owned_profile_id !== 'string' ||
+      typeof document.owned_preset_id !== 'string' ||
+      typeof document.owned_project_id !== 'string' ||
+      typeof document.cleanup_complete !== 'boolean') {
+    throw new Error('P6-02 fixture ledger has an invalid typed shape');
+  }
+  const providerIds = [
+    ...document.baseline_profile_ids,
+    ...document.baseline_preset_ids,
+    document.original_default_profile_id,
+    document.owned_profile_id,
+    document.owned_preset_id,
+  ].filter((value) => value !== '');
+  if (providerIds.some((value) =>
+    typeof value !== 'string' || !p6ProviderIdPattern.test(value))) {
+    throw new Error('P6-02 fixture ledger contains an unsafe provider ID');
+  }
+  const projectIds = [
+    ...document.baseline_project_ids,
+    document.original_project_id,
+    document.owned_project_id,
+  ].filter((value) => value !== '');
+  if (projectIds.some((value) =>
+    typeof value !== 'string' || value.length > 180 ||
+    !/^[A-Za-z0-9._-]+$/.test(value))) {
+    throw new Error('P6-02 fixture ledger contains an unsafe project ID');
+  }
+  if (new Set(document.baseline_profile_ids).size !==
+        document.baseline_profile_ids.length ||
+      new Set(document.baseline_preset_ids).size !==
+        document.baseline_preset_ids.length ||
+      new Set(document.baseline_project_ids).size !==
+        document.baseline_project_ids.length ||
+      document.baseline_profile_ids.includes(document.owned_profile_id) ||
+      document.baseline_preset_ids.includes(document.owned_preset_id) ||
+      document.baseline_project_ids.includes(document.owned_project_id)) {
+    throw new Error('P6-02 fixture ledger ownership collides with its baseline');
+  }
+  if (document.baseline_ready &&
+      (!document.baseline_profile_ids.includes(
+        document.original_default_profile_id) ||
+       !document.baseline_project_ids.includes(document.original_project_id))) {
+    throw new Error('P6-02 fixture ledger baseline identities are inconsistent');
+  }
+  if (document.cleanup_complete &&
+      (document.profile_create_pending || document.preset_create_pending ||
+       document.project_create_pending || document.owned_profile_id !== '' ||
+       document.owned_preset_id !== '' || document.owned_project_id !== '')) {
+    throw new Error('P6-02 fixture ledger cleanup state is inconsistent');
+  }
+  return {
+    ...document,
+    baseline_profile_ids: [...document.baseline_profile_ids],
+    baseline_preset_ids: [...document.baseline_preset_ids],
+    baseline_project_ids: [...document.baseline_project_ids],
+  };
+}
+
+async function writeP6ProviderLedger(path, current, fields) {
+  if (!/[\\/]artifacts[\\/]p6-02-provider-ledger\.json$/.test(path)) {
+    throw new Error('P6-02 fixture ledger path is outside the exact artifacts target');
+  }
+  const next = validateP6ProviderLedger(
+    {...current, ...fields}, current.nonce);
+  const temporaryPath = `${path}.node.tmp`;
+  let handle;
+  let temporaryOwned = false;
+  try {
+    handle = await open(temporaryPath, 'wx');
+    temporaryOwned = true;
+    await handle.writeFile(`${JSON.stringify(next)}\n`, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporaryPath, path);
+    temporaryOwned = false;
+    return next;
+  } catch (error) {
+    const cleanupErrors = [];
+    if (handle !== undefined) {
+      try {
+        await handle.close();
+      } catch (closeError) {
+        cleanupErrors.push(`close: ${closeError.message}`);
+      }
+    }
+    if (temporaryOwned) {
+      try {
+        await rm(temporaryPath);
+      } catch (removeError) {
+        cleanupErrors.push(`remove: ${removeError.message}`);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new Error(
+        `P6-02 provider ledger write failed and temporary cleanup failed: ${cleanupErrors.join('; ')}`,
+        {cause: error});
+    }
+    throw error;
+  }
+}
+
+function p6ProviderResourceSnapshot(document, label) {
+  const snapshot = {};
+  for (const field of ['free_heap', 'largest_heap', 'stack_free']) {
+    if (!Number.isSafeInteger(document[field]) || document[field] <= 0) {
+      throw new Error(`P6-02 ${label} status has invalid ${field}`);
+    }
+    snapshot[field] = document[field];
+  }
+  return snapshot;
+}
+
+function requireP6ProviderResources(before, after) {
+  const freeLoss = before.free_heap - after.free_heap;
+  const largestLoss = before.largest_heap - after.largest_heap;
+  if (after.free_heap < 70 * 1024 || after.largest_heap < 28 * 1024 ||
+      after.stack_free <= 0 || freeLoss > maximumSteadyHeapLossBytes ||
+      largestLoss > maximumSteadyHeapLossBytes) {
+    throw new Error(
+      'P6-02 Web lifecycle did not return to its resource floor: ' +
+      `free_loss=${freeLoss}, largest_loss=${largestLoss}, ` +
+      `free=${after.free_heap}, largest=${after.largest_heap}, ` +
+      `stack=${after.stack_free}`,
+    );
+  }
+}
+
+async function cleanupP6ProviderOwnership(
+  baseUrl, auth, ledgerPath, inputLedger, secret) {
+  let ledger = validateP6ProviderLedger(inputLedger, inputLedger.nonce);
+  const errors = [];
+  let providerDocument = null;
+  try {
+    providerDocument = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(providerDocument, secret, 'cleanup settings state');
+    const snapshot = p6ProviderSnapshot(providerDocument);
+    if (snapshot.default_profile_id !== ledger.original_default_profile_id &&
+        snapshot.profiles.some((profile) =>
+          profile.id === ledger.original_default_profile_id)) {
+      await request(baseUrl, auth, '/api/profile/default', {
+        method: 'POST',
+        body: form({id: ledger.original_default_profile_id}),
+      });
+      providerDocument = await settingsState(baseUrl, auth);
+      requireP6SecretAbsent(
+        providerDocument, secret, 'restored-default settings state');
+    }
+  } catch (error) {
+    errors.push(`default restoration: ${error.message}`);
+  }
+
+  try {
+    const projects = await listAllProjects(baseUrl, auth);
+    const baselineIds = new Set(ledger.baseline_project_ids);
+    const titleMatches = projects.filter((project) =>
+      project.title === ledger.project_title && !baselineIds.has(project.id));
+    const ownedIds = new Set(titleMatches.map((project) => project.id));
+    if (ledger.owned_project_id !== '') ownedIds.add(ledger.owned_project_id);
+    if (titleMatches.length > 1 || ownedIds.size > 1) {
+      throw new Error('owned Project identity is ambiguous');
+    }
+    for (const projectId of ownedIds) {
+      if (projects.some((project) => project.id === projectId)) {
+        await deleteProjectById(baseUrl, auth, projectId);
+      }
+    }
+  } catch (error) {
+    errors.push(`project cleanup: ${error.message}`);
+  }
+
+  try {
+    const current = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(current, secret, 'preset cleanup settings state');
+    const snapshot = p6ProviderSnapshot(current);
+    const baselineIds = new Set(ledger.baseline_preset_ids);
+    const nameMatches = snapshot.presets.filter((preset) =>
+      preset.name === ledger.preset_name && !baselineIds.has(preset.id));
+    const ownedIds = new Set(nameMatches.map((preset) => preset.id));
+    if (ledger.owned_preset_id !== '') ownedIds.add(ledger.owned_preset_id);
+    if (nameMatches.length > 1 || ownedIds.size > 1) {
+      throw new Error('owned model-preset identity is ambiguous');
+    }
+    for (const presetId of ownedIds) {
+      if (snapshot.presets.some((preset) => preset.id === presetId)) {
+        await request(baseUrl, auth, '/api/preset/delete', {
+          method: 'POST', body: form({id: presetId, confirm_id: presetId}),
+        });
+      }
+    }
+  } catch (error) {
+    errors.push(`preset cleanup: ${error.message}`);
+  }
+
+  try {
+    const current = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(current, secret, 'profile cleanup settings state');
+    const snapshot = p6ProviderSnapshot(current);
+    const baselineIds = new Set(ledger.baseline_profile_ids);
+    const nameMatches = snapshot.profiles.filter((profile) =>
+      (profile.name === ledger.profile_name ||
+       profile.name === `${ledger.profile_name} updated`) &&
+      !baselineIds.has(profile.id));
+    const ownedIds = new Set(nameMatches.map((profile) => profile.id));
+    if (ledger.owned_profile_id !== '') ownedIds.add(ledger.owned_profile_id);
+    if (nameMatches.length > 1 || ownedIds.size > 1) {
+      throw new Error('owned API-profile identity is ambiguous');
+    }
+    for (const profileId of ownedIds) {
+      if (snapshot.profiles.some((profile) => profile.id === profileId)) {
+        await request(baseUrl, auth, '/api/profile/delete', {
+          method: 'POST', body: form({id: profileId, confirm_id: profileId}),
+        });
+      }
+    }
+  } catch (error) {
+    errors.push(`profile cleanup: ${error.message}`);
+  }
+
+  try {
+    await request(baseUrl, auth, '/api/project/select', {
+      method: 'POST', body: form({id: ledger.original_project_id}),
+    });
+    const restored = await activeChatState(baseUrl, auth);
+    if (restored.project_id !== ledger.original_project_id) {
+      throw new Error('original Project selection did not restore');
+    }
+  } catch (error) {
+    errors.push(`Project restoration: ${error.message}`);
+  }
+
+  try {
+    const finalDocument = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(finalDocument, secret, 'final settings state');
+    const finalSnapshot = p6ProviderSnapshot(finalDocument);
+    const finalProfileIds = finalSnapshot.profiles.map((profile) => profile.id);
+    const finalPresetIds = finalSnapshot.presets.map((preset) => preset.id);
+    if (JSON.stringify(finalProfileIds) !==
+          JSON.stringify([...ledger.baseline_profile_ids].sort()) ||
+        JSON.stringify(finalPresetIds) !==
+          JSON.stringify([...ledger.baseline_preset_ids].sort()) ||
+        finalSnapshot.default_profile_id !==
+          ledger.original_default_profile_id) {
+      throw new Error('provider collection/default did not return to baseline');
+    }
+    const projects = await listAllProjects(baseUrl, auth);
+    if (projects.some((project) =>
+      project.title === ledger.project_title &&
+      !ledger.baseline_project_ids.includes(project.id))) {
+      throw new Error('owned Project remained after cleanup');
+    }
+  } catch (error) {
+    errors.push(`cleanup verification: ${error.message}`);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`P6-02 exact-owned cleanup failed (${errors.join('; ')})`);
+  }
+  ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+    profile_create_pending: false,
+    preset_create_pending: false,
+    project_create_pending: false,
+    owned_profile_id: '',
+    owned_preset_id: '',
+    owned_project_id: '',
+    cleanup_complete: true,
+  });
+  return ledger;
+}
+
+async function verifyP6Providers(baseUrl, auth, nonce, ledgerPath) {
+  if (!/^[0-9]{8,20}$/.test(nonce)) {
+    throw new Error('P6-02 nonce must contain 8 to 20 decimal digits');
+  }
+  let providerSecret = `p6-${createHash('sha256')
+    .update(`provider-${nonce}`).digest('hex')}`;
+  const profileName = p6ProfileName(nonce);
+  const presetName = p6PresetName(nonce);
+  const projectTitle = p6ProjectTitle(nonce);
+  const baselineSettings = await settingsState(baseUrl, auth);
+  requireP6SecretAbsent(baselineSettings, providerSecret, 'baseline settings state');
+  const baselineProvider = p6ProviderSnapshot(baselineSettings);
+  const baselineProjects = await listAllProjects(baseUrl, auth);
+  const baselineChat = await activeChatState(baseUrl, auth);
+  const originalProjectId = requireString(
+    baselineChat.project_id, 'P6-02 original Project ID');
+  if (baselineProvider.profiles.length >= baselineSettings.api_profile_limit ||
+      baselineProvider.presets.length >= baselineSettings.model_preset_limit) {
+    throw new Error('P6-02 Web fixtures require one free profile and preset slot');
+  }
+  if (baselineProvider.profiles.some((profile) =>
+        profile.name === profileName ||
+        profile.name === `${profileName} updated`) ||
+      baselineProvider.presets.some((preset) => preset.name === presetName) ||
+      baselineProjects.some((project) => project.title === projectTitle)) {
+    throw new Error('P6-02 nonce-owned fixture identity collides with baseline state');
+  }
+  let ledger = validateP6ProviderLedger({
+    version: 1,
+    nonce,
+    profile_name: profileName,
+    preset_name: presetName,
+    project_title: projectTitle,
+    baseline_ready: true,
+    baseline_profile_ids: baselineProvider.profiles.map((profile) => profile.id),
+    baseline_preset_ids: baselineProvider.presets.map((preset) => preset.id),
+    baseline_project_ids: baselineProjects.map((project) => project.id).sort(),
+    original_default_profile_id: baselineProvider.default_profile_id,
+    original_project_id: originalProjectId,
+    profile_create_pending: false,
+    preset_create_pending: false,
+    project_create_pending: false,
+    owned_profile_id: '',
+    owned_preset_id: '',
+    owned_project_id: '',
+    cleanup_complete: false,
+  }, nonce);
+  ledger = await writeP6ProviderLedger(ledgerPath, ledger, {});
+  const beforeResources = p6ProviderResourceSnapshot(
+    await statusState(baseUrl, auth), 'initial');
+  let evidence = null;
+  let testError = null;
+  try {
+    const authProfile = () => form({
+      name: `${profileName} auth`,
+      api_base_url: 'https://127.0.0.1:9/v1',
+      api_key: 'p6-auth-probe-key',
+    });
+    const authPreset = () => form({
+      name: `${presetName} auth`,
+      model: `p6-auth-model-${nonce}`,
+      maximum_output_tokens: '1024',
+    });
+    await expectP6HttpStatus(baseUrl, '/api/profile/create', {
+      method: 'POST', body: authProfile(),
+    }, 401, providerSecret);
+    await expectP6HttpStatus(baseUrl, '/api/preset/create', {
+      method: 'POST', body: authPreset(),
+    }, 401, providerSecret);
+    await expectP6HttpStatus(
+      baseUrl,
+      '/api/profile/create',
+      authenticatedOptions(auth, {
+        method: 'POST', body: authProfile(),
+      }, 'invalid-p6-csrf'),
+      401,
+      providerSecret,
+    );
+    await expectP6HttpStatus(
+      baseUrl,
+      '/api/preset/create',
+      authenticatedOptions(auth, {
+        method: 'POST', body: authPreset(),
+      }, 'invalid-p6-csrf'),
+      401,
+      providerSecret,
+    );
+    const afterAuth = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(afterAuth, providerSecret, 'post-auth settings state');
+    requireP6ProviderSnapshotEqual(
+      p6ProviderSnapshot(afterAuth), baselineProvider, 'rejected auth attempts');
+
+    await expectP6AuthenticatedFailure(
+      baseUrl,
+      auth,
+      '/api/profile/create',
+      {
+        method: 'POST',
+        body: form({
+          name: profileName,
+          api_base_url: 'https://127.0.0.1:9/v1',
+          api_key: '',
+        }),
+      },
+      400,
+      providerSecret,
+    );
+    const afterMissingKey = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(
+      afterMissingKey, providerSecret, 'missing-key settings state');
+    requireP6ProviderSnapshotEqual(
+      p6ProviderSnapshot(afterMissingKey), baselineProvider,
+      'missing-key rejection');
+
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      profile_create_pending: true,
+    });
+    const profileStartedAt = performance.now();
+    const createdProfile = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/profile/create',
+      {
+        method: 'POST',
+        body: form({
+          name: profileName,
+          api_base_url: 'https://127.0.0.1:9/v1',
+          api_key: providerSecret,
+        }),
+      },
+      providerSecret,
+    );
+    const profileCreateMs = Math.round(performance.now() - profileStartedAt);
+    const profileId = requireP6ProviderId(
+      createdProfile.profile?.id, 'created profile ID');
+    if (createdProfile.ok !== true || createdProfile.committed !== true ||
+        createdProfile.profile.api_key_configured !== true ||
+        createdProfile.profile.name !== profileName) {
+      throw new Error('P6-02 profile create response is incomplete');
+    }
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      owned_profile_id: profileId,
+    });
+    const afterCreate = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(afterCreate, providerSecret, 'profile-create settings state');
+    if (!p6ProviderSnapshot(afterCreate).profiles.some((profile) =>
+      profile.id === profileId && profile.api_key_configured)) {
+      throw new Error('P6-02 created profile is absent or unconfigured');
+    }
+
+    const updatedProfile = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/profile/update',
+      {
+        method: 'POST',
+        body: form({
+          id: profileId,
+          name: `${profileName} updated`,
+          api_base_url: 'https://127.0.0.1:9/v1',
+          api_key: '',
+        }),
+      },
+      providerSecret,
+    );
+    if (updatedProfile.profile?.id !== profileId ||
+        updatedProfile.profile.api_key_configured !== true ||
+        updatedProfile.profile.name !== `${profileName} updated`) {
+      throw new Error('P6-02 blank-key update lost its public configured state');
+    }
+    await expectP6AuthenticatedFailure(
+      baseUrl,
+      auth,
+      `/api/models?profile_id=${encodeURIComponent(profileId)}`,
+      {method: 'GET'},
+      502,
+      providerSecret,
+    );
+
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      preset_create_pending: true,
+    });
+    const createdPreset = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/preset/create',
+      {
+        method: 'POST',
+        body: form({
+          name: presetName,
+          model: `p6-model-${nonce}`,
+          maximum_output_tokens: '1024',
+        }),
+      },
+      providerSecret,
+    );
+    const presetId = requireP6ProviderId(
+      createdPreset.preset?.id, 'created preset ID');
+    if (createdPreset.ok !== true || createdPreset.preset.name !== presetName) {
+      throw new Error('P6-02 preset create response is incomplete');
+    }
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      owned_preset_id: presetId,
+    });
+
+    await p6SecretMutationJson(baseUrl, auth, '/api/profile/default', {
+      method: 'POST', body: form({id: profileId}),
+    }, providerSecret);
+    const ownedDefault = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(ownedDefault, providerSecret, 'owned-default settings state');
+    if (p6ProviderSnapshot(ownedDefault).default_profile_id !== profileId) {
+      throw new Error('P6-02 explicit default selection did not persist');
+    }
+    await expectP6AuthenticatedFailure(
+      baseUrl, auth, '/api/models?scope=global', {method: 'GET'}, 502,
+      providerSecret);
+
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      project_create_pending: true,
+    });
+    const createdProject = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/project/new',
+      {method: 'POST', body: form({title: projectTitle})},
+      providerSecret,
+    );
+    const projectId = requireString(
+      createdProject.project_id, 'P6-02 created Project ID');
+    if (ledger.baseline_project_ids.includes(projectId)) {
+      throw new Error('P6-02 created Project reused a baseline identity');
+    }
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      owned_project_id: projectId,
+    });
+    const inheritedProject = await activeChatState(baseUrl, auth);
+    requireP6SecretAbsent(
+      inheritedProject, providerSecret, 'inherited Project state');
+    if (inheritedProject.project_api_profile_id !== '' ||
+        inheritedProject.effective_api_profile_id !== profileId ||
+        inheritedProject.api_profile_available !== true) {
+      throw new Error('P6-02 inherited Project did not resolve the selected default');
+    }
+    await expectP6AuthenticatedFailure(
+      baseUrl, auth, '/api/models?scope=project', {method: 'GET'}, 502,
+      providerSecret);
+
+    await p6SecretMutationJson(baseUrl, auth, '/api/profile/default', {
+      method: 'POST',
+      body: form({id: baselineProvider.default_profile_id}),
+    }, providerSecret);
+    const projectSettings = {
+      instructions: `P6 provider instructions ${nonce}`,
+      model: `p6-before-${nonce}`,
+      context_byte_budget: '16384',
+      maximum_output_tokens: '256',
+      automatic_compaction: '1',
+    };
+    await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/project/settings/raw',
+      projectProviderSettingsRequest(projectSettings, profileId),
+      providerSecret,
+    );
+    const assignedProject = await activeChatState(baseUrl, auth);
+    requireP6SecretAbsent(
+      assignedProject, providerSecret, 'assigned Project state');
+    if (assignedProject.project_api_profile_id !== profileId ||
+        assignedProject.effective_api_profile_id !== profileId ||
+        assignedProject.api_profile_available !== true ||
+        assignedProject.project_model !== projectSettings.model ||
+        assignedProject.context_byte_budget !== 16384 ||
+        assignedProject.maximum_output_tokens !== 256 ||
+        assignedProject.automatic_compaction !== true ||
+        assignedProject.project_instructions !== projectSettings.instructions) {
+      throw new Error('P6-02 explicit Project profile/settings did not persist exactly');
+    }
+    await expectP6AuthenticatedFailure(
+      baseUrl, auth, '/api/models?scope=project', {method: 'GET'}, 502,
+      providerSecret);
+
+    await expectP6HttpStatus(
+      baseUrl,
+      '/api/project/settings/raw',
+      projectProviderSettingsRequest(
+        {...projectSettings, model: `p6-unauthorized-${nonce}`}, profileId),
+      401,
+      providerSecret,
+    );
+    const afterRawAuth = await activeChatState(baseUrl, auth);
+    if (afterRawAuth.project_model !== assignedProject.project_model ||
+        afterRawAuth.project_api_profile_id !== profileId) {
+      throw new Error('P6-02 unauthenticated raw Project mutation changed state');
+    }
+
+    const beforeIsolation = p6ProviderSnapshot(await settingsState(baseUrl, auth));
+    const staleSettings = settingsUpdateForm(
+      baselineSettings, baselineSettings.global_instructions);
+    staleSettings.set('api_base_url', 'http://stale-p6.invalid/v1');
+    staleSettings.set('api_key', 'p6-stale-scalar-key');
+    await p6SecretMutationJson(baseUrl, auth, '/api/settings', {
+      method: 'POST', body: staleSettings,
+    }, providerSecret);
+    const afterIsolationDocument = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(
+      afterIsolationDocument, providerSecret, 'ordinary settings-save state');
+    requireP6ProviderSnapshotEqual(
+      p6ProviderSnapshot(afterIsolationDocument), beforeIsolation,
+      'ordinary settings save');
+
+    const applyStartedAt = performance.now();
+    const applied = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/preset/apply',
+      {method: 'POST', body: form({id: presetId})},
+      providerSecret,
+    );
+    const presetApplyMs = Math.round(performance.now() - applyStartedAt);
+    if (applied.ok !== true || applied.project_id !== projectId ||
+        applied.model !== `p6-model-${nonce}` ||
+        applied.maximum_output_tokens !== 1024) {
+      throw new Error('P6-02 preset Apply response is incomplete');
+    }
+    const afterApply = await activeChatState(baseUrl, auth);
+    requireP6SecretAbsent(afterApply, providerSecret, 'post-Apply Project state');
+    if (afterApply.project_model !== `p6-model-${nonce}` ||
+        afterApply.maximum_output_tokens !== 1024 ||
+        afterApply.project_api_profile_id !== profileId ||
+        afterApply.context_byte_budget !== assignedProject.context_byte_budget ||
+        afterApply.automatic_compaction !== assignedProject.automatic_compaction ||
+        afterApply.project_instructions !== assignedProject.project_instructions) {
+      throw new Error('P6-02 preset Apply changed fields outside model and output');
+    }
+
+    const deletedProfile = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/profile/delete',
+      {
+        method: 'POST',
+        body: form({id: profileId, confirm_id: profileId}),
+      },
+      providerSecret,
+    );
+    if (deletedProfile.ok !== true ||
+        deletedProfile.deleted_profile_id !== profileId) {
+      throw new Error('P6-02 profile delete response is incomplete');
+    }
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      profile_create_pending: false,
+      owned_profile_id: '',
+    });
+    const unavailable = await activeChatState(baseUrl, auth);
+    requireP6SecretAbsent(unavailable, providerSecret, 'unavailable-profile state');
+    if (unavailable.project_api_profile_id !== profileId ||
+        unavailable.api_profile_available !== false) {
+      throw new Error('P6-02 deleted Project reference did not remain fail-closed');
+    }
+    await expectP6AuthenticatedFailure(
+      baseUrl, auth, '/api/models?scope=project', {method: 'GET'}, 409,
+      providerSecret);
+
+    const deletedPreset = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/preset/delete',
+      {
+        method: 'POST',
+        body: form({id: presetId, confirm_id: presetId}),
+      },
+      providerSecret,
+    );
+    if (deletedPreset.ok !== true ||
+        deletedPreset.deleted_preset_id !== presetId) {
+      throw new Error('P6-02 preset delete response is incomplete');
+    }
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      preset_create_pending: false,
+      owned_preset_id: '',
+    });
+    evidence = {
+      authentication_and_csrf: 'pass',
+      missing_key_nonmutation: 'pass',
+      profile_crud_public_state: 'pass',
+      default_and_project_state: 'pass',
+      connector_failure_outcomes: 'pass',
+      settings_provider_isolation: 'pass',
+      preset_crud_and_apply: 'pass',
+      unavailable_reference: 'pass',
+      secret_non_disclosure: 'pass',
+      profile_create_ms: profileCreateMs,
+      preset_apply_ms: presetApplyMs,
+    };
+  } catch (error) {
+    testError = error;
+  }
+
+  let cleanupError = null;
+  try {
+    ledger = await cleanupP6ProviderOwnership(
+      baseUrl, auth, ledgerPath, ledger, providerSecret);
+    const restoredProvider = p6ProviderSnapshot(
+      await settingsState(baseUrl, auth));
+    requireP6ProviderSnapshotEqual(
+      restoredProvider, baselineProvider, 'exact-owned cleanup');
+  } catch (error) {
+    cleanupError = error;
+  }
+  let resourceError = null;
+  let afterResources = null;
+  try {
+    afterResources = p6ProviderResourceSnapshot(
+      await statusState(baseUrl, auth), 'final');
+    requireP6ProviderResources(beforeResources, afterResources);
+  } catch (error) {
+    resourceError = error;
+  }
+  providerSecret = '';
+  if (testError !== null || cleanupError !== null || resourceError !== null) {
+    throw new Error(
+      `P6-02 Web provider suite failed; test=${testError?.message ?? 'none'}; ` +
+      `cleanup=${cleanupError?.message ?? 'none'}; ` +
+      `resources=${resourceError?.message ?? 'none'}`,
+    );
+  }
+  if (ledger.cleanup_complete !== true || evidence === null) {
+    throw new Error('P6-02 Web provider suite did not finish its evidence lifecycle');
+  }
+  return {
+    ...evidence,
+    resources: {before: beforeResources, after: afterResources},
+    cleanup: 'pass',
+  };
+}
+
 async function verifyP4SshOutputDownload(baseUrl, auth, name, expectedBytesValue) {
   if (!/^ssh-command-[0-9a-f]{16}\.log$/.test(name)) {
     throw new Error('P4-05 output filename is not an exact collision-owned log name');
@@ -5190,13 +6079,26 @@ async function verifyP4SshOutputDownload(baseUrl, auth, name, expectedBytesValue
 }
 
 async function main() {
-  const raw = JSON.parse(await readFile(credentialPath, 'utf8'));
-  const baseUrl = new URL(requireString(raw.web_ui?.url, 'web_ui.url'));
-  const password = requireString(
-    raw.web_ui?.installation_password,
-    'web_ui.installation_password',
-  );
-  const auth = await login(baseUrl, password);
+  let raw = null;
+  let baseUrl;
+  let password = '';
+  let auth;
+  try {
+    raw = JSON.parse(await readFile(credentialPath, 'utf8'));
+    baseUrl = new URL(requireString(raw.web_ui?.url, 'web_ui.url'));
+    password = requireString(
+      raw.web_ui?.installation_password,
+      'web_ui.installation_password',
+    );
+    auth = await login(baseUrl, password);
+  } finally {
+    if (raw !== null && typeof raw === 'object' &&
+        raw.web_ui !== null && typeof raw.web_ui === 'object') {
+      raw.web_ui.installation_password = '';
+    }
+    password = '';
+    raw = null;
+  }
   const suiteIndex = process.argv.indexOf('--suite');
   const suite = suiteIndex >= 0 ? process.argv[suiteIndex + 1] : 'full';
   if (![
@@ -5206,7 +6108,7 @@ async function main() {
     'p4-ssh-output', 'workspace-tool',
     'large-stream', 'atomic-failure', 'sd-degraded', 'instructions',
     'version-history',
-    'request-settings', 'summary-regeneration', 'context-history',
+    'request-settings', 'p6-providers', 'summary-regeneration', 'context-history',
     'context-history-recover', 'context-history-orphan-recover',
     'archive-quota', 'archive-quota-recover',
     'binary-text', 'binary-text-recover',
@@ -5361,6 +6263,16 @@ async function main() {
   if (suite === 'request-settings') {
     const requestSettings = await verifyRequestSettingsWeb(baseUrl, auth);
     console.log(JSON.stringify({result: 'pass', suite, request_settings: requestSettings}));
+    return;
+  }
+  if (suite === 'p6-providers') {
+    const providers = await verifyP6Providers(
+      baseUrl,
+      auth,
+      requiredCommandArgument('--p6-provider-nonce'),
+      requiredCommandArgument('--p6-provider-ledger'),
+    );
+    console.log(JSON.stringify({result: 'pass', suite, providers}));
     return;
   }
   if (suite === 'limits') {
