@@ -71,8 +71,9 @@ Status values are `pending`, `in_progress`, and `completed`.
 
 P6-01 is a pre-production phase-transition row. The prior task-owned Concept C visual-polish
 artifact is rejected evidence only and is frozen without further iteration. The replacement must
-start from Architect's complete P3-P5 user-action inventory and a materially different visual and
-compositional brief; it must not salvage the rejected palette or layout through incremental tweaks.
+start from Architect's complete P3-P5 user-action inventory and corrected compositional brief.
+The later explicit user decision retains the prior warm-light identity: functional and geometry
+correction does not authorize a wholesale aesthetic redesign or a different product mood.
 P6-01 does not own firmware, Web production assets, generated headers, schemas, persisted values,
 routes, tests, builds, uploads or Device state.
 
@@ -825,3 +826,1150 @@ P6-02 remains pending while this exact checkpoint awaits Architect's personal cl
   The locally retained P6-02 activation/pre-edit package is not P6-01-owned and must remain unstaged
   until this correction commit is pushed and its exact remote SHA is verified. P6-02 remains pending and no
   production work is authorized during this zero-active-row publication window.
+
+## P6-01 second acceptance revocation and canonical re-audit
+
+**Reopened:** 2026-09-03T20:43:17+03:00 after the user's exact STOP and Architect's ownership
+verdict. The prior correction commit
+`1b0d49039697c7abe5014e3d2841b632639706a8` is remotely published and independently verified, but
+its artifact acceptance is revoked. P6-01 is again the sole `in_progress` row; P6-02 and every
+production, route, schema, persistence, build, upload, Device and Web test boundary remain frozen.
+
+- The user reports missing functions and rejects the composition and functional information
+  architecture as a whole. The concrete observations include a context-blind `Load more` control
+  without a clear target, count, direction or state; a developer-facing Terminal strip that gives
+  `Geometry 120x32`, `Clear`, `Fullscreen` and `Connect` flat, incorrect priority; visually touching
+  adjacent bordered objects; inconsistent spacing/alignment; and no clear discoverable chat action
+  or message-mode selector. The user's rhetorical rejection is not a request to explain those
+  controls and cannot be reduced to two label fixes.
+- The artifact's own 76/76 table, catalog counts and prior no-overflow geometry are no longer
+  authoritative acceptance evidence. Those checks did not prove spacing rhythm, separation between
+  adjacent boundaries, a coherent alignment grid, task hierarchy, discoverability or semantic
+  reachability. Prior functional and visual GO verdicts are retained only as historical evidence.
+- Before any artifact correction, reconstruct a fresh canonical inventory from `ROADMAP.md`, the
+  final P3/P4/P5 traces and the actual shipped Web and Device producers/consumers. Compare every
+  real user action, legal state, explicit failure/degraded path and cleanup/recovery path against the
+  artifact independently of its self-authored coverage table.
+- The audit must trace the shipped per-message contract — Auto, No tools, exact Web, Files, SSH and
+  Python intent plus applicable Safe Actions/tool selection — into an explicit usable chat control.
+  A collapsed generic `Message options` disclosure does not establish discoverability. Inspect
+  every adjacency/contact across collections, selected-object surfaces, action bars, Terminal,
+  Files, Settings and compact/mobile layouts.
+- The only permitted output before review is one consolidated omission/usability report and the
+  smallest coherent correction design preserving all shipped functions. Do not patch isolated
+  screenshots or incrementally salvage the current composition. The task-owned artifact remains
+  frozen until Architect independently reviews the complete inventory and redesign contract.
+- Task-clock hypothesis: the rejected artifact counted named destinations and simulated scenarios
+  without deriving action meaning, legal ownership or composition from the final production
+  surfaces. Source/trace inventory is expected to identify omitted or mis-prioritized actions and a
+  smaller user-task hierarchy. No experiment has been repeated and no production state is touched.
+
+## P6-01 canonical source re-audit and replacement pre-edit package
+
+**Frozen:** 2026-09-03T21:12:55+03:00, awaiting Architect review before any artifact edit. The
+rejected artifact remains byte-identical at SHA-256
+`DA69622052F935FB5033E2A0EE7631FE56F71F3D8C68F995B9370FEBA50C1714`. The complete final
+`ROADMAP.md`, P3, P4 and P5 traces, active P6 trace, shipped Web asset/routes/state owners and shipped
+Device menus/input/render owners were read independently of the artifact's catalog. The prior
+literal `76`, `9/67/118`, no-overflow and visual/functional GO claims are historical only.
+
+The audit uses three explicit classifications:
+
+- **Shipped** means a current production producer and reachable consumer exist. Static or retained
+  trace evidence is not promoted to a fresh physical Device or live SSH/Python observation.
+- **P6 parity gap** means the active phase authorizes a missing required interface or state, but the
+  replacement must not describe it as already shipped. The gap remains production work owned by its
+  later P6 row.
+- **Remove** means the rejected artifact invented an action, changed shipped semantics, leaked a
+  reviewer control into the product, or exposed an implementation value as a user setting.
+
+Coverage is checked in both directions from independent sources. `ROADMAP.md`, the final P3/P4/P5
+traces and the actual shipped Device/Web producers and reachable consumers produce the matrix first;
+every canonical action, required state/legal outcome and forbidden effect must then reach the
+artifact. In reverse, every artifact control must map to one exact shipped owner or one explicit P6
+gap. The check fails when a real source action is absent from both the matrix and the artifact; the
+artifact and matrix cannot validate each other by sharing the same omission.
+
+### Compact canonical coverage matrix
+
+| Family | User goal and visible/reachable control | Required state variants and legal outcomes | Actual production owner and classification |
+| --- | --- | --- | --- |
+| Global Web shell/session | Authenticate; navigate Chat, Shared files, Terminal and Settings; keep active Project context visible; refresh the current owner; inspect health/pending state; Lock; End Web Console | Invalid password and five-attempt/30-second lockout; authenticated/expired; current shipped fixed 15-minute idle session; P6 choices 15 min/1 h/8 h/until reboot; distinct visible-tab identity, Browser connected, Waiting and auth state; same-address reconnect; SD/provider/Wi-Fi/Python/SSH status | Shipped shell and session owners: `assets/web_console.html:22-23,42,57-63,75,105-116,222-223`, `web_console.cpp:51-53,503-517,1395-1528`. Four lifetimes, presence/heartbeat and reconnect preservation are P6-03/P6-04 gaps. Refresh must never claim to rescan/restart a subsystem when it only reloads the current state view. |
+| Projects | The sole active-Project switcher lives in the context bar and opens Project manager. Project manager owns named New project, Project bundle Import through the existing Shared-file/upload picker, Project bundle Export, and the bounded Project collection. Its selected-Project header owns Open chats, Settings and named More actions: rename, duplicate, Archive/Restore and delete; Settings owns instructions, real model override, context/output, auto-compact, SSH ceiling, eight policies and Shared links | Loading/empty/error/EOF/current/archived; exact selection survives page loads; invalid/colliding bundle never activates a partial import; write and degraded-SD errors; last Web Project deletion creates/selects `Default` and never deletes global Shared files. Import/Export remain Project-manager actions even when Import consumes the Shared picker | Web create/import/select/settings/actions are shipped: `assets/web_console.html:24,38,58-59,116-123`, `web_console.cpp:1660-1686,2651-2924,3412-3471`. The Web Project pagination route/JS exists but has no reachable DOM consumer because `loadMoreProjects` is absent, so Web Project pagination is an explicit P6-05 parity gap. Device create/import/select/settings/actions and Previous/Next pagination are shipped except Delete: `CardputerAssistant.ino:1057-1183`, `KeyboardNavigation.ino:84-525,2200-2225`. Device Delete is a P6-06 gap. Project API-profile assignment remains P6-02. |
+| Chats/conversation | Chat owns only the bounded current/archive Chat collection, New chat, selected conversation and Chat export (`.md`). The selected conversation exposes title/model/context/W/F/S/P state, archived/raw history, messages/stream, summary/full-history/sources, Chat settings and named More actions: rename where owned, Pin/Unpin, Archive/Restore, duplicate, Export Markdown, compact, clear and delete; composer, Send, streaming Stop and contextual Retry | Loading/empty/error/EOF; archived-history cursor and count; active selection stable; pin forces unarchive and archive forces unpin; last deletion creates/selects `New chat`; retry reuses the accepted failed request's exact intent and one-turn instructions without duplicate user append. Web Retry may accept a new `maximum_output_tokens`; blank retains the failed request's value. Success resets volatile intent only after durable append | Web Chat pagination and actions are shipped reachable: `assets/web_console.html:24-25,38,80-89,116-134,210-220`, `web_console.cpp:1687-1748,1844-2242,2974-3693`. Device shipped: `CardputerAssistant.ino:1206-1388,1848-2172,2204-2388`, `KeyboardNavigation.ino:528-1404,2798-2867`. Project bundle Export is consolidated under Project manager rather than duplicated in Chat. Device Chat Rename is a P6-06 gap. Web search-source detail is a P6-05 gap; Device owns it under selected Chat, never AI. |
+| Per-message permissions, Pending and Activity | Always-visible `Auto`, `No tools`, `Web`, `Files`, `SSH`, `Python` beside the prompt; one accessible capability/tool explanation; Project/Chat settings own persistent policies separately; Pending and Activity are reachable from Chat/status and Device AI | `Auto` and `No tools` are exclusive modes; any nonempty W/F/S/P subset is Required and cannot elevate policy; required denied/unavailable fails before provider; typed file diff, byte-exact SSH command, exact Safe Action, Python identity plus complete-source route, safe generic preview; Policy Ask allows once/chat/deny, mandatory removes allow-for-chat, stale/reboot exposes acknowledge/discard only; Activity shows tool, coarse target, state, duration, bytes and optional exit | Web shipped group-mask control: `assets/web_console.html:25,40,45-49,80-85,112-113,134,210-215`. Device shipped sheet/status: `src/ui.cpp:508-596`, `CardputerAssistant.ino:2204-2388,2491-2584`, `KeyboardNavigation.ino:823-833,998-1137`. Exact catalog: `src/tool_catalog.cpp:6-44`. There is no direct Safe Action route: the model chooses the exact schema after the user chooses a group. A visible explanation may name Logs, Service state, Containers, Disk and Processes but must not pretend to launch them. Complete Python source navigation is a P6 correction gap. |
+| Shared workspace/files/QR | Shared Files owns New text file and Upload, never Project bundle Import. It owns the bounded file collection and selected-file header with Open/Save as the task primary; named More actions for Download, Save copy where owned, Rename, Link/Unlink and QR; isolated Delete; visible-section editor/navigation. Project Import may open this surface as a picker while Project manager remains the action owner | Text/bundle/binary explicit; uploaded safe text remains editable; nested safe paths, invalid/collision/stale-window/storage errors; one file may link to several Projects and rename/delete stays blocked until unlinked from every Project; QR rejects empty, invalid UTF-8 and over 320 bytes; full/read-only versus missing/removed/replaced SD effects remain distinct | Web Upload/open/window/save/download/rename/delete/QR are shipped: `assets/web_console.html:26,58,95-98,193-209`, `web_console.cpp:2927-2972,4660-5045`, `file_workspace.cpp:1240-1248,1283-1289`. Web New text file, Save copy, Files pagination and Link/Unlink are explicit P6-05 gaps: their routes/JS may exist, but shipped DOM lacks `loadMoreFiles`, `toggleProjectLink` and `projectLinkState`, so there is no reachable consumer. Device New text, paging and Link/Unlink are shipped: `DeviceMenus.ino:217-274`, `KeyboardNavigation.ino:2164-2693`. Device has no Download, copy-selected-text or QR-selected-file control; do not invent them. |
+| SSH profiles/security/terminal/SFTP | Profile collection and separate selected-profile editor; New/select default/edit/delete/key install; profile/endpoint/trust/status context above exactly one terminal; state-owned Connect/Disconnect primary; exact trust/mismatch/Forget; direct desktop typing and narrow touch input; subordinate terminal tools; separate Remote files task with exact source/destination, overwrite confirmation and Cancel | At most five/incomplete/capacity; secrets and passphrase write-only; profile locked during connect/trust/terminal/mismatch; disconnected/connecting/trust/auth/open/connected/stopping/failed/mismatch; timeout/nonzero/cancel/partial/SD-log download belong to model command outcomes; SFTP known failure versus outcome unknown and no retry; changed-key Forget never reconnects | Web shipped: `assets/web_console.html:27,94,141-192,221`, `web_console.cpp:3836-4658`. Device shipped: `SshTools.ino:3-99,1356-2040`. PTY auto-fit is `ResizeObserver -> /api/ssh/resize`, 20..240 columns and 4..100 rows; it is not a manual Geometry setting. Clear resets only the browser buffer; Fullscreen targets terminal output. Manual Terminal and model SSH/Safe Action/SFTP authority remain distinct. Remove fake geometry, terminal-session tabs, fabricated exit 0, Complete transfer and synthetic `../` claims. |
+| Settings/providers/device controls | Category list to one detail form: Session/security; Wi-Fi; AI/API profiles/model presets; Tool access; Voice/Search; Device; Browser; Python; Diagnostics; Activity. Persistent global settings retain one truthful commit owner; each profile/preset object has one save owner. Browser-local Surface style, Compact density, Reduce motion and Keep terminal awake remain functional controls and apply immediately; Diagnostics separately owns a session-only metrics enable/disable action | Wi-Fi explicit scan/refresh, discovered 2.4 GHz choice, separate hidden/manual path, empty/error/connecting/connected/failure and write-only password; model discovery populates the real model field; API profile/preset limit remains `bounded; measured in P6-02`; STT/Search/TTS stay independent; device apply can fail; all four browser preferences visibly apply and keep-awake is effective only while terminal is connected and visible; diagnostics toggle/loading/error are actionable while metric values and Activity rows are read-only | Shipped Web settings and browser preferences: `assets/web_console.html:28-36,90,135-140,221`, `web_console.cpp:3530-3833`. Current persistent owner is one `Save all settings`; categories cannot invent separate commits. `diagnostic_metrics` is a real session-only action backed by `assets/web_console.html:34,65,78,105,140` and `src/web_console_routes.cpp:157`; the replacement moves it out of Browser preferences into Diagnostics without removing it. P6-02 owns profile/preset persistence/counts, P6-03 lifetime, P6-05 Wi-Fi scan/backend mapping. Device uses immediate per-item persistence in `DeviceMenus.ino:75-130`, `KeyboardNavigation.ino:2032-2138`, not Web save semantics. Only reviewer presence controls such as `Simulate last tab`/`Send visible heartbeat` stay outside product UI. |
+| Python | The manual MicroPython workspace owns script list, New, Open, Save file, Run, Refresh output, Restart Python and Return to CardMind. Separately, Chat owns Python intent and the P5 one-shot Pending/full-source approval, handoff to one foreground run, same-address Web or Device return and attachment to the originating Chat | Manual workspace: no selection/new unsaved/loaded/saved/running/output/error/restart/return. One-shot: invalid/unlinked/too-large/non-UTF-8 source; exact path/size/SHA and privileged/no-sandbox warning; Allow once/Deny only; cancel before staging; handoff/running; success/exception/normal reset/watchdog or power-loss effects unknown; already attached/no replay; artifact present/absent/access error | Manual shipped workspace: `micropython/vfs/cardmind_supervisor.py:533-617,742-803`. P5 one-shot owners plus `assets/web_console.html:33,90,137,210-215` and Device Web Console/Pending owners remain separate. Current Web Pending modal has no complete-source route; current Device prefix is bounded and full review requires Files. Startup currently lands on Main Carousel, not proven originating Chat. Full-source return and Device origin restoration are P6 correction gaps. The artifact presents both surfaces and states but never simulates Python execution or implements either state machine. |
+| Diagnostics/degraded/cleanup | Compact global status opens Diagnostics. Diagnostics owns the real session-only Enable/Disable performance metrics action; the resulting metric values and all Activity rows are read-only. Explicit Retry belongs to the failed read owner; applicable replacement confirmation is visible; exports remain secret-free | Metrics enabled/disabled, update/loading/error; SD ready/full/missing/removed/replaced are shipped Web states; corrupt/read-only are required design/review states only where the authoritative owner supports them; provider/model, optional STT/Search/TTS, Wi-Fi, session, SSH, Python and diagnostics failures stay distinct; success/failure/partial/effects-unknown and observed cleanup never collapse to Ready | Web diagnostics toggle/metrics/activity/export: `assets/web_console.html:34-36,65,77-79,105,110,138-140,221`, `src/web_console_routes.cpp:157`, `src/web_console_state.cpp:100`. Device Diagnostics remains two read-only pages with no export: `FileTools.ino:70-105`, `KeyboardNavigation.ino:2695-2708`. Diagnostics as a Web surface is therefore not wholly read-only. Reviewer scenario/presence selectors stay outside the product and cannot be counted as actions. |
+| Device 240x135 | Nine ordered destinations and all real nested screens remain visually inspectable; Home uses one selected icon/label with neighbour names and index; each list/task screen shows its real key footer; Chat exposes current message intent plus both the direct and non-shortcut capabilities paths | Shipped Home uses Left/Right/Enter and consumes Esc as an explicit no-op; current left/right transition is animated. Ordinary lists clamp Up/Down and Esc returns parent; synchronous SSH modal lists may wrap; G0 and Fn+8 are Chat-only; fatal boot screens are blocking; degraded SD is not fatal. The replacement's reviewed direction is a static carousel, and every P6-only screen is labelled as a gap | Shipped enum/dispatcher: `CardputerAssistant.ino:86-138,1418-1592`; animated Home: `DeviceMenus.ino:276-329`; keys and Esc no-op: `KeyboardNavigation.ino:52-82,1448-1480`; fatal: `CardputerAssistant.ino:3366-3426`, `src/ui.cpp:345-358`. Quick notes/Checklist enter the generic file editor; Help is one Controls viewer; there are no specialized checklist CRUD, About/Support, global G0/Fn+8, recoverable fatal screen or hidden-SSID Device picker. |
+
+### Consolidated rejection findings
+
+1. The artifact demotes the defining Chat action behind generic `Message options`, while production
+   exposes the six intent controls at composer level. It also lists Safe Actions only in coverage
+   prose. Exact Safe Action execution cannot be added as a fake button because no direct route or
+   exact-tool intent exists.
+2. `Load more`/`Load archived` does not represent production pagination. The reachable Chat `More`
+   fetches the next mixed physical JSONL page (maximum 32) in stored order. Project and Files route/JS
+   logic can fetch their next bounded page, but the shipped DOM has no reachable consumer; those
+   artifact controls must be explicit P6 gaps. Archived messages load from the raw-history byte
+   cursor in bounded chronological batches. Every footer needs target, direction, loaded count,
+   loading/error and EOF; it must not invent a remaining total when the server does not provide one.
+3. Project/Chat actions are duplicated or false: two Delete aliases share one handler, `Save
+   instructions` aliases a larger save owner, inverse actions are not state-labelled, last-object
+   deletion is incorrectly blocked, and Pin/Archive coupling is absent.
+4. The Terminal gives automatic geometry, browser-local Clear, output-only Fullscreen and Connect
+   equal priority, mixes profile editing/SFTP/terminal in one wall and fabricates successful command
+   output. At compact sizes controls and selected-file actions are occluded by navigation.
+5. Files mixes its collection creation, Project Import, selection actions, editor navigation and QR;
+   selected actions are buried. Project Import is misowned, linked-file rename/delete safety is not
+   legible, and route-only Web Link/Unlink and Files paging are presented as shipped controls.
+6. Settings leaks reviewer actions into product UI, saves Surface style/Compact density without
+   applying them, detaches discovered models from the actual model field and conflates independent
+   optional-service states. It also treats all Diagnostics as passive telemetry, losing the real
+   session-only performance-metrics toggle even though metric values and Activity rows are read-only.
+7. The Device simulator changes Home/list key semantics, globalizes Chat-only G0/Fn+8, invents a
+   recoverable fatal screen and multiple actions, misowns search sources and Python results, and
+   counts static storyboard text as behavior. Several retained P4/P5 Device claims are static rather
+   than fresh physical UI evidence and must remain labelled honestly.
+8. The artifact is a large parallel mini-application whose circular self-authored inventory and
+   geometry checks did not test task hierarchy, boundary separation, action meaning or production
+   ownership. It is not a base for incremental repair.
+
+### One replacement information architecture: context rail plus task canvas
+
+The replacement uses one rule across the Web surface: the shell owns navigation/session/current
+context; each destination owns only its named collection actions and pagination; the task canvas
+owns the selected object; the selected-object header owns one primary action and at most one
+frequent secondary; a named `More actions` menu owns the rest; destructive actions appear once in a
+separated danger group. Cross-surface pickers may supply a value without taking ownership of the
+invoking action.
+
+| Region | Content and ownership |
+| --- | --- |
+| Global rail | Chat, Shared files, Terminal, Settings. Active state has icon plus text and does not rely on color. |
+| Context bar | The sole active-Project switcher, current page/object title, one compact health/pending entry, and a named Session menu containing Lock and End Web Console. The switcher opens Project manager; no second Project switcher appears in Chat. |
+| Project manager | New Project, Project bundle Import and Project bundle Export; current/archive Project collection; selected Project settings/actions. Import invokes the existing Shared-file/upload picker, then returns to the same Project-owned validate/import/activate flow. |
+| Chat collection rail | New chat, current/archive view of the mixed loaded Chat records, selected Chat and the shipped target-specific Chat footer. Chat owns only Export Markdown; it never duplicates Project bundle Export. On narrow layouts this is a separate screen. |
+| Chat task canvas | Conversation header, model/context/effective capability text, Chat settings & actions, internally scrolling transcript, contextual archived-history control, contextual retry, and a composer that remains visible. |
+| Files collection rail | New text file and Upload; bounded Shared list/breadcrumb, type/link state and collection footer. It can serve as the picker opened by Project Import but never owns an Import action. Web Files paging and Link/Unlink are visibly labelled P6 gaps until P6-05 supplies reachable consumers. |
+| File task canvas | Selected-file identity/type/link summary; Open or Save primary; named More for Download/Save copy/Rename/Link/QR as actually owned; separated Delete; bounded editor section and navigation. |
+| Terminal context | Selected public profile/endpoint/trust/state. `Connect` or `Disconnect` is the sole connection primary; retained mismatch substitutes exact Forget. Profile management is a separate list-detail screen. |
+| Terminal task canvas | Exactly one auto-fit PTY with direct desktop input; narrow touch input only where required. `Clear screen` and `Fullscreen terminal` are subordinate terminal tools. SFTP/Remote files is a separate subordinate task within the same single connection, not another terminal/session tab. |
+| Settings | Category list plus one single-column detail form. Natural pairs such as Host+Port may share a row. Persistent global settings expose one truthful dirty/save owner; profile/preset objects each expose one. Surface style, Compact density, Reduce motion and Keep terminal awake are functional browser-local controls and visibly apply immediately. Diagnostics separately owns the session-only performance-metrics toggle; metric values and Activity rows, not the whole Diagnostics surface, are read-only. |
+| Python workspace | A distinct manual surface owns script list, New, Open, Save file, Run, Refresh output, Restart Python and Return to CardMind. Chat Pending separately owns the P5 one-shot full-source approval/handoff/attachment flow; neither surface pretends to execute Python in the artifact. |
+| Review rail | Clearly outside the product frame. It selects SD, session, pagination, Pending, SSH, Python and connector states for visual inspection only. Presence/heartbeat scenarios live here, not in product Settings. It contains no product action and makes no backend/timer/persistence claim. |
+
+Chat message intent is not a generic disclosure. A labelled `Tools for this message` strip remains
+visible immediately above the prompt at every width. `Auto` and `No tools` are exclusive; toggling
+one or more of Web/Files/SSH/Python enters the Required subset. Each selection includes a visible
+check/text state, not color alone. Output limit remains compact and one-turn instructions remain
+reachable without covering the intent strip. With SSH eligible, an adjacent `Available SSH tools`
+explanation names arbitrary Command, SFTP list/read/write/move and the five fixed Safe Actions and
+states that CardMind chooses the exact allowed tool. Pending and Activity then show the exact tool.
+No direct Safe Action launcher or promised exact dispatch is added.
+
+### Action, state and pagination rules
+
+- Project manager alone owns New Project, Project bundle Import and Project bundle Export. Import
+  opens Shared Files/upload as a picker without transferring action ownership. Chat owns New chat
+  and Export Markdown only. Shared Files owns New text file and Upload only. A selected object never
+  repeats these collection controls.
+- Send becomes Stop only during streaming. Retry is attached to the failed request and displays the
+  retained intent and one-turn instruction snapshot it will reuse. Web Retry may accept a new
+  maximum-output value; leaving it blank uses the retained failed-request value.
+- Connect becomes Disconnect only when that lifecycle owns the terminal. Trust and mismatch replace,
+  rather than join, ordinary connection actions.
+- Labels are current-state verbs: Pin or Unpin, Archive or Restore, Link or Unlink. Destructive
+  actions are never duplicated or visually equal to the task primary.
+- Web collection footers use truthful available data: `Projects · 32 shown · Load next page`,
+  `Chats · 32 shown · Load next page`, `Shared files · 64 shown · Load next page`; loading disables
+  repeat, error changes the same control to `Retry loading …`, and EOF reads `All loaded … shown`.
+  The Chat footer is shipped; the Project and Shared-files footers carry an explicit `P6 gap` label
+  until P6-05 adds their missing reachable DOM consumers.
+  A remaining count appears only for archived messages where production supplies it, for example
+  `Archived history · 8 loaded · Load next 8 · 20 remaining`. Device keeps its shipped target and
+  direction labels such as `< Previous projects` and `Next projects >`.
+- File windows say Previous/Next section and show byte/section position as secondary state. They do
+  not expose an implementation `chunk` as a user object.
+- Empty, loading, validation error, connector failure, cancellation, timeout, partial success and
+  outcome unknown are rendered beside their owning object/action, not only in a five-second global
+  toast.
+- Project import visibly selects a bundle, validates, imports and activates. Python approval visibly
+  opens the exact complete source and returns to the same Pending identity before Allow once can be
+  chosen. These are UI routes, not simulated backend execution.
+
+### Responsive scroll and focus model
+
+- The shell is a `100dvh` grid. Global navigation, context bar and mobile navigation occupy grid
+  tracks, never fixed overlays. The work track is `minmax(0,1fr)`.
+- At 1280x720, the global rail, 280-320 px collection rail and flexible task canvas coexist. At
+  900x720, the global rail becomes icon-led and the object inspector is an explicit sheet. At
+  720x450, secondary actions move into named More menus while Chat composer and Terminal input retain
+  their own visible bottom track.
+- At 390x780/844 and 320x568, collection and selected object are separate routes with a labelled
+  Back action. The four primary destinations occupy a non-overlay bottom grid track. The Chat intent
+  controls use a two-row grid; the transcript scrolls independently above the persistent composer.
+  Terminal output similarly owns the remaining scrollable height above its touch input.
+- Independent bordered siblings have 16 px separation on desktop, 12 px on tablet and 8 px on
+  phone. They never share/touch an edge. Only one intentional segmented control may share an outer
+  boundary. The design uses one 4/8/12/16 spacing rhythm and one border language.
+- Opening a selected object moves focus to its heading. Back restores focus to the exact list row.
+  Sheets/dialogs trap focus, Escape closes, and close restores the invoker. Visible focus, selection,
+  warning and destructive meaning never depend on color. At 200% text, inner task regions scroll;
+  primary actions do not clip or become peer-button walls.
+
+### Device navigation decision
+
+Current production is an icon-led nine-destination carousel whose Left/Right transition calls
+`animateCarousel`; it consumes Esc on Home as a no-op. Architect selected a deliberately static
+replacement direction, not a grid and not a claim about shipped animation. Preserve exactly nine
+ordered destinations, one large unique procedural icon, the full selected label/status,
+previous/next neighbour names, `n/9`, and a high-contrast non-color-only focus marker. Product
+interaction preserves Left/Right/Enter plus explicit Esc no-op; the replacement adds no animation,
+extra framebuffer, widget system or theme. Every real destination/item/page must be visually
+inspectable through an external reviewer screen selector, while representative product interaction
+follows the real key owners. Static catalog prose remains mapping evidence, never behavioral proof.
+P6-only parity screens are visibly tagged.
+
+### Frozen artifact-only write set and resource/non-goals
+
+After Architect GO, replace the contents of exactly
+`C:\Users\84vs1\.codex\visualizations\2026\09\02\01a06386-22d5-7833-bb82-40a4f499f52e\p6-01-neutral-coverage-ia.html`.
+No production asset, generated header, route, state, schema, repository test, build, upload, Device
+state, extra artifact, external dependency or local server belongs to this correction. Existing
+production semantic IDs are reused where the action exists; exact P6 additions and reviewer-only
+controls receive explicit one-to-one mappings and cannot masquerade as shipped IDs.
+
+The replacement is one lightweight self-contained HTML/CSS/JS visual prototype. It holds only
+bounded sample records and presentation state needed to inspect routes/states; it does not simulate
+NVS, cursor storage, SSH, SFTP, Python execution, timers, heartbeats or cleanup. It embeds no
+self-authored pass counter, backend clone, arbitrary API-profile/preset capacity, default-deletion
+policy, user-defined Safe Action framework, PWA, terminal tabs, reconnect scheduler, Share center,
+Python jobs/package manager or future USB work.
+
+**Binding visual clarification received from Architect on 2026-09-03:** retain the corrected IA and
+all interaction/geometry owners, and develop the prior warm-light identity into a restrained USSR
+laboratory/measuring-instrument treatment. Use warm enamel/ivory work surfaces, graphite instrument
+and terminal wells, dark ink, muted oxide/rust primary, restrained signal green/teal for selected or
+healthy state, amber warning and red danger. Panels are crisp square/soft-radius with calibrated
+4/8/12/16 spacing, compact technical labels and mechanical-looking but accessible controls. This is
+a token/component correction, not another structural rewrite or theme framework. No all-dark
+cyber-terminal styling, propaganda/military styling, faux aging/noise, decorative screws, gratuitous
+gauges/LEDs, Cyrillic gimmicks, gradients/glow/glass/pill soup, oversized empty cards, decorative
+dashboards or monospace body copy. Preserve recognizable identity except for the smallest contrast
+or semantic correction; check contrast and warning/danger distinctions before freezing the hash.
+
+### Small requirement-derived proof matrix
+
+| Proof | Required observation |
+| --- | --- |
+| Source mapping | An inventory generated independently from `ROADMAP.md`, final P3/P4/P5 traces and actual shipped Device/Web producers plus reachable consumers maps source -> matrix -> artifact for every user action, required state/legal outcome and forbidden effect. Reverse traversal maps every artifact control to one exact shipped owner or explicit P6 gap. The check fails when source behavior is absent from both matrix and artifact; removed/diagnostic/static-only items never appear as shipped, and old literal counts are absent as acceptance. |
+| Reachability/ownership | One deterministic traversal starts from each meaningful noun and covers every product action, secondary control, named More disclosure, collection footer, sheet/dialog decision and reviewer route. Every included control opens its screen or changes presentation state, is in-view and operable; no inert control or catalog sentence counts. The context bar, Project manager, Chat, Shared Files, selected object, task and danger actions each have exactly one owner. |
+| Composer/Pending/Activity | Six message-intent choices, W/F/S/P unions, selected text/check state, denied/unavailable error, durable-send Auto reset and Retry's fixed intent/instructions plus optional Web maximum-output override are inspectable. File diff, exact SSH/Safe Action, complete Python source, stale/reboot acknowledge and every Activity field have reachable variants. The separate manual Python workspace exposes script list/New/Open/Save/Run/Refresh/Restart/Return without simulating execution. No fake exact-tool launcher exists. |
+| Collection semantics | Shipped Chat paging and explicitly P6-labelled Web Project/Files paging scenarios demonstrate target, direction, loaded count, disabled loading, advancing cursor/page, EOF, empty, error/retry and preserved selection; history adds its real bounded cursor/remaining semantics. Project Import/Export stay in Project manager, Chat exports Markdown only, and Shared Files owns New text/Upload only. Last Project/Chat deletion and Pin/Archive coupling match production. |
+| Files/terminal/settings | Uploaded text remains editable; bundle/binary/link restrictions, explicitly labelled Web Link/Unlink gap and QR bounds are visible. Terminal preserves direct typing, auto-fit, lifecycle priority, profile locking and error/partial/log/SFTP states. Models populate the actual field; optional providers stay independent. Surface style, Compact density, Reduce motion and connected-visible Keep awake visibly apply; the session-only Diagnostics metrics toggle is operable while metric values and Activity rows remain read-only. |
+| Responsive geometry | The exact same reachability traversal runs without omissions at 1280x720, 900x720, 720x450, 390x780, 390x844, 320x568 and 200% text. Automated bounds plus screenshots show no horizontal overflow, border contact, clipped focus/action/footer/dialog or nav occlusion; Chat composer and Terminal input remain visible. A fresh human visual review checks hierarchy, alignment, the 4/8/12/16 spacing rhythm, typography, palette and absence of prohibited synthetic motifs including gradients, glass, glow, pill soup, oversized empty cards and decorative dashboards. |
+| Keyboard/focus/Device | Web native tab order, focus return and Escape behavior pass at every frozen viewport and 200% text. Device Home shows the proposed static presentation while preserving the shipped nine-item order, neighbour labels, `n/9`, non-color focus, Left/Right/Enter and explicit Esc no-op; ordinary lists clamp, Chat-only G0/Fn+8 and every nested screen/state are inspectable; fatal remains blocking. No claim says the shipped carousel is static. |
+| Product/reviewer isolation | Reviewer state/presence selectors remain outside the product frame, never change product action inventory and make no runtime/persistence claim. Static and runtime checks prove one self-contained artifact with no external assets or backend/timer/storage clone, exact SHA-256 and size below the retained 1 MiB ceiling, and zero page/console errors. No secret/internal ID, invented readiness, unsupported cleanup or exact-once external-effect claim appears. |
+
+P6-02 through P6-08 remain pending. The previously reviewed P6-02 package stays inactive and
+unstaged; it is not authorization to edit production while this reopened P6-01 gate is unresolved.
+
+### Artifact implementation clock checkpoint
+
+At `2026-09-03T22:09:26+03:00`, the replacement artifact's observed creation time is
+`2026-09-03T21:49:08+03:00`; the entire elapsed replacement/correction interval is therefore
+20 minutes 18 seconds, an upper bound on primary active time because it includes bounded tool
+waits. The longer open task turn also includes the mandatory pre-edit STOP/re-review wait and is
+not one uninterrupted geometry hypothesis. No 60-active-minute threshold has been reached.
+
+The last material approach change replaced per-container minimum-height/subtraction fixes with one
+outer viewport grid: reviewer row, `minmax(0,1fr)` product track and status row; the product fills
+that track, and the Web shell explicitly constrains its row. Dialog and fullscreen-terminal fixes
+use their existing shared inner grid owners. The exact edit timestamp was not independently
+retained, so the stall clock is conservatively still anchored at `21:49:08`, not reset by this
+description. The current hypothesis is competing intrinsic grid/minimum sizes, not missing
+breakpoints. The next proof is the unchanged all-control viewport traversal plus long-dialog and
+normal/fullscreen terminal bounds; no production or new test family is authorized.
+
+Checkpoint artifact SHA-256 is
+`A9B8D71A968024D9302E6B7944250A9E1B9850CD8CA03CAA26BB2AEBF3922AA6`, 107,114 bytes.
+This is an implementation checkpoint, not evidence-ready or closure acceptance.
+
+### Replacement candidate: observed proof and unresolved gate
+
+The interrupted candidate was verified unchanged at `2026-09-03T22:51:17+03:00`:
+SHA-256 `62FF2A4D5CA16B31073BE0E8D6940E0E86A148BF4B70E11E14ADFF1070BB3FFF`,
+131,296 bytes. A focused 320 px Python Pending observation then found its complete SHA-256
+forcing the dialog body from 284 px to 573 px horizontal scroll width. The correction changes only
+the existing metric pair to shrinkable grid columns and wraps long values. The resulting frozen
+candidate at `2026-09-03T22:55:45+03:00` is
+`7AF36EF66780E5C6EAB8CEFA719A96CB10C5E49BC09329CA59BA5EB405EAF025`, 131,350 bytes.
+No production asset, generated header, route, schema, repository test, build or Device state changed.
+
+Observed evidence is limited to the following, not a complete acceptance claim:
+
+- Source reconciliation corrected exact eight policies and separate Master/New-chat editors;
+  mandatory file replacement approval; source-bound 160-byte Python sample and matching SHA;
+  streaming Stop; Project selection/Archive labels; bounded direct terminal typing/paste;
+  SFTP source/destination selection; Web-key temporary-upload cleanup wording; Settings model,
+  range and voice fields; manual Python selection/New/confirmation routes. Subsequent exact-boundary
+  changes exposed multi-link, QR invalid/oversize, SSH lifecycle, independent service/SD states,
+  current-view Refresh and rejected-import fixtures. These statements describe mapped controls,
+  not verified real-device behavior or a blanket all-control pass.
+- The warm-light candidate's evaluated color pairs have contrast ratios: body ink/paper 13.30,
+  muted/paper 6.40, muted/canvas 5.66, disabled text/background 4.91, primary rust text 6.91,
+  selected teal text 7.32, teal/selection 6.09, amber/warning 6.01, red/danger 5.70, terminal text
+  11.66; meaningful neutral border/paper 3.82 and border/canvas 3.37. This is token-pair evidence,
+  not proof of every composited/focus state.
+- The same Chat, long Project-settings dialog, normal terminal, fullscreen terminal and Escape
+  traversal was observed at 1280x720, 900x720, 720x450, 390x780, 390x844 and 320x568. Document
+  width/height stayed within the viewport; composer/input/dialog footer remained in view; the outer
+  dialog had no second scroll owner. At 720x450 terminal output grew from 78.09 px to 168.72 px;
+  at 320x568 it grew from 90.39 px to 217.11 px. Escape restored normal terminal at each size.
+- On the final candidate, every externally selectable Web presentation state was then rendered
+  separately at each of those six sizes. Document width and the dialog/task/transcript/terminal
+  regions had no horizontal overflow and the captured console error/warning lists were empty.
+  This checks state rendering, not every secondary action, field or keyboard path. An earlier
+  overlong batch timed out and is excluded; only completed per-viewport results support this claim.
+- The all-control check **failed** on selected SSH identity: at 1280x720, Reset -> Terminal ->
+  `Lab server` -> `Manage selected profile` showed the correct task context
+  `Lab server / engineer@192.0.2.20:22`, but `cmSshName`, `cmSshHost` and `cmSshUser` showed
+  `Field gateway`, `192.0.2.10` and `operator`. The artifact's `renderDialog('ssh-profile')`
+  hardcodes a different sample. Shipped selection/save ownership is
+  `assets/web_console.html:141-144`; this is P6-01 artifact ownership, not a firmware defect.
+  The frozen candidate is therefore not evidence-ready; no production or oracle change follows
+  from this failed observation.
+- The available native `ctrl+plus` key was rejected by the browser tool. The documented Playwright
+  `Control+=` path left the actual 1280x720 viewport, device-pixel ratio and 14 px body / 20 px
+  heading unchanged. A 200%-text result is **not verified**. No DOM/style injection or artifact
+  test-only zoom mechanism was added.
+- The fresh visual specialist could not receive inherited screenshot images and had no browser
+  surface; documented hidden-tab creation also failed. It issued no visual verdict. Architect
+  explicitly took ownership of the independent visual verdict and any no-artifact-change image
+  delivery. No screenshot/export framework or second review artifact was created.
+
+P6-01 remains the sole `in_progress` row; P6-02..P6-08 remain `pending`. There is no independent
+visual GO, all-control/200%-text pass, completion mark, staging or commit for this candidate.
+
+Exact-owned review cleanup was observed at `2026-09-03T23:04:03+03:00`: the primary's temporary
+browser tab was closed and its viewport override reset. PID `51644` was revalidated against the
+bundled Python executable, exact artifact directory and port `65432`, then stopped; port `65432`
+had zero remaining listeners. Other browser tabs and Architect's server were untouched. No Device
+fixture, API credential or Wi-Fi configuration was read or changed by these artifact checks.
+
+## P6-01 consolidated closure STOP after system restart
+
+**Recorded:** 2026-09-07T13:19:57+03:00 after Architect's fresh direct browser/source review of
+frozen artifact SHA-256 `7AF36EF66780E5C6EAB8CEFA719A96CB10C5E49BC09329CA59BA5EB405EAF025`.
+Before any resumed artifact edit, test or diagnostic, the app's visible plan was restored from this
+matrix with P6-01 as the sole `in_progress` row and P6-02..P6-08 `pending`. Production, repository
+tests and P6-02 remain frozen. The only permitted correction write set is this trace and the existing
+task-owned P6-01 artifact; no new artifact, production route, persistence, framework, backend
+simulation, build, upload or Device mutation is authorized.
+
+Architect's consolidated STOP replaces the prior candidate's unresolved closure gate with one
+coherent artifact correction contract:
+
+1. Bind each selected object's identity to its editor and legal outcomes: the selected SSH profile
+   populates its own fields; New/Edit/Make default/Delete remain distinct; Project rename never
+   duplicates, Project delete selects a remaining record and creates `Default` only after deleting
+   the last; Chat delete retains/selects another when present and Clear visibly empties the
+   transcript; Shared-file rename removes the old identity; Previous/Next are disabled at their
+   respective section boundaries; bounded API profiles and model presets expose reachable New and
+   Delete controls.
+2. Preserve one action owner: Chat settings has one save action for instructions and settings, and
+   Wi-Fi has one state-dependent Scan/Refresh action rather than two controls sharing one handler.
+3. Render loading, empty, error/retry and EOF at the owning Chat, Project or Shared-file collection;
+   a later loading/error state replaces retained EOF/page presentation. Created and selected records
+   expose truthful `aria-selected`, and narrow Back restores focus to the exact selected row.
+4. Make representative required routes operable: Device F2 capabilities uses its real key/control;
+   Device New Project and New Chat reach their creation flows; Device Project Import and Web
+   uploaded-bundle Import both show select, validate, import and activate; an uploaded unvalidated
+   bundle always retains a reachable validation step.
+5. Treat lock, expiry and lockout as non-dismissible authentication gates; localize missing/full/
+   removed/replaced SD effects to Shared Files actions; distinguish core-provider outage from
+   optional Search. Label reconnect as a P6-04 gap, waiting/presence/lifetime as P6-03 gaps and every
+   missing API-profile/model-preset field or control as a P6-02 gap. Project settings must either
+   render its claimed linked-file inventory or make no such claim.
+6. Reuse the locked phone route/Back model at 320x568 for manual Python list and editor so the panes
+   cannot overlap. Give the selected Shared-file editor the remaining task track and compact its
+   footer while retaining Previous, Next and position.
+7. Preserve the warm enamel/rust/teal USSR-instrument palette, one-scroll dialogs and terminal
+   geometry. Add no new design direction, framework, breakpoint family, backend simulation or
+   explanatory source prose. A 200%-text result must use a legitimate browser/user scaling method
+   with no DOM, style or artifact injection; otherwise it remains explicitly unverified.
+
+The correction approach is one identity-bound presentation model plus one owner-local collection
+state per bounded sample collection, reusing the existing routes, handlers and `<=640px` route/Back
+breakpoint. Expected observations are: deterministic CRUD identities and forbidden effects; one
+handler per named action; owner-local collection-state replacement; every required Web/Device route;
+non-dismissible auth and local degraded-state ownership; labelled P6-02/P6-03/P6-04 gaps; no
+320x568 pane collision; usable file-editor height; unchanged terminal/palette/dialog semantics; and
+reverse mapping of every control to one shipped owner or explicit P6 gap. The same all-control,
+focus-return, contrast and geometry traversal must run at 1280x720, 900x720, 720x450, 390x780,
+390x844 and 320x568 on one frozen SHA. This section records the correction contract, not acceptance
+evidence, completion, staging or commit authority.
+
+## P6-01 frozen correction evidence and closure-review request
+
+**Evidence frozen:** 2026-09-07T19:11:01+03:00. The existing task-owned artifact at
+`C:\Users\84vs1\.codex\visualizations\2026\09\02\01a06386-22d5-7833-bb82-40a4f499f52e\p6-01-neutral-coverage-ia.html`
+is SHA-256 `8D6DC3F262A174F197CEDA69CDE67823E432682259D02170FF1AF3EAA91087D0`,
+176,482 bytes. No source change followed this freeze. The repository production/test boundary,
+P6-02, build, upload and Device remained frozen.
+
+Observed evidence on this exact SHA is:
+
+- The fragment contains one parsing script, no document wrappers, no external-resource markup and
+  no fetch/XHR/WebSocket/EventSource, storage, timer or `sendBeacon` path. Its raw ownerless controls
+  are exactly the four presentation-review controls outside the product frame.
+- A fresh source reviewer found that the immediately preceding candidate rendered an accepted SFTP
+  path through `innerHTML` without escaping. The correction changes only the two SFTP dialog output
+  sites: Download Source renders `esc(state.remotePath+'/'+state.remoteEntry)` and Upload Destination
+  renders `esc(state.remotePath+'/…')`. With remote path
+  `/<button data-owner="forged-control">forged</button><img src=x>`, both dialogs rendered the entire
+  value literally and contained zero forged controls and zero
+  `img`/`iframe`/`object`/`embed`/`script`/`link`/`video`/`audio`/`source` nodes. The normal `/var/log`
+  route still rendered `/var/log/observations.txt` and `/var/log/…`; both dialogs had zero ownerless
+  controls.
+- Chat, Shared Files, Terminal and Settings were measured at 1280x720, 900x720, 720x450, 390x780,
+  390x844 and 320x568: all 24 cases had zero root horizontal overflow, rendered-control overlap,
+  ownerless product control or closed-menu exposure, and each retained a visible heading and first
+  action. Wide and narrow screenshots preserved the accepted warm enamel/rust/teal hierarchy.
+- The long Project-settings dialog was measured at all six sizes. It fit the viewport, retained a
+  visible header and footer, and `cmDialogBody` was its sole scroll owner in every case. The normal
+  and fullscreen Terminal route was also measured at all six sizes: fullscreen set
+  `cm-terminal-full`, hid collection/header/input, enlarged output with zero horizontal overflow,
+  and Escape restored the exact normal display state.
+- At 320x568, Chat Back restored focus to the exact `field` Chat row, Shared Files Back restored
+  focus to the exact `route.md` row, and Escape from Chat settings restored its exact opener. The
+  unchanged evaluated text/background pairs range from 4.91:1 for disabled text through 13.30:1
+  for primary text on paper.
+- The exhaustive identity/CRUD, action-owner, collection-state, required Web/Device route,
+  authentication, degraded-SD/provider, import, QR, long-file and narrow-Python observations were
+  obtained on the immediately preceding candidate. The only subsequent source delta is the two
+  escaped SFTP output expressions above; a fresh proof red-team independently reconciled that delta,
+  the current source and the repeated same-SHA security/layout/dialog/terminal/focus observations
+  against all seven consolidated STOP clauses.
+
+The original source reviewer rechecked only its own blocker on the exact hash above and returned
+`GO-to-request-Architect`. A different fresh proof red-team independently verified the exact hash and
+size and returned `GO-to-request-Architect`; it confirmed that missing API-profile/model-preset
+capacity remains a P6-02 gap and the only numeric five-item cap is inherited SSH-profile behavior.
+Native 200% text remains explicitly **unverified** because the available browser surface exposes no
+legitimate user/browser scaling method; no DOM, style or artifact injection was used. This is an
+evidence-ready request for Architect review, not P6-01 completion, staging or commit authority.
+
+Exact-owned review cleanup completed at `2026-09-07T19:14:04+03:00`: the temporary browser viewport
+override was reset, the task-created preview tab was closed, and the exact bundled-Python preview
+process serving port 60740 was stopped. Ports 60740 and 64901 then had zero listeners. No other
+browser tab or process was changed; no Device fixture, API credential or Wi-Fi configuration was
+read or changed.
+
+## P6-01 user-directed instrument-style correction
+
+**Recorded:** 2026-09-07T19:20:59+03:00. A new explicit user direction supersedes the closure request
+for artifact SHA-256 `8D6DC3F262A174F197CEDA69CDE67823E432682259D02170FF1AF3EAA91087D0`.
+That artifact remains a frozen functional/evidence baseline, not a closure candidate. Its source and
+proof `GO-to-request-Architect` verdicts do not transfer to a later hash. P6-01 remains the sole
+`in_progress` row; P6-02 through P6-08 remain `pending`, and no completion, staging, commit or
+production authorization follows from the superseded request.
+
+The binding correction is a functional interpretation of USSR measuring instruments, not museum
+costume or generic generated-console styling:
+
+- use warm painted-metal/ivory work surfaces, graphite or near-black instrument zones, restrained
+  green/teal and amber indications, and red only for danger, error or deletion;
+- strengthen a crisp instrument hierarchy with thin frames/sections, utilitarian typography,
+  monospace only for data/terminal content, and tactile, unambiguous button, switch and indicator
+  states;
+- group actions by object and frequency: the primary action stays beside its object, secondary
+  actions form one compact owner-local group, and rare or dangerous actions remain behind an
+  explicit disclosure and confirmation;
+- preserve every prior functional route and legal state: identity-bound CRUD, one owner per action,
+  owner-local loading/empty/error/retry/EOF, truthful selection and focus return, authentication
+  gates, degraded SD/provider states, Device/Web routes, imports, Terminal/fullscreen geometry,
+  separate mobile Python routing and the usable Shared-file editor;
+- show no hidden feature, inert or false product element, decorative meaningless scale, pervasive
+  fake screw/marking, glow, gradient, effect shadow, card-for-card's-sake treatment or total
+  monochrome. Keep monospace out of normal prose and navigation.
+
+The correction stays inside the existing task-owned HTML/CSS/JS artifact and this trace. It adds no
+framework, route, schema, asset, backend simulation, production file, test, build, upload or Device
+mutation. Responsive proof must include 320 px, 640 px and desktop Web layouts and the separate
+240x135 Device presentation model, with an explicit artifact-size/resource budget. Before the first
+artifact edit, the primary must freeze the exact selector/markup write set, non-goals and smallest
+functional/state/interaction/layout proof, then obtain one bounded independent pre-edit review.
+
+### Frozen pre-edit design, proof and write set
+
+**Frozen:** 2026-09-07T19:36:05+03:00 after two bounded read-only inventories of the existing
+artifact. The current root-cause hypothesis is not a missing UI framework: the retained information
+architecture already owns the required functions, but its visual tokens still read as soft
+warm-card UI, several controls violate the new frequency hierarchy, phone CSS hides the Diagnostics
+health entry, and some Device selections report only in the outside reviewer note instead of the
+240x135 product surface. Those are P6-01 artifact defects; production and later P6 rows do not own
+them.
+
+The exact artifact write set is:
+
+1. In the existing `<style>` block only, change the shell/accent tokens so primary and generic
+   interactive emphasis is teal rather than red; make the navigation rail and existing data/code
+   wells graphite with ivory content; reduce existing control/panel/dialog radii; remove the menu and
+   selected-navigation shadows; retain native browser focus behavior and add only a pressed-state
+   inset; make Device navigation/prose sans-serif while keeping code, file data and terminal output
+   monospace. Red remains exclusive to existing danger/error/delete classes. No spacing grid or
+   breakpoint family changes.
+2. Add only three shared grouping classes: `cm-owner-actions` for a compact local group,
+   `cm-owner-disclosure` for a static rare-action disclosure and `cm-owner-danger` for its separated
+   danger subsection. Reuse existing `cm-row`, `cm-stack`, `cm-settings-section`, `cm-menu` and
+   `cm-danger` owners everywhere else.
+3. In existing render strings, keep Chat unchanged; group Project Import/Export under one
+   `Project transfer` disclosure while New Project remains primary; keep text Save primary and make
+   Download primary for selected binary/bundle files without duplicating it in More actions; split
+   Wi-Fi discovered-network and selected-network content while keeping the one state-dependent
+   Scan/Refresh owner and Connect beside its fields; put hidden/manual Wi-Fi, firmware maintenance
+   and Diagnostics export behind named static disclosures; give API profile, model preset and SSH
+   profile secondary actions compact owner-local groups and put their unchanged Delete action behind
+   explicit target-bearing confirmation/disclosure; wrap changed-host-key Forget in an explicit
+   confirmation disclosure. Preserve every existing `data-owner`, `data-action`, `data-open`, field
+   ID and dialog focus-return owner.
+4. At `<=640px`, make the existing context bar a two-row layout and keep the single Diagnostics
+   health, Pending and Session controls visible; do not duplicate or rehome them. Preserve the
+   intentional collection/detail route hiding and exact Back restoration.
+5. In the existing Device renderer/handler only, preserve every screen ID, item string, item order,
+   parent and key meaning. Add visual group breaks derived from existing item meaning, show the
+   already-owned `deviceStatus` in the Device footer, map each currently unmapped visible list action
+   either to an existing screen or to a concise visible product-state outcome, and make Enter on the
+   existing confirmation/input screens return through their existing parent with an explicit visible
+   outcome. `Forget trusted host key` is the one existing list action that additionally requires an
+   exact-target two-step transition on `SshProfileActions`: first Enter stores and displays a
+   confirmation for `Field gateway` in the existing `deviceStatus`/footer, Esc clears it without an
+   outcome or navigation, and a second Enter produces the explicit visible forgotten-key outcome.
+   This is presentation-state reachability, not a new route, data model or simulated external effect.
+
+The artifact resource ceiling is 180 KiB (184,320 bytes), leaving 7,838 bytes above the superseded
+176,482-byte baseline. It must remain one self-contained fragment with one inline script and no
+external asset, font, framework, request, storage, timer or backend clone.
+
+The smallest proof is frozen as follows:
+
+- a source inventory must map every Web and Device control to exactly one existing owner, handler,
+  dialog, existing screen or visible Device outcome, with no duplicate action and no reviewer-only
+  response counted as product behavior;
+- rerun the retained identity-bound Project/Chat/File/SSH/API/preset CRUD, owner-local collection
+  loading/empty/error/retry/EOF, auth/degraded/provider/import/QR/long-file/mobile-Python and required
+  Web/Device route observations on one new exact SHA;
+- traverse Chat, Shared Files, Terminal and Settings at 1280x720, 900x720, 720x450, 640x720,
+  390x780, 390x844 and 320x568; verify every rendered control is reachable and owned, health remains
+  visible at and below 640 px, no horizontal overflow/overlap/closed-menu exposure occurs, and capture
+  desktop, 640 px and 320 px screenshots;
+- traverse every Device screen through the separate 240x135 model; verify selected/action/group
+  hierarchy, key outcomes and bounds without treating the scaled reviewer frame as shipped pixels;
+  for `Forget trusted host key`, verify that initial activation has no effect, Esc preserves the
+  selected profile/key state and clears confirmation, and only the second explicit Enter produces the
+  exact-target visible outcome;
+- repeat the six retained long-dialog, normal/fullscreen-Terminal/Escape and exact focus-return checks,
+  add 640 px, re-evaluate contrast and red-use semantics, parse the script, scan self-containment and
+  size, and repeat hostile SFTP output tests. Native 200% text remains explicitly unverified unless a
+  legitimate user/browser scaling control becomes available.
+
+Non-goals are any new framework, screen/route/ID, schema, asset/font, storage or backend behavior;
+ornamental screws, labels or scales; gradients, glow, blur or effect shadows; animation; a second
+responsive model; action removal; renamed Device items; production/test/build/upload/Device work; or
+P6-02/P6-03/P6-04 implementation. This freeze is ready for one independent pre-edit review and is not
+authorization to edit the artifact until that reviewer returns GO.
+
+The first pre-edit reviewer returned `STOP` at `2026-09-07T19:45:49+03:00` only because the frozen
+generic Device-outcome rule did not guarantee confirmation for `Forget trusted host key`. The exact
+two-step `deviceStatus`/footer transition and confirm/cancel proof above are the complete correction;
+the reviewer may recheck this blocker once. No artifact edit has started.
+
+### Exact instrument-style artifact evidence and Architect-review request
+
+**Evidence frozen:** 2026-09-08T00:19:35+03:00. The original pre-edit reviewer rechecked only its
+host-key-confirmation blocker against the frozen design and returned `GO-to-edit`. The resulting
+task-owned artifact at
+`C:\Users\84vs1\.codex\visualizations\2026\09\02\01a06386-22d5-7833-bb82-40a4f499f52e\p6-01-neutral-coverage-ia.html`
+is SHA-256 `437FCE530511D4CF421D70B3E4EB2E4F7F1E414805B5ECB672B0C19DF721D154`,
+184,263 bytes, 57 bytes below the 180 KiB ceiling. The repository production/test boundary, P6-02,
+build, upload and physical Device remained frozen.
+
+Observed evidence on this exact hash is:
+
+- The fragment has one parsing inline script and one inline style, no document wrapper or external
+  resource, and zero executable fetch/XHR/WebSocket/EventSource/`sendBeacon`, browser-storage or
+  timer path. The DOM has zero duplicate IDs, ownerless product controls, external-resource nodes,
+  gradient/shadow/filter offenders or browser warning/error entries. The retained review footer
+  explicitly states that no backend action executes.
+- The warm enamel/ivory work surface, graphite instrument zones, muted teal selection/primary state
+  and amber warning state are retained. Red is confined to existing danger/error/delete semantics;
+  ordinary Device prose/navigation is sans-serif while terminal/data text remains monospace. The
+  selected `Forget trusted host key` state measures 7.32:1 contrast. Current-hash screenshots were
+  inspected at desktop, 640 px, 320 px and the separately scaled 240x135 Device model.
+- Chat, Shared Files, Terminal and Settings were rendered at 1280x720, 900x720, 720x450, 640x720,
+  390x780, 390x844 and 320x568. All 28 completed cases had zero clipping-aware control overlap,
+  occlusion, ownerless product control, closed-menu exposure or root horizontal overflow. The only
+  raw mobile over-width text was the deliberately hidden/ellipsis/nowrap heading or status line;
+  the root widths remained exact. At 720x450 the ready file editor was 23 px high, ended 16 px before
+  the footer and 28 px before `Next`. Linked and full-storage notice content is deliberately clipped
+  by the owning `overflow:auto` body rather than painted over the footer; focusing the full-storage
+  editor scrolled that body to 39.2 px and exposed the editor at y=265..282 before the y=299 footer,
+  again leaving 16 px. A bounded read-only layout reviewer confirmed that no further CSS change is
+  required and that a flex replacement could collapse the constrained editor or disturb binary and
+  bundle fill behavior.
+- Web preset selection changed the form to `Fast` / `gpt-5-mini` / `1024` while the active Project
+  remained `baseline-model` / `3072`; `New preset` also left those Project values unchanged. Only
+  `Apply to active project` changed the Project to `gpt-5-mini` / `1024`. The handler update object is
+  exactly `{model:p.model,output:p.output}`, the Project record schema has no preset-reference field,
+  and the success message names `Fast`, `Field notebook`, model and output. With `Shared storage full`,
+  the visible error named `Field notebook` and preserved `failure-model` / `3333`.
+- On Device `MODEL PRESETS`, activating `Field notes` or `New preset` changed only the visible local
+  outcome and preserved Project `device-baseline` / `3456`. The complete label
+  `Apply to active project` fit the 240x135 screen. First Enter displayed
+  `Apply to Field notebook? Enter again · Esc`; Esc cleared the prompt and preserved the Project.
+  A fresh two-discrete-Enter path produced
+  `Applied Field notes to Field notebook: gpt-4.1-mini / 2048`; the native keydown path passes
+  `event.repeat` and the handler rejects repeated Enter/Esc. Full-storage confirmation instead
+  displayed `Apply failed; Field notebook unchanged.` and preserved `device-fail-model` / `3555`.
+- At both requested 320 px and 640 px widths, Terminal Back hid the task and Connect control; selecting
+  exact profile `lab` exposed both, rendered heading `Lab server`, and focused `cmViewHeading`. The
+  direct terminal-input path now shares the existing 8,192-character bound with submitted input and
+  paste: an 8,192-character buffer remained 8,192 after direct `Z` with `Z` at the tail, and Backspace
+  reduced it to 8,191. Source inspection found exactly three `.slice(-8192)` paths.
+- The blocking-auth dialog remained open with its close control hidden after three native Escape
+  presses, and Unlock closed it. QR rejected invalid UTF-8, empty text and 321 bytes while accepting
+  the 14-byte valid value. At 320x568 the manual Python list and editor remained mutually exclusive;
+  `sample.py` opened in the main pane, restart returned `Restart confirmed · device not restarted`,
+  and the root stayed 288/288 px. The Device host-key Forget path again showed its exact first prompt,
+  Esc cancel, fresh first prompt and second-Enter `Forgot key: Field gateway` outcome.
+- The complete current 88-screen Device selection pass had no missing title, selection or body-bound
+  anomaly. The retained full Device item and Web identity/CRUD, owner-local collection, import,
+  degraded-provider/SD, long-file, SFTP, focus-return and required-route traversals remain causal from
+  immediate predecessor SHA-256
+  `5E7BC5E45E9D0783631C0520AC570B1880E7EC6AFF36DE6B0B4066011361142E`: the only later behavioral
+  edits are the directly re-executed preset Apply, mobile SSH-selection and terminal-boundary paths;
+  the remaining deltas are the verified radius/reviewer-note compaction and file-row contraction.
+
+The original final-code reviewer rechecked only its SSH-selection and direct-terminal blockers on the
+exact frozen hash and returned explicit `GO`. A different fresh proof red-team rechecked only the
+Web/Device preset-Apply blocker on the same exact hash and returned explicit `GO`, including inert
+selection/creation, two-discrete-Enter/repeat semantics, failure preservation, no preset reference,
+240x135 fit and size budget. Native 200% text remains explicitly **unverified** because the available
+browser surface exposes no legitimate user/browser scaling method; no DOM/style test injection was
+used. This is an evidence-ready request for Architect review, not P6-01 completion, staging or commit
+authority.
+
+Exact-owned review cleanup completed at `2026-09-08T00:19:35+03:00`: the temporary viewport override
+was reset; task-owned in-app browser tabs 2 and 3 were closed; all task-owned preview processes were
+stopped; and ports 49578, 54134, 57562, 56894, 61509, 51223, 54761, 53271, 62049, 52202, 60740,
+64901, 63335 and 55567 had zero listeners. No other browser tab or process was changed. No Device
+fixture, API credential or Wi-Fi configuration was read or changed.
+
+### Architect closure STOP and correction lock
+
+**Recorded:** 2026-09-08T00:51:51+03:00. Architect personally reviewed exact artifact SHA-256
+`437FCE530511D4CF421D70B3E4EB2E4F7F1E414805B5ECB672B0C19DF721D154` and returned mandatory
+closure `STOP`. Its USSR measuring-instrument visual language is accepted and frozen: the warm
+ivory/painted-metal surfaces, graphite instrument wells, restrained teal/amber, red-only danger
+semantics and modern readability must not be redesigned. P6-01 remains the sole `in_progress` row;
+P6-02 through P6-08 remain `pending`; production, repository tests, staging, commit, build, upload
+and physical Device work remain frozen.
+
+The correction is limited to the existing task-owned HTML/CSS/JS artifact and this trace and owns
+exactly these seven defects:
+
+1. `Clear messages` leaves `chat.cleared=true`, so a later accepted Send stays behind the empty
+   transcript. Accepted Send must clear that flag and display the new message.
+2. Canceling uploaded Project-bundle review retains only a filename and offers no owner-local resume
+   or validate path. The actual selected upload must remain in presentation state and Import must
+   expose truthful Resume review/Validate without a new route or framework.
+3. Reused Device collection screens are not bound to selected identity/type: Project, Chat, file,
+   SSH, network/source/SFTP and Model Preset paths reuse hard-coded sample identities; binary
+   `capture.bin` exposes text actions; `Fast` is never bound before Apply. Existing screen IDs, item
+   strings and routes must remain while their render/handler data becomes selection- and type-bound.
+4. Web file-window `Next` changes only a counter over unchanged full content, Save replaces the full
+   file, and Save copy as converts every source to text. At least two distinct 1 KiB windows must be
+   modeled; Save changes only the visible window and preserves the other; copies preserve selected
+   text/binary/bundle kind and content semantics.
+5. Native dialog close/reopen can let a stale close event clear the newly opened dialog state;
+   in-dialog transitions must avoid close/reopen or guard that exact event. Document key handling
+   must not consume Enter from native controls, and an open dialog must own Escape before terminal or
+   Device background shortcuts.
+6. The visible Waiting session summary is future P6-03 behavior without a P6-03 marker. Only the
+   future Waiting/lifetime state receives that marker; shipped authentication states remain unchanged.
+7. Constrained-height layouts are not operable: the prior categorical no-overlap claim missed
+   collapsed Chat/list/transcript, Shared-file list/editor, Python list/output and Device screen/key
+   geometry at 720x450, plus the 320x568 Chat transcript. Existing flex/grid min-size and overflow
+   owners must be corrected without a new breakpoint family or a visual-language change.
+
+The categorical predecessor-evidence statements at lines 1414-1424 and their causal-reuse claim are
+withdrawn for these affected transitions and constrained layouts. They remain historical observed
+measurements only, not acceptance evidence. Before the first artifact edit, the primary must finish
+the producer/consumer and persisted-presentation inventory, freeze the minimal typed state/transition
+design, exact selector/function write set, size recovery and direct proof matrix, and obtain one
+bounded independent pre-edit design review. Closure requires one new exact SHA, direct proof of the
+seven corrected transitions, 720x450/320x568/240x135 geometry, syntax/self-containment/size/console/
+style regression, a fresh bounded code/proof review, a separate fresh visual review, exact-owned
+cleanup and another personal Architect GO.
+
+### Frozen Architect-STOP correction design and proof
+
+**Frozen:** 2026-09-08T01:10:34+03:00 after two bounded read-only inventories of exact STOP
+artifact SHA-256 `437FCE530511D4CF421D70B3E4EB2E4F7F1E414805B5ECB672B0C19DF721D154`.
+The observed defects are local to the artifact's existing presentation state, renderers, delegated
+handlers and constrained grid owners. No production, persistence, backend, route-family or later-row
+owner is implicated.
+
+The minimal state and transition design is frozen as follows:
+
+1. Accepted `#cmComposer` submission sets the selected chat's existing `cleared` field to `false` in
+   the same update that records the accepted message. Empty or rejected submissions do not change it.
+2. Project Import adds one nullable presentation-only `importUpload` value containing the selected
+   browser `File`. Upload Review retains that object; Cancel is a real dismissal but does not erase
+   it; reopening the existing `project-import` dialog exposes `Resume review` to the existing
+   `project-import-review` route and its existing Validate action. Shared-bundle selection and a
+   successful import clear the upload object. Validate and Import reject a missing or mismatched
+   upload without changing the active Project. No filename-only upload is accepted.
+3. The existing file-record `content` field becomes a list of bounded UTF-8 text-window strings;
+   binary and Project-bundle records have no text windows. The selected seed text file has two
+   distinct generated 1,024-byte ASCII windows. `filesView()` renders only `content[fileSection]`;
+   Previous/Next clear the old editor draft; Save rejects a replacement over 1,024 UTF-8 bytes and
+   replaces only the selected list element while preserving every other window and the current
+   section. QR joins text windows. New/upload producers use the same representation, and Save copy
+   as clones the selected record's kind, size, bytes and content rather than converting it to text.
+4. Device collection rows project stable identities from existing Project, Chat, file, SSH, API
+   profile, model-preset and import state; only small immutable Wi-Fi/source/remote-entry records plus
+   `deviceWifiId`, `deviceSourceId` and `deviceSftpDirection` are added where no selected identity
+   exists. One pure row projection binds a selected stable ID before following the existing route;
+   one pure screen projection derives existing screen titles, text and action visibility from that
+   selected record. All existing screen IDs, parents, action strings and routes remain. Binary and
+   bundle file actions omit text-only operations. Device preset selection binds `modelPresetId`
+   before the unchanged two-Enter Apply path. No parallel generic selection store is added.
+5. The three Project mutations that currently close and immediately reopen a dialog instead commit
+   while the modal stays open and replace it through existing `showDialog()`. Genuine close events
+   retain their current listener. Document key handling keeps blocking-auth Escape first, then gives
+   every open dialog exclusive key ownership before terminal/Device shortcuts; outside a dialog,
+   native interactive controls retain Enter before Device handling.
+6. Only the visible Waiting session summary receives the existing `P6-03` gap marker. Ready,
+   expired, locked, lockout and invalid-auth summaries retain shipped wording and no new marker.
+7. At the existing `max-width:740px` boundary, current collection/task grids protect one
+   control-height middle viewport and let their header/footer owners shrink and scroll; current file,
+   Python and Device owners receive the smallest min-height/overflow corrections. At the existing
+   mobile boundary the file body scrolls instead of clipping. `cm-device-wrap` uses safe centering so
+   over-tall content starts at a reachable scroll origin. No breakpoint, color, radius, typography,
+   spacing language or navigation model is added.
+
+The exact artifact write set is the existing style rules for `cm-collection`, `cm-task`, their
+header/footer owners, `cm-file-body`, `cm-file-editor`, `cm-python-side`, `cm-python-files`,
+`cm-python-main` and `cm-device-wrap`; seed/state and selected-record helpers; `filesView()`,
+`render()`, the four Project Import dialog cases, Device row/screen projections, `renderDevice()`,
+`deviceKey()`, `scenarioChange()`, affected `action()`/`genericConfirm()` branches, and the root
+click/submit/keydown delegates. The HTML shell, DOM IDs, Web route set, Device screen-ID set,
+production files and repository tests are excluded.
+
+The 184,320-byte ceiling is unchanged. Space will be recovered only by removing observed unread
+`fileKind`, `fileSaved`, `settingsSaved` and `deviceImportStep` presentation fields, removing the
+unreachable `choose-import` action, deleting the three faulty close calls, and consolidating
+later-overridden duplicate declarations inside the existing 740/640 media rules. Consolidation must
+preserve the prior computed style except for the frozen constrained-height corrections; no product
+function, state option or proof route may be removed to meet the ceiling.
+
+The smallest direct proof on one new exact SHA is:
+
+- Clear → Confirm → Send displays the accepted message and restores the non-cleared transcript;
+- Upload Project bundle → Review → Cancel → reopen Import → Resume review → Validate works from the
+  same retained `File`, while an absent upload cannot validate/import and activation occurs only
+  after successful Import;
+- Device directly binds Bench notes, Collecting observations, `capture.bin`, Lab server and Fast,
+  plus Guest Wi-Fi, ESP32 power-management source, remote `capture.bin`, Field backup API profile and
+  the existing Project-bundle row; every derived target is visible, `capture.bin` has no text action,
+  and Fast is selected before Apply;
+- Web file Next shows a distinct second 1 KiB window, saving it preserves the first, navigation does
+  not leak an unsaved draft, and text/binary/bundle copies preserve kind/content semantics;
+- in-dialog Project mutation followed by pagination retains dialog ownership; native button Enter
+  cannot trigger Device input; open-dialog Escape cannot change terminal fullscreen or Device state;
+- the P6-03 marker appears on Waiting/lifetime only and not on shipped authentication summaries;
+- at 720x450 and 320x568, direct geometry proves a full control-height list/transcript viewport,
+  usable file editor/footer and Python list/source/output, zero bounding-box overlap or root horizontal
+  overflow; at 720x450 the Device scroll origin exposes its caption/screen and scrolling exposes all
+  keys/detail while the screen retains 240:135 bounds.
+
+After those transitions, rerun syntax, duplicate-ID/ownership, self-containment, size, console,
+closed-menu, style-token, contrast/red-use and exact-owned cleanup checks. Then obtain one fresh
+bounded code/proof review and a separate fresh visual review limited to these corrections before
+requesting another personal Architect closure review. This freeze is not permission to edit until
+one independent pre-edit reviewer returns explicit GO.
+
+### Architect-STOP correction pre-edit GO clarification
+
+**Recorded:** 2026-09-10T02:39:38+03:00. The independent bounded pre-edit review returned
+`GO-to-edit` after requiring these two exact clarifications; Architect accepted them and requires no
+additional pre-edit review round:
+
+1. For every text file, `content` is the complete authoritative modeled content as a non-empty list
+   of UTF-8 windows. Section count, cumulative displayed byte offsets/ranges, total bytes and visible
+   size are derived only from that list; the former 6,420-byte sample metadata cannot survive when
+   the content is two 1,024-byte windows. Save replaces only `content[fileSection]`, recomputes the
+   derived metadata, retains that section and preserves every other window. Navigation clears only
+   the outgoing editor draft. Save copy as clones text windows and preserves the selected kind;
+   binary and Project-bundle files have no editable text windows. This remains presentation-only and
+   does not simulate backend or storage behavior.
+2. A single control-height middle track is not an acceptance oracle because it would permit the
+   already rejected 44–47 px Chat slit. Existing header/footer/composer/scroll owners and the
+   existing 740/640 boundaries must instead leave a readable, scrollable content region with
+   complete visible text lines and reachable surrounding controls. Direct visual and geometry proof
+   at 720x450 and 320x568 must explicitly reject the prior Chat/list/file/Python slits and Device
+   overlaps. No arbitrary new pixel threshold, breakpoint, framework or visual-language change is
+   authorized.
+
+All other frozen corrections, write-set exclusions, size ceiling and proof obligations remain
+unchanged. This is edit authority for the existing seven-defect artifact correction only; it is not
+P6-01 completion, staging, commit or P6-02 authority.
+
+**Clear → Send clarification — 2026-09-10T02:42:42+03:00.** Direct source inspection showed that
+the earlier literal `cleared=false` prescription alone would resurrect the seed/history transcript
+that Clear had removed, while the current Send path also discards the entered value. The binding
+behavior supersedes that implementation detail: Clear presents an empty transcript; the next
+accepted Send presents exactly the newly entered message without restoring cleared seed/history;
+selected-chat settings remain unchanged. Implement only the smallest presentation-local accepted
+text plus cleared-history render state inside the existing Chat owner. Do not add a conversation
+engine, log, backend/storage simulation, action, entity, route or framework. This clarification and
+the UTF-8-window/geometry clarifications are truthfulness corrections to existing P6 controls, not
+scope expansion; all work remains strictly inside ROADMAP Phase 6 and the seven recorded defects.
+
+**Device inspected/active identity clarification — 2026-09-10T03:31:00+03:00.** A bounded
+read-only inventory found inherited Device semantics missed by the pre-edit review. Architect
+verified the producer/consumer boundaries and returned `GO-to-edit` inside existing defect 3, with
+no P3/P4 reopen, new row or new review cycle. Add only specific inspected Project and Chat IDs beside
+the existing active `projectId`/`chatId`; inspection and Esc leave active IDs unchanged, existing
+Open actions perform activation, action renderers use inspected records, and the live Chat/composer
+uses active records. Classify record and action rows explicitly and do not use cascading literal
+replacement or a generic selection store. For SSH, retain only existing `sshProfileId` as inspected
+identity and `sshDefaultId` as default/active authority: Make default copies inspected to default;
+Connect, SFTP and Edit refuse an inspected non-default profile; accepted Connect/SFTP and top-level
+key install resolve the default; Forget/Delete target inspected. Successful Device import reuses
+`newProjectRecord` plus existing insertion/activation primitives only after the existing successful
+Import transition; select/validate/cancel leave the active Project untouched. Remove the artifact's
+incorrect delete-profile effect that clears matching Project/Chat SSH ceilings; actual deletion
+removes the profile and refreshes while stale ceilings remain fail-closed. No third SSH identity,
+parser, transaction, backend simulation, new UI control or broad budget refactor is authorized.
+
+**Terminal input presentation clarification — 2026-09-10T05:03:11+03:00.** Architect relayed the
+user's correction of the already-approved terminal boundary: ordinary keyboard input belongs
+directly to the existing focusable terminal output, while the separate `Type terminal input` / `Send
+input` helper is shown only when a coarse pointer makes touch entry useful. A hybrid touch-plus-
+keyboard device retains both paths; viewport width and pointer media queries must not be treated as
+proof that a hardware keyboard is absent. Printable input, Enter, arrows, Tab, Ctrl combinations and
+paste remain within the existing direct terminal owner, and accepting Connect/trust returns focus to
+that owner so typing can start immediately. Open dialogs and unrelated native inputs retain their
+existing exclusive key ownership. This is a focused P6-01 artifact correction under the existing
+Terminal CSS/input/focus owners, not a detector, framework, setting, route, terminal engine or P6-05
+implementation. Add only focused desktop, touch and hybrid observations to the existing terminal
+proof; do not restart the already-observed seven-defect acceptance paths.
+
+**Residual constrained Files observation — 2026-09-10T06:12:35+03:00.** Direct browser geometry on
+artifact SHA-256 `663E2BD1DD1AC6E6B91E41B9AB3A1C48131503CB618907946B3502510E265B77`
+(184,314 bytes) removed the prior footer overlap but left the 720x450 selected-file editor only
+49.2 CSS pixels high. With its existing border, 8 px vertical padding and 14 px / 1.45 text, that is
+one complete text line plus a clipped second line, so defect 7 remains owned by P6-01 and the
+geometry result is not acceptance evidence. The smallest correction is to give the existing
+`cm-file-body` editor track a three-line-height minimum while retaining its current body scroll owner
+and reachable footer; the existing 640 px rule continues to use its content-driven remaining track.
+Only focused 720x450 and 320x568 selected-file geometry and screenshots are required afterward.
+The same constrained-geometry hypothesis remained active from the 05:36 checkpoint through this
+observation; 36 minutes of wall time is a conservative upper bound including browser/tool waits, so
+no 60-active-minute pivot threshold has been reached.
+
+**Focused Files correction evidence — 2026-09-10T06:16+03:00.** Artifact SHA-256
+`10EE88F436960681D298307FE319AD625B7166AE0AB09074D5FF35758854E9D9` is 184,316 bytes.
+At 720x450, the selected text editor measured 60.9 px total, 42.9 px between its border and padding,
+and 20.3 px line height: two complete text lines plus remaining space. Its bottom was 306.3 px, the
+existing file footer began at 310.6 px, and root client/scroll widths were both 688 px. At 320x568,
+the editor measured 110.85 px total, 92.85 px between border and padding at 23.2 px line height, its
+bottom was 377.0 px, the footer began at 383.0 px, and root client/scroll widths were both 288 px.
+Focused screenshots showed the editor content and Previous/section/Next footer readable at both
+sizes. The same `cm-file-body` owner now supplies the three-line-height desktop minimum; the existing
+mobile rule still assigns the remaining track. No new breakpoint, footer/action owner or horizontal
+scroll owner was added.
+
+**Final static/runtime reconciliation — 2026-09-10T06:20+03:00.** The same 184,316-byte SHA parsed
+as one inline script and remained an HTML fragment with no external resource/API dependency.
+Focused static checks found the exact 740/640 constrained-owner rules and non-recursive `gapAttr`, no
+corrupted combined task/collection rule, no gradient/glass/blur/shadow vocabulary, one declared
+danger color/background pair, and text/surface contrast ratios from 5.69:1 to 13.30:1. Clean browser
+loads at 1280x720, 720x450 and 320x568 traversed Chat, Shared Files, Terminal, Settings, Python and
+Device; the phone run additionally traversed both Python list and detail routes. They produced no
+page/console errors, runtime duplicate IDs, missing visible product action owners, exposed closed
+menus or root horizontal overflow. Architect explicitly limited the post-Files rerun to focused
+Files geometry because the final two-byte change touched only the existing `cm-file-body` minimum;
+the immediately preceding seven-transition and terminal observations remain the accepted unchanged
+boundary evidence rather than being repeated solely for that CSS correction.
+
+**Final-review STOP and frozen correction batch — 2026-09-10T06:41+03:00.** Personal Architect
+review and the fresh visual reviewer independently rejected SHA-256
+`10EE88F436960681D298307FE319AD625B7166AE0AB09074D5FF35758854E9D9`: at 720x450 the selected-file
+body and textarea were competing scroll owners and the nominal 42.9 px inner editor showed a
+clipped meaningful line; at 320x568 the three-column task header left only 28.86 px for the
+110 px filename and zero width for the selected Terminal profile identity. The fresh code reviewer
+also found that Connect, Cancel trust, Review host key, Trust can focus the terminal and then have
+the queued native dialog `close` handler steal focus because the vanished review button is still the
+dialog invoker. These are concrete P6-01 defects in existing Files layout, shared task-header and
+terminal trust-focus owners; no foreign row is reopened.
+
+One coherent correction batch is frozen before editing. The base `cm-file-body` will drop its forced
+100% height and own clipped layout overflow while its existing textarea remains the sole content
+scroll owner; the 640 px rule will remove its redundant `align-content` declaration and replace its
+outer automatic overflow with the same clipped owner, retaining the existing three-line 740 px
+track and remaining-height 640 px track. At the existing 359 px boundary, the task header will use
+two columns, place its full-width identity on the first row, and let the existing Back and action
+owners occupy the second row; this corrects Files and Terminal without another breakpoint, DOM
+control, typography rule or navigation model. Trust acceptance will first render the connected
+Terminal, bind the existing dialog invoker to that newly rendered terminal output, and close the
+dialog so the existing shared `close` handler delivers final focus on both first-open and
+Cancel/reopen paths. It adds no timer, input detector, state, route or terminal behavior. Space is
+recovered only from the harmful file-body height and redundant mobile alignment/overflow
+declarations; the 184,320-byte ceiling remains binding.
+
+Only affected proof will be repeated on the resulting exact SHA: 720x450 Files and 320x568 Files plus
+Terminal geometry/screenshots, including one Files scroll owner, readable identities, useful editor,
+reachable actions/footer, zero overlap/root horizontal overflow, and fine/coarse/hybrid Terminal
+presentation; then Connect -> Cancel trust -> Review host key -> Trust must leave
+`cmTerminalOutput` focused and accept direct typing. Syntax, self-containment, size and browser
+console checks remain proportional final guards. The constrained-geometry hypothesis clock was
+paused from 06:28 through this bounded-review wait; 52 minutes remains the conservative active-work
+upper bound on resumption. This is not completion, staging, commit or P6-02 authority.
+
+**60-minute layout pivot — 2026-09-10T06:52+03:00.** The first focused observation of corrected
+SHA-256 `5BF4DE9CD36B61E0B651ECD63832FED46ACF3588269B5DCA8D0F65443A0FDD52`
+(184,307 bytes) disproved the initial file-body ownership result. At 720x450 the later 740 px
+direct-child rule won the cascade and restored `overflow:auto`; the body remained 122/134 px
+client/scroll height while the textarea remained 59/178 px, and its 60.9 px outer track still left
+only 42.9 px of text area. The conservative clock bound crossed 60 minutes even though tool and
+review waits make active time lower, so incremental minimum-height adjustment stops here.
+
+The materially different approach is an aggregate Files composition correction: exclude only
+`cm-file-body` from the existing 740 px direct-child overflow assignment so its base clipped owner
+wins; give the textarea track four line heights; move the already-defined compact file-footer rules
+unchanged from 640 px to the existing 740 px boundary; move the existing 6 px file-body gap and
+bottom padding to that boundary; and shorten the redundant body note to the single-line equivalent
+`Project links do not own files.` The textarea is then the sole file-content scroll owner while the
+header, body and footer natural sizes fit the existing task grid. The already-applied two-row 359 px
+identity layout and dialog-invoker terminal focus handoff remain unchanged. This pivot changes no
+breakpoint, control, route, state, palette, framework, persistence claim or acceptance oracle; its
+same focused proof must pass before any wider reconciliation.
+
+**Pivot geometry checkpoint — 2026-09-10T06:56+03:00.** On SHA-256
+`CB668BAD4F9137C35CB8C6B98CCA9FCEBEB4A7A2A05569D7C4C2EDCE9696BB41`
+(184,292 bytes), 720x450 Files now has a non-scrolling 401x122 px file body, an 88 px inner
+textarea with complete heading, blank line and two meaningful lines, and a non-scrolling 401x44 px
+footer. The sole remaining task-side scrollbar is exactly assigned: the header is 48 px client but
+52 px scroll height because its 8 px vertical padding leaves the natural header four pixels larger
+than the constrained grid track. Inside the same frozen existing task-header owner, reduce only the
+740 px vertical padding from 8 px to 6 px so its natural and assigned heights agree; this does not
+affect the later 640/359 px header rules. No other result or oracle changes.
+
+**Phone geometry checkpoint — 2026-09-10T07:03+03:00.** On later SHA-256
+`F304D8A59BF417069D6568D37BB15DE8CFFD8D43F3B0FFDFC73E9791A0861760`
+(184,292 bytes), 720x450 Files passes the pivot geometry: header, body and footer client/scroll
+heights agree at 48/48, 122/122 and 44/44 px; only the 88/178 px textarea scrolls, three complete
+text lines are available after padding, all actions/footer controls are visible, and root width is
+688/688 px. The first 320x568 observation proves the identity correction (246 px available for both
+filename lines), a non-scrolling 269x122 px file body, an 89 px inner editor with three complete
+lines, and a non-scrolling footer, but rejects the header: its 76/88 px client/scroll height lets the
+Back/actions row extend eight pixels into the body. The existing 6-line body minimum and editor are
+not reduced. Inside the already frozen 359 px two-row header, remove only its 4 px inter-row gap and
+the title's inherited 4 px internal gap; reduce the already-moved compact file-footer vertical
+padding from 6 px to 4 px. Those exact 12 pixels let the natural header, unchanged body and footer
+fit the existing task height without clipping. No content, control, breakpoint or state changes.
+
+**Phone scrollbar checkpoint — 2026-09-10T07:06+03:00.** SHA-256
+`AB57D9C5CC23E296CDF8F5468A79985D022FD641CBC599A7887675016ACDC275`
+(184,296 bytes) gives the 320x568 header exact 80/80 px client/scroll height; Back/actions end at
+259.75/261.75 px, the body begins at 265.20 px, and no overlap remains. The generic 740 px
+`overflow:auto` owner nevertheless renders a persistent platform scrollbar gutter and arrows on
+this non-scrolling narrow header, reducing its 269 px box to 254 px client width. Because exact fit
+is now observed and the 359 px header already owns this reflow, set only that header's overflow to
+visible so it has neither clipping nor a redundant scroll control. The body stays clipped and the
+textarea stays the sole Files content scroll owner.
+
+**Scrollbar cascade correction — 2026-09-10T07:11+03:00.** Exact SHA-256
+`C0171A2D76C620CCAB0A379B67377E71254E411076CDFF420FA398D8D112BDBE`
+(184,313 bytes) retained the gutter because the 740 px direct-child selector gained a second class
+of specificity from `:not(.cm-file-body)` and therefore still beat the later one-class 359 px
+header selector. Geometry itself remained passing: header and body meet without overlap, identity
+uses 246 px, Back/Save/More and footer are wholly inside their boxes, only the editor scrolls, and
+root width is 288/288 px. Strengthen only the existing 359 px rule to the direct
+`cm-task > cm-task-head` owner and use the initial `unset` overflow value; contract the unchanged
+support copy to `Project links don't own files.` solely to retain byte headroom. This is the final
+cascade assignment, not another geometry threshold or owner.
+
+**Invalid copy contraction — 2026-09-10T07:13+03:00.** Fresh load of SHA-256
+`7E75EA7D41B167D002C7C34E181A36EBFA59A06B278C551D57625E187B975F17`
+(184,319 bytes) stopped before workspace render. Direct script parsing failed with
+`SyntaxError: Missing } in template expression`: the contraction's ASCII apostrophe terminated the
+existing single-quoted HTML fragment. This run is invalid and supplies no layout evidence. Replace
+only that copy with the equally scoped apostrophe-free `Project links never own files.`; the
+specificity correction and all geometry remain unchanged.
+
+**Final phone rounding checkpoint — 2026-09-10T07:18+03:00.** Parse-valid SHA-256
+`A1B89261035B3A6C1E83F8FEF4A6763860898C74EDD5E4C7A0ED392AE3CDB6C8`
+(184,319 bytes) passes focused 720x450 Files: 48/48 px header, 126/126 px body, 92/178 px
+textarea, 40/40 px footer, three complete text lines, one content scroll owner and 688/688 px root
+width. At 320x568 the strengthened header correctly computes `overflow:visible`, uses the full
+269 px width, and keeps identity plus Back/Save/More wholly separated from the body. That extra
+gutter-free width changes fractional grid rounding: the 80.40 px header plus unchanged 121.80 px
+body leaves the footer 39.45 px while its natural scroll height is 40 px, producing the sole
+remaining scrollbar. Reduce only the existing 359 px header padding from 4 px to 3 px, freeing two
+CSS pixels so the unchanged footer fits naturally. No threshold, content, scroll owner or control
+changes.
+
+**Affected pivot proof — 2026-09-10T07:35+03:00.** Final artifact SHA-256
+`5F3AB8699738E350809AAFB29D21D64F2AA66FEE8D326964D22DBC6CDC0971EF` is 184,319 bytes.
+At 720x450, selected `field-notes.md` has 48/48 px header, 126/126 px body and 40/40 px footer
+client/scroll heights; its textarea is 92/178 px with three complete content lines after padding.
+At 320x568, the same header/body/footer are 78/78, 123/123 and 40/40 px; the two-line file identity
+uses 263 px, Back/Save/More remain inside the header, the textarea is 90/248 px with three complete
+lines, and every header/body/editor/footer boundary is separated. Only the textarea scrolls at both
+sizes. Root client/scroll widths are 688/688 and 288/288 px respectively. Focused screenshots show
+readable identities, meaningful editor content and reachable actions/footer without the rejected
+nested or decorative scrollbars.
+
+At 320x568 Terminal, `Field gateway` plus `operator@192.0.2.10:22 · Connected` uses the full 263 px
+identity row and the 78/78 px header is separated from the body. The exact Connect -> Cancel trust ->
+Review host key -> Trust path waited through the native close event and left
+`document.activeElement.id === cmTerminalOutput`; discrete `p`, `w`, `d`, Enter events appended
+`pwd\n` and retained focus. A real fine-pointer browser kept the touch helper hidden and the output
+focusable. A separate real coarse-pointer Chromium context exposed the 244x44 px helper while
+retaining the focusable output; helper Send appended `tap\n` and a direct keyboard event appended
+`h` in that same coarse presentation, proving the hybrid coexistence contract without a pointer
+detector. Both modes retained the full selected-target identity, 78/78 px header and 288/288 px root
+width. The render wrapper alone emitted its pre-existing CSP syntax diagnostics; there was no page
+error, and the in-app browser log for the artifact was empty.
+
+Final proportional static checks found one parsing inline script, an HTML fragment with no external
+resource or API dependency, exact Files owner/cascade, 359 px identity, coarse-helper and ordered
+trust-focus rules, and no gradient/blur/shadow vocabulary. Runtime inspection found no duplicate
+IDs, exposed closed menus or visible ownerless controls in the affected final state. The mandatory
+pivot therefore converged without new scope; only the two existing reviewers' one-time blocker
+verification and Architect closure review remain before any status, staging or commit change.
+
+**Terminal blocker verification GO — 2026-09-10T07:36+03:00.** The same fresh code reviewer that
+identified the queued-close defect inspected exact SHA-256 `5F3AB8699738E350809AAFB29D21D64F2AA66FEE8D326964D22DBC6CDC0971EF`
+once and returned `GO`. It confirmed that trust acceptance renders connected state, assigns the
+newly rendered terminal output as the existing dialog invoker, and only then closes; the shared
+queued close handler therefore focuses that connected node. Existing direct keyboard/paste owners
+and their 8,192-character bound remain unchanged, and the supplied Cancel -> Review -> Trust ->
+`pwd\n` observation directly covers the originally failing path. No route, dialog-key, coarse
+helper, terminal-state or resource regression was found in this correction boundary.
+
+**Prior visual-blocker verification GO — 2026-09-10T07:48+03:00.** The already-running fresh visual
+reviewer completed only its one-time check of the previously frozen selected-file and Terminal
+blockers on exact SHA-256 `5F3AB8699738E350809AAFB29D21D64F2AA66FEE8D326964D22DBC6CDC0971EF`
+and returned `GO`. It accepted the selected Files editor at 720x450 and 320x568, the full phone
+Files/Terminal identities, the fine/coarse helper distinction, and coarse keyboard/helper
+coexistence. This review did not evaluate or waive the separate collection-composition defect below.
+
+**Personal Architect collection STOP and focused mapping — 2026-09-10T07:49+03:00.** Architect's
+personal final review accepted the selected Files editor and Terminal correction above and froze
+those boundaries, but returned `STOP` for the existing left `Shared files` collection at 720x450.
+The collection is a three-track `cm-collection` (`cm-collection-head`, the sole record-list
+`cm-list`, and `cm-list-footer`). The existing 740 px direct-child rule assigns `overflow:auto` to
+all three children. In the 178x214 px inner collection, the 163x67 px header has 185 px scroll
+height: `New text file` starts below its 213.10 px clip edge and `Upload` follows below it. The
+163x67 px footer has 104 px scroll height and clips `Load next page`; only the middle list is the
+intended bounded collection scroll owner. AX presence therefore does not prove visible access.
+
+The correction clock starts at 07:49+03:00 with one scoped hypothesis: inside the existing 740 px
+boundary and Files collection markup, compact only the Shared-files header/footer composition,
+leave both non-scrolling, and preserve the record list as the single limited scroll track. Existing
+New, Upload, list and Load-next controls remain; no breakpoint, menu, state, route, framework,
+selected-editor rule or Terminal rule is added or changed. The first experiment must show all four
+owners visibly inside the collection at 720x450 and 320x568, a readable list viewport, no root or
+collection horizontal overflow, and unchanged accepted selected-editor header/body/editor/footer
+geometry. No new reviewer or full traversal is authorized; Architect will personally verify this
+last collection boundary.
+
+**Focused collection correction evidence — 2026-09-10T08:03+03:00.** Exact corrected artifact
+SHA-256 `D0B55029E1A1CFAE0CA596AC3AF3D1B52C470A2DFD070E7D6DB95E9469C2A16B` is 184,318 bytes.
+Only the existing Shared-files collection gained a scoped `cm-files` composition selector at the
+existing 740 px boundary. Its header action row and footer now use their available columns, compact
+padding and text, while the middle `cm-list` remains the sole bounded scroll owner. Removing only
+formatting whitespace from the static product shell recovered the required bytes without changing
+elements, attributes, order, text or behavior; the artifact remains below the frozen 184,320-byte
+ceiling.
+
+At 720x450 (688x418 inner), the 178x214 px collection now measures header 78/78 px
+client/scroll height, list 87/133 px, and footer 50/50 px. `New text file` and `Upload` lie wholly
+inside the header, `Load next page` lies wholly inside the footer, the selected first record and its
+metadata are visible, the list has an ordinary vertical scrollbar, and root width is 688/688 px.
+At 320x568 (288x536 inner), the 269x242 px collection measures header 76/76 px, list 114/149 px,
+and footer 52/52 px. Both creation controls, two readable file identities with metadata, the list
+scrollbar and Load-next control are simultaneously visible; root width is 288/288 px. Focused
+screenshots at both sizes show separated header/list/footer boundaries with no overlap, clipping or
+decorative header/footer scrollbar.
+
+The frozen selected editor is unchanged on the same SHA. At 720x450 its header/body/editor/footer
+remain 48/48, 126/126, 92/178 and 40/40 px; at 320x568 they remain 78/78, 123/123, 90/248 and
+40/40 px, with the full 263 px identity row and 288/288 px root width. The textarea remains its sole
+content scroll owner. A proportional static guard parsed the one inline script, confirmed fragment
+self-containment and the exact Files collection owners; the first guard's broad `<head` substring
+was classified as a harness false positive against `<header>` and replaced with exact tag-boundary
+matching while production stayed frozen. The corrected guard passed, and the exact new preview
+reported no browser warnings or errors. This resolves only Architect's remaining collection STOP;
+P6-01 still awaits Architect's personal explicit closure `GO`.
+
+**Exact-owned final review cleanup — 2026-09-10T08:21+03:00.** After Architect personally accepted
+the final Shared-files collection boundary, the temporary browser viewport was reset and the exact
+task-owned current preview tab was closed. The two exact-owned render listeners on ports 59,972 and
+56,537 were stopped and both ports were verified with zero listeners. The temporary
+`p6-01-pointer-proof.cjs`, `p6-01-pointer-fine.png` and `p6-01-pointer-coarse.png` files were removed;
+those three plus every older named P6-01 helper/upload fixture in the cleanup inventory were verified
+absent. Stale unrelated browser tabs, `.codex/`, `m[1])`, Device state, API credentials and Wi-Fi
+configuration were untouched.
+
+### Final P6-01 Architect closure and accepted transition evidence
+
+**Completed:** 2026-09-10T08:25:46+03:00. Architect personally reviewed exact artifact SHA-256
+`D0B55029E1A1CFAE0CA596AC3AF3D1B52C470A2DFD070E7D6DB95E9469C2A16B`, 184,318 bytes, the actual
+owners/source, retained seven-transition evidence, focused later Files/Terminal evidence, resources,
+cleanup and residual risk, and returned explicit final `ARCHITECT CLOSURE GO`. The final collection
+STOP is closed at 720x450 and 320x568; the accepted USSR measuring-instrument visual language and
+locked P6-01 action/surface coverage remain unchanged.
+
+Architect accepted these already-observed transitions on behavior-bearing SHA-256
+`663E2BD1DD1AC6E6B91E41B9AB3A1C48131503CB618907946B3502510E265B77`; later deltas through the
+exact closure SHA did not change their handlers, and every affected later layout or Terminal boundary
+was directly rechecked as recorded above:
+
+1. Clear -> Confirm -> accepted Send replaced the empty transcript with exactly the new user message,
+   did not resurrect cleared seed/history, and preserved the selected Chat settings.
+2. Upload bundle -> Review -> Cancel -> reopen Import exposed Resume review for the same retained
+   browser `File`; Validate preserved the active Project, only successful Import created/activated
+   `Field kit`, and absent or mismatched upload state was rejected without activation.
+3. Device selection bound Bench notes, Collecting observations, `capture.bin`, Lab server, Fast,
+   Guest Wi-Fi, the ESP32 power source, remote `capture.bin`, Field backup API and the Project-bundle
+   row to their exact derived targets. The binary file exposed no text action, Fast was selected before
+   its two-Enter Apply path, and inspected Project/Chat identity did not become active before Open.
+4. Web file Next showed the distinct second 1 KiB `## Departure check` window. Saving that window
+   preserved the first `# Field notes` window; navigation discarded only its outgoing unsaved draft;
+   text, binary and bundle copies retained their respective kind/content representation.
+5. In-dialog Project mutation followed by pagination retained the open dialog and its owner. Enter on
+   a native control did not trigger Device input, and open-dialog Escape changed neither terminal
+   fullscreen nor Device state.
+6. Only the future Waiting/lifetime presentation carried the `P6-03` gap marker; shipped ready,
+   expired, invalid and lockout authentication summaries did not.
+7. The accepted Chat, Python and Device constrained-layout observations retained readable scroll
+   owners and reachable controls. Subsequent focused evidence closed the affected Files collection,
+   selected editor, phone identity/header and Terminal fine/coarse/hybrid boundaries on the exact
+   closure artifact without a new breakpoint family or visual-language change.
+
+This is prototype-only acceptance, not firmware/backend completion or Cardputer heap/latency proof.
+Runtime production, real-Device and phase-completion acceptance remain owned by P6-02 through P6-08.
+Only this trace is row-owned repository content; the external prototype and disposable diagnostics
+remain outside the commit. The publication window intentionally has no `in_progress` matrix row until
+the exact local commit is pushed and its remote SHA is verified.
