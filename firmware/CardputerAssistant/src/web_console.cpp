@@ -48,7 +48,6 @@
 namespace cardputer {
 namespace {
 
-constexpr std::uint32_t kSessionIdleMs = 15U * 60U * 1000U;
 constexpr std::uint32_t kLoginLockMs = 30U * 1000U;
 constexpr std::size_t kMaximumLoginFailures = 5;
 constexpr std::uint32_t kWebSftpTransferTimeoutMs = 60000;
@@ -155,6 +154,13 @@ String consoleStatus;
 String consoleSerialInput;
 std::string activeResponse;
 std::uint32_t sessionLastActivityAt = 0;
+bool sessionActivityRecordedForRequest = false;
+bool sessionCookieEmittedForRequest = false;
+bool browserPresenceInitialized = false;
+std::uint32_t browserLastHeartbeatAt = 0;
+bool browserPresenceBusy = false;
+bool presentedAuthenticationActive = false;
+WebConsoleBrowserState presentedBrowserState = WebConsoleBrowserState::Waiting;
 std::uint32_t loginLockedUntil = 0;
 std::size_t loginFailures = 0;
 bool exitRequested = false;
@@ -410,6 +416,13 @@ void releaseConsoleSessionState()
     consoleQrPayload = String();
     firmwareVersion = String();
     sessionLastActivityAt = 0;
+    sessionActivityRecordedForRequest = false;
+    sessionCookieEmittedForRequest = false;
+    browserPresenceInitialized = false;
+    browserLastHeartbeatAt = 0;
+    browserPresenceBusy = false;
+    presentedAuthenticationActive = false;
+    presentedBrowserState = WebConsoleBrowserState::Waiting;
     loginLockedUntil = 0;
     loginFailures = 0;
     exitRequested = false;
@@ -511,28 +524,140 @@ bool constantTimeEquals(const String& left, const String& right)
 }
 
 void renderConsoleScreen();
+void renderConsoleSessionPresentationIfChanged();
 
-bool sessionIsActive()
+WebConsoleBrowserState webConsoleBrowserStateAt(std::uint32_t now)
+{
+    if (browserPresenceBusy) {
+        return WebConsoleBrowserState::Busy;
+    }
+    return webBrowserPresenceConnected(
+        browserPresenceInitialized, browserLastHeartbeatAt, now)
+        ? WebConsoleBrowserState::Connected
+        : WebConsoleBrowserState::Waiting;
+}
+
+const char* webConsoleBrowserStateName(WebConsoleBrowserState state)
+{
+    switch (state) {
+        case WebConsoleBrowserState::Waiting: return "waiting";
+        case WebConsoleBrowserState::Connected: return "connected";
+        case WebConsoleBrowserState::Busy: return "busy";
+    }
+    return "waiting";
+}
+
+void clearBrowserPresence()
+{
+    browserPresenceInitialized = false;
+    browserLastHeartbeatAt = 0;
+    browserPresenceBusy = false;
+}
+
+void clearSessionAuthentication()
+{
+    sessionToken = "";
+    csrfToken = "";
+    sessionLastActivityAt = 0;
+    clearBrowserPresence();
+}
+
+bool sessionAuthenticationActiveAt(std::uint32_t now)
+{
+    return !sessionToken.isEmpty() &&
+           !webSessionAuthenticationExpired(
+               consoleSettings.webSessionLifetime, sessionLastActivityAt, now);
+}
+
+bool expireSessionAuthenticationAt(std::uint32_t now)
 {
     if (sessionToken.isEmpty() ||
-        static_cast<std::uint32_t>(millis() - sessionLastActivityAt) > kSessionIdleMs) {
-        sessionToken = "";
-        csrfToken = "";
-        renderConsoleScreen();
+        !webSessionAuthenticationExpired(
+            consoleSettings.webSessionLifetime, sessionLastActivityAt, now)) {
+        return false;
+    }
+    clearSessionAuthentication();
+    return true;
+}
+
+String sessionCookieValue()
+{
+    const WebSessionLifetimePolicy policy =
+        webSessionLifetimePolicy(consoleSettings.webSessionLifetime);
+    String value = "cm_session=" + sessionToken +
+                   "; HttpOnly; SameSite=Strict; Path=/";
+    if (policy.expires) {
+        value += "; Max-Age=";
+        value += String(policy.cookieMaxAgeSeconds);
+    }
+    return value;
+}
+
+void recordSessionActivityForRequest()
+{
+    if (sessionActivityRecordedForRequest) {
+        return;
+    }
+    sessionLastActivityAt = millis();
+    sessionActivityRecordedForRequest = true;
+}
+
+void queueSessionRefreshForManagedResponse()
+{
+    recordSessionActivityForRequest();
+    if (sessionCookieEmittedForRequest) {
+        return;
+    }
+    server.sendHeader("Set-Cookie", sessionCookieValue());
+    sessionCookieEmittedForRequest = true;
+}
+
+bool sessionIsActiveWithoutRefresh()
+{
+    const std::uint32_t now = millis();
+    if (expireSessionAuthenticationAt(now)) {
+        renderConsoleSessionPresentationIfChanged();
         return false;
     }
     const String cookie = server.header("Cookie");
-    const bool authenticated = cookie.indexOf("cm_session=" + sessionToken) >= 0;
-    if (authenticated) {
-        sessionLastActivityAt = millis();
+    return !sessionToken.isEmpty() &&
+           cookie.indexOf("cm_session=" + sessionToken) >= 0;
+}
+
+bool sessionIsActive()
+{
+    if (!sessionIsActiveWithoutRefresh()) {
+        return false;
     }
-    return authenticated;
+    queueSessionRefreshForManagedResponse();
+    return true;
+}
+
+bool requestHasValidCsrfWithoutRefresh()
+{
+    return sessionIsActiveWithoutRefresh() && !csrfToken.isEmpty() &&
+           constantTimeEquals(server.header("X-CardMind-CSRF"), csrfToken);
 }
 
 bool requestHasValidCsrf()
 {
-    return sessionIsActive() && !csrfToken.isEmpty() &&
-           constantTimeEquals(server.header("X-CardMind-CSRF"), csrfToken);
+    if (!requestHasValidCsrfWithoutRefresh()) {
+        return false;
+    }
+    queueSessionRefreshForManagedResponse();
+    return true;
+}
+
+void beginWebConsoleForegroundWork()
+{
+    browserPresenceBusy = true;
+    renderConsoleSessionPresentationIfChanged();
+}
+
+void endWebConsoleForegroundWork()
+{
+    browserPresenceBusy = false;
+    renderConsoleSessionPresentationIfChanged();
 }
 
 enum class WebStorageAccess {
@@ -627,12 +752,12 @@ int webStorageErrorStatus(SdStorageState state)
 bool allowWebStorageRoute(WebConsoleRouteHandler route)
 {
     const WebStorageAccess access = webStorageAccessForRoute(route);
-    if (access == WebStorageAccess::None || !sessionIsActive()) {
+    if (access == WebStorageAccess::None || !sessionIsActiveWithoutRefresh()) {
         return true;
     }
     if ((access == WebStorageAccess::Write ||
          access == WebStorageAccess::Cleanup) &&
-        !requestHasValidCsrf()) {
+        !requestHasValidCsrfWithoutRefresh()) {
         return true;
     }
     const OperationResult result = access == WebStorageAccess::Read
@@ -644,6 +769,7 @@ bool allowWebStorageRoute(WebConsoleRouteHandler route)
         return true;
     }
     const SdStorageStatus storage = inspectSdStorage();
+    queueSessionRefreshForManagedResponse();
     sendWebJsonError(server, webStorageErrorStatus(storage.state), result.error);
     return false;
 }
@@ -691,10 +817,11 @@ void collectRawRequestBody(std::size_t maximumBytes)
     if (raw.status == RAW_START) {
         resetRawTextRequest();
         rawTextRequest.started = true;
-        if (!requestHasValidCsrf()) {
+        if (!requestHasValidCsrfWithoutRefresh()) {
             failRawTextRequest(401, "Authentication required");
             return;
         }
+        recordSessionActivityForRequest();
         if (!server.hasHeader("Content-Length") ||
             !server.header("Transfer-Encoding").isEmpty()) {
             failRawTextRequest(
@@ -1082,6 +1209,11 @@ DecodedHeaderResult decodePercentEncodedHeader(const String& header,
 
 void rejectLegacyRawTextRoute()
 {
+    if (!requestHasValidCsrf()) {
+        resetRawTextRequest();
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
     const RawTextRequestResult request = consumeRawTextRequest();
     if (!request.success) {
         sendWebJsonError(server, request.errorStatus, request.error);
@@ -1386,6 +1518,7 @@ WebContextSummaryResult generateWebContextSummary(
         consoleSettings, activeProject, activeChat, 0).model;
     std::vector<Message> request;
     request.push_back({"user", std::move(prompt.prompt)});
+    beginWebConsoleForegroundWork();
     ChatResult summary = streamChatCompletionWithBudget(
         summarySettings, request,
         "This is a context compaction operation, not a user-facing answer.",
@@ -1393,6 +1526,7 @@ WebContextSummaryResult generateWebContextSummary(
             M5Cardputer.update();
             return consoleEscapePressed() || !server.client().connected();
         });
+    endWebConsoleForegroundWork();
     if (!summary.success) {
         return {false, {}, 0, "Context summary failed: " + summary.error};
     }
@@ -1435,11 +1569,30 @@ bool consolePasswordVisible()
 
 void renderConsoleScreen()
 {
+    const std::uint32_t now = millis();
+    const bool authenticationActive = sessionAuthenticationActiveAt(now);
+    const WebConsoleBrowserState browserState =
+        webConsoleBrowserStateAt(now);
+    presentedAuthenticationActive = authenticationActive;
+    presentedBrowserState = browserState;
     if (!consoleQrPayload.isEmpty()) {
         return;
     }
     showWebConsoleAccess("http://" + WiFi.localIP().toString(), accessPassword,
-                         !sessionToken.isEmpty(), consolePasswordVisible());
+                         authenticationActive, browserState,
+                         consolePasswordVisible());
+}
+
+void renderConsoleSessionPresentationIfChanged()
+{
+    const std::uint32_t now = millis();
+    const bool authenticationActive = sessionAuthenticationActiveAt(now);
+    const WebConsoleBrowserState browserState =
+        webConsoleBrowserStateAt(now);
+    if (authenticationActive != presentedAuthenticationActive ||
+        browserState != presentedBrowserState) {
+        renderConsoleScreen();
+    }
 }
 
 String loginPage(const String& error)
@@ -1485,7 +1638,32 @@ void handleSession()
     JsonDocument document;
     document["ok"] = true;
     document["csrf"] = csrfToken;
+    document["authenticated"] = true;
+    document["session_lifetime"] =
+        webSessionLifetimePolicy(consoleSettings.webSessionLifetime).value;
+    document["browser_presence"] =
+        webConsoleBrowserStateName(webConsoleBrowserStateAt(millis()));
     sendWebJson(server, 200, document);
+}
+
+void handleSessionHeartbeat()
+{
+    if (!requestHasValidCsrfWithoutRefresh()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const String transferEncoding = server.header("Transfer-Encoding");
+    const String contentLength = server.header("Content-Length");
+    if (!transferEncoding.isEmpty() ||
+        (!contentLength.isEmpty() && contentLength != "0") ||
+        server.args() != 0) {
+        sendWebJsonError(server, 400, "Session heartbeat body must be empty");
+        return;
+    }
+    browserPresenceInitialized = true;
+    browserLastHeartbeatAt = millis();
+    renderConsoleSessionPresentationIfChanged();
+    server.send(204, "text/plain", "");
 }
 
 void handleLogin()
@@ -1507,14 +1685,17 @@ void handleLogin()
     }
     loginFailures = 0;
     const bool existingSession = !sessionToken.isEmpty() &&
-        static_cast<std::uint32_t>(millis() - sessionLastActivityAt) <= kSessionIdleMs;
+        !webSessionAuthenticationExpired(
+            consoleSettings.webSessionLifetime, sessionLastActivityAt, millis());
     if (!existingSession) {
+        clearSessionAuthentication();
         sessionToken = randomHexToken();
         csrfToken = randomHexToken();
     }
     sessionLastActivityAt = millis();
-    server.sendHeader("Set-Cookie", "cm_session=" + sessionToken +
-                      "; HttpOnly; SameSite=Strict; Path=/; Max-Age=900");
+    sessionActivityRecordedForRequest = true;
+    server.sendHeader("Set-Cookie", sessionCookieValue());
+    sessionCookieEmittedForRequest = true;
     server.sendHeader("Location", "/");
     server.send(303, "text/plain", "Authenticated");
     passwordRevealUntil = 0;
@@ -1523,13 +1704,12 @@ void handleLogin()
 
 void handleLogout()
 {
-    if (!requestHasValidCsrf()) {
+    if (!requestHasValidCsrfWithoutRefresh()) {
         sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     clearFailedWebRequestInstructions();
-    sessionToken = "";
-    csrfToken = "";
+    clearSessionAuthentication();
     server.sendHeader("Set-Cookie", "cm_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
     JsonDocument document;
     document["ok"] = true;
@@ -1539,7 +1719,7 @@ void handleLogout()
 
 void handleCloseConsole()
 {
-    if (!requestHasValidCsrf()) {
+    if (!requestHasValidCsrfWithoutRefresh()) {
         sendWebJsonError(server, 401, "Authentication required");
         return;
     }
@@ -1548,6 +1728,7 @@ void handleCloseConsole()
     document["message"] = "Web Console is closing";
     sendWebJson(server, 200, document);
     clearFailedWebRequestInstructions();
+    clearSessionAuthentication();
     exitRequested = true;
 }
 
@@ -1991,6 +2172,7 @@ void streamStoredWebPrompt(const ChatDocument& storedChat,
     bool workspaceFilesChanged = false;
     const String requestProjectId = activeProject.summary.id;
     const String requestChatId = activeChat.summary.id;
+    beginWebConsoleForegroundWork();
     const ChatResult result = toolPlan.schemas != 0
         ? streamChatCompletionWithToolsAndBudget(
               requestSettings, requestFit.retained, effectiveInstructions,
@@ -2014,6 +2196,7 @@ void streamStoredWebPrompt(const ChatDocument& storedChat,
         : streamChatCompletionWithBudget(
               requestSettings, requestFit.retained, effectiveInstructions,
               requestPolicy.maximumOutputTokens, onText, isCancelled);
+    endWebConsoleForegroundWork();
     markOperation("idle");
     if (workspaceFilesChanged) {
         filesIndexReady = false;
@@ -2243,6 +2426,11 @@ void handlePromptRawData()
 
 void handlePromptRawComplete()
 {
+    if (!requestHasValidCsrf()) {
+        resetRawTextRequest();
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
     WebPromptRequest request = parseWebPromptRequest(
         consumeRawTextRequest(), requestHasPromptFrameContentType());
     if (!request.success) {
@@ -2434,6 +2622,7 @@ void continueWebPendingDecision(
     requestSettings.model = webPendingContext.requestPolicy.model;
     requestSettings.globalInstructions = webPendingContext.globalInstructions;
     markOperation("web_console_tools");
+    beginWebConsoleForegroundWork();
     const ChatResult result = continueChatCompletionAfterPendingToolResult(
         requestSettings, continuationMessages, scopedInstructions,
         continuationPlan,
@@ -2458,6 +2647,7 @@ void continueWebPendingDecision(
                 chatId, continuation);
         },
         isCancelled);
+    endWebConsoleForegroundWork();
     markOperation("idle");
     if (workspaceFilesChanged) {
         filesIndexReady = false;
@@ -2554,9 +2744,11 @@ void handlePendingAllowOnce()
         M5Cardputer.update();
         return consoleEscapePressed() || !server.client().connected();
     };
+    beginWebConsoleForegroundWork();
     PendingToolDecisionResult decision = approvePendingProjectToolCall(
         consoleSettings, inputs.plan, inputs.pendingId,
         PythonRunReturnSurface::Web, isCancelled);
+    endWebConsoleForegroundWork();
     if (!decision.success) {
         sendWebJsonError(server, 409, decision.error);
         return;
@@ -2568,6 +2760,7 @@ void handlePendingAllowOnce()
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "text/event-stream; charset=utf-8", "");
         sendWebSse(server, "handoff", "", consoleStatus);
+        clearSessionAuthentication();
         pythonRestartRequested = true;
         return;
     }
@@ -2602,9 +2795,11 @@ void handlePendingAllowChat()
         M5Cardputer.update();
         return consoleEscapePressed() || !server.client().connected();
     };
+    beginWebConsoleForegroundWork();
     PendingToolDecisionResult decision = approvePendingProjectToolCall(
         consoleSettings, inputs.plan, inputs.pendingId,
         PythonRunReturnSurface::Web, isCancelled);
+    endWebConsoleForegroundWork();
     if (!decision.success) {
         sendWebJsonError(server, 409, decision.error);
         return;
@@ -2982,8 +3177,10 @@ void handleDuplicateProject()
     if (title.isEmpty()) title = activeProject.summary.title + " copy";
     String duplicatedId;
     {
+        beginWebConsoleForegroundWork();
         const ProjectDocumentResult duplicated = duplicateProject(
             activeProject.summary.id, title);
+        endWebConsoleForegroundWork();
         if (!duplicated.success) {
             sendWebJsonError(server, 500, duplicated.error);
             return;
@@ -3176,6 +3373,11 @@ void handleInstructionsRawData()
 
 void handleInstructionsRawComplete()
 {
+    if (!requestHasValidCsrf()) {
+        resetRawTextRequest();
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
     RawTextRequestResult request = consumeRawTextRequest();
     if (!request.success) {
         sendWebJsonError(server, request.errorStatus, request.error);
@@ -3484,8 +3686,10 @@ void handleDuplicateChat()
         return;
     }
     const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
     ChatDocumentResult duplicated = duplicateProjectChat(
         activeProject.summary.id, activeChat.summary.id);
+    endWebConsoleForegroundWork();
     recordWebSdWrite(millis() - startedAt);
     if (!duplicated.success) {
         sendWebJsonError(server, 500, duplicated.error);
@@ -3521,8 +3725,10 @@ void handleExportChat()
     }
     const String filename = "chat_" + activeChat.summary.id + ".md";
     const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
     const OperationResult exported = exportProjectChatMarkdown(
         activeProject.summary.id, activeChat.summary.id, filename);
+    endWebConsoleForegroundWork();
     recordWebSdWrite(millis() - startedAt);
     if (!exported.success) {
         sendWebJsonError(server, 400, exported.error);
@@ -3549,8 +3755,10 @@ void handleExportChatBundle()
     const String filename =
         "project_" + activeProject.summary.id + ".cardmind-project.jsonl";
     const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
     const OperationResult exported = exportProjectBundle(
         activeProject.summary.id, filename);
+    endWebConsoleForegroundWork();
     recordWebSdWrite(millis() - startedAt);
     if (!exported.success) {
         sendWebJsonError(server, 400, exported.error);
@@ -3577,7 +3785,9 @@ void handleImportChatBundle()
     const std::uint32_t startedAt = millis();
     String importedId;
     {
+        beginWebConsoleForegroundWork();
         const ProjectDocumentResult imported = importProjectBundle(server.arg("name"));
+        endWebConsoleForegroundWork();
         recordWebSdWrite(millis() - startedAt);
         if (!imported.success) {
             sendWebJsonError(server, 400, imported.error);
@@ -3992,17 +4202,51 @@ void handleModelPresetApply()
     sendWebJson(server, 200, document);
 }
 
+struct WebSessionLifetimeDecodeResult {
+    bool success;
+    WebSessionLifetime lifetime;
+};
+
+WebSessionLifetimeDecodeResult decodeWebSessionLifetime(const String& value)
+{
+    if (value == "15m") {
+        return {true, WebSessionLifetime::Minutes15};
+    }
+    if (value == "1h") {
+        return {true, WebSessionLifetime::Hour1};
+    }
+    if (value == "8h") {
+        return {true, WebSessionLifetime::Hours8};
+    }
+    if (value == "until_reboot") {
+        return {true, WebSessionLifetime::UntilReboot};
+    }
+    return {false, WebSessionLifetime::Minutes15};
+}
+
+void sendWebSettingsError(int status, const String& error)
+{
+    queueSessionRefreshForManagedResponse();
+    sendWebJsonError(server, status, error);
+}
+
 void handleSettings()
 {
-    if (!requestHasValidCsrf()) {
+    if (!requestHasValidCsrfWithoutRefresh()) {
         sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const WebSessionLifetimeDecodeResult sessionLifetime =
+        decodeWebSessionLifetime(server.arg("web_session_lifetime"));
+    if (!sessionLifetime.success) {
+        sendWebSettingsError(400, "Web session lifetime is invalid");
         return;
     }
     const bool hasMasterToolPolicy = server.hasArg("master_tool_policy");
     const bool hasNewChatToolPolicy = server.hasArg("new_chat_tool_policy");
     if (hasMasterToolPolicy != hasNewChatToolPolicy) {
-        sendWebJsonError(
-            server, 400,
+        sendWebSettingsError(
+            400,
             "Master and new-chat tool policies must be submitted together");
         return;
     }
@@ -4022,14 +4266,14 @@ void handleSettings()
               consoleSettings.newChatToolPolicy, ToolPolicyCodecError::None};
     if (decodedMasterToolPolicy.error != ToolPolicyCodecError::None ||
         decodedNewChatToolPolicy.error != ToolPolicyCodecError::None) {
-        sendWebJsonError(server, 400, "Tool permission policy is invalid");
+        sendWebSettingsError(400, "Tool permission policy is invalid");
         return;
     }
     Settings updated = consoleSettings;
     const String wifiSsid = server.arg("wifi_ssid");
     const String wifiPassword = server.arg("wifi_password");
     if (wifiSsid.isEmpty() || wifiSsid.length() > 32 || wifiPassword.length() > 63) {
-        sendWebJsonError(server, 400, "Wi-Fi SSID must contain 1-32 bytes and password at most 63 bytes");
+        sendWebSettingsError(400, "Wi-Fi SSID must contain 1-32 bytes and password at most 63 bytes");
         return;
     }
     if (wifiSsid != updated.wifiSsid) {
@@ -4041,14 +4285,14 @@ void handleSettings()
     updated.model = server.arg("model");
     updated.model.trim();
     if (updated.model.length() > 120) {
-        sendWebJsonError(server, 400, "Model id must not exceed 120 characters");
+        sendWebSettingsError(400, "Model id must not exceed 120 characters");
         return;
     }
     updated.globalInstructions = server.arg("global_instructions");
     if (updated.globalInstructions.length() > 2048 ||
         !isValidUtf8(std::string(updated.globalInstructions.c_str()))) {
-        sendWebJsonError(
-            server, 400,
+        sendWebSettingsError(
+            400,
             "Global instructions must be valid UTF-8 and at most 2048 bytes");
         return;
     }
@@ -4099,7 +4343,7 @@ void handleSettings()
         repeatMs > UINT16_MAX ||
         !parseUnsignedArgument(server.arg("power_profile"), powerProfile) ||
         powerProfile > 2) {
-        sendWebJsonError(server, 400, "Device preference values are outside their supported ranges");
+        sendWebSettingsError(400, "Device preference values are outside their supported ranges");
         return;
     }
     updated.ttsVolume = static_cast<std::uint8_t>(volume);
@@ -4108,14 +4352,16 @@ void handleSettings()
     updated.keyboardRepeatMs = static_cast<std::uint16_t>(repeatMs);
     updated.powerProfile = static_cast<std::uint8_t>(powerProfile);
     updated.projectChatHistoryQuotaBytes = historyQuotaMiB * 1024U * 1024U;
+    updated.webSessionLifetime = sessionLifetime.lifetime;
     updated.masterToolPolicy = decodedMasterToolPolicy.policy;
     updated.newChatToolPolicy = decodedNewChatToolPolicy.policy;
     const OperationResult result = saveSettings(updated);
     if (!result.success) {
-        sendWebJsonError(server, 400, result.error);
+        sendWebSettingsError(400, result.error);
         return;
     }
     consoleSettings = updated;
+    queueSessionRefreshForManagedResponse();
     ++settingsRevision;
     ++chatRevision;
     consoleStatus = "Settings saved; Wi-Fi changes apply after closing the console";
@@ -4207,7 +4453,9 @@ void handleModels()
                 String(provider.result.message.c_str()));
         return;
     }
+    beginWebConsoleForegroundWork();
     const ModelsResult result = fetchModels(provider.settings);
+    endWebConsoleForegroundWork();
     if (!result.success) {
         sendWebJsonError(server, 502, result.error);
         return;
@@ -4308,6 +4556,7 @@ void handlePythonStart()
     document["handoff_token"] = handoffToken;
     sendWebJson(server, 200, document);
     handoffToken = "";
+    clearSessionAuthentication();
     pythonRestartRequested = true;
 }
 
@@ -4844,12 +5093,15 @@ void handleSftpList()
         sendWebJsonError(server, 401, "Authentication required");
         return;
     }
+    beginWebConsoleForegroundWork();
     const OperationResult opened = ensureWebSftp();
     if (!opened.success) {
+        endWebConsoleForegroundWork();
         sendWebJsonError(server, 409, opened.error);
         return;
     }
     const SftpEntriesResult result = webSshClient.listSftpDirectory(server.arg("path"), 30000);
+    endWebConsoleForegroundWork();
     if (!result.success) {
         sendWebJsonError(server, 502, result.error);
         return;
@@ -4882,13 +5134,16 @@ void handleSftpDownload()
         return webRequestClientDisconnected(requestClient);
     };
     const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
     const OperationResult opened = ensureWebSftpControlled(startedAt, isCancelled);
     if (!opened.success) {
+        endWebConsoleForegroundWork();
         sendWebJsonError(server, 502, opened.error);
         return;
     }
     const std::uint32_t remainingMs = remainingWebSftpTransferMs(startedAt);
     if (remainingMs == 0) {
+        endWebConsoleForegroundWork();
         sendWebJsonError(server, 502, "SFTP download timed out before transfer");
         return;
     }
@@ -4896,6 +5151,7 @@ void handleSftpDownload()
         webSshClient.downloadSftpFileControlled(
             server.arg("path"), server.arg("name"), overwriteArgument == "1",
             remainingMs, isCancelled);
+    endWebConsoleForegroundWork();
     recordWebSdWrite(millis() - startedAt);
     if (!transferred.success) {
         const String error = transferred.outcomeUnknown
@@ -4931,13 +5187,16 @@ void handleSftpUpload()
         return webRequestClientDisconnected(requestClient);
     };
     const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
     const OperationResult opened = ensureWebSftpControlled(startedAt, isCancelled);
     if (!opened.success) {
+        endWebConsoleForegroundWork();
         sendWebJsonError(server, 502, opened.error);
         return;
     }
     const std::uint32_t remainingMs = remainingWebSftpTransferMs(startedAt);
     if (remainingMs == 0) {
+        endWebConsoleForegroundWork();
         sendWebJsonError(server, 502, "SFTP upload timed out before transfer");
         return;
     }
@@ -4945,6 +5204,7 @@ void handleSftpUpload()
         webSshClient.uploadSftpFileControlled(
             server.arg("name"), server.arg("path"), overwriteArgument == "1",
             remainingMs, isCancelled);
+    endWebConsoleForegroundWork();
     if (!transferred.success) {
         const String error = transferred.outcomeUnknown
             ? String("SFTP upload outcome is unknown; inspect both paths before retrying: ") +
@@ -4965,10 +5225,12 @@ void handleSshKeyUploadData()
         sshKeyUploadError = "";
         sshKeyUploadBytes = 0;
         sshKeyUploadProfileId = 0;
-        if (!requestHasValidCsrf()) {
+        if (!requestHasValidCsrfWithoutRefresh()) {
             sshKeyUploadError = "Authentication required";
             return;
         }
+        recordSessionActivityForRequest();
+        beginWebConsoleForegroundWork();
         if (webSshProfileStateLocked()) {
             sshKeyUploadError =
                 "Disconnect the SSH session or resolve the host-key mismatch before installing a private key";
@@ -5260,8 +5522,10 @@ void handleFileSave()
         return;
     }
     const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
     OperationResult result = replaceWorkspaceFileRange(
         name, offset, originalBytes, content);
+    endWebConsoleForegroundWork();
     recordWebSdWrite(millis() - startedAt);
     if (!result.success) {
         sendWebJsonError(server, 400, result.error);
@@ -5328,12 +5592,14 @@ void handleFileDelete()
 
 void handleFileDownload()
 {
-    if (!sessionIsActive()) {
+    if (!sessionIsActiveWithoutRefresh()) {
         sendWebJsonError(server, 401, "Authentication required");
         return;
     }
+    recordSessionActivityForRequest();
     const String name = server.arg("name");
     if (!isValidWorkspaceFilename(name.c_str())) {
+        queueSessionRefreshForManagedResponse();
         sendWebJsonError(server, 400, "Invalid workspace filename");
         return;
     }
@@ -5341,12 +5607,14 @@ void handleFileDownload()
     File file = SD.open(workspaceFilePath(name), FILE_READ);
     recordWebSdRead(millis() - startedAt);
     if (!file) {
+        queueSessionRefreshForManagedResponse();
         sendWebJsonError(server, 404, "Workspace file does not exist: " + name);
         return;
     }
     const std::size_t totalBytesValue = file.size();
     if (totalBytesValue > kMaximumWorkspaceFileBytes) {
         file.close();
+        queueSessionRefreshForManagedResponse();
         sendWebJsonError(server, 400,
                          "Workspace file exceeds the supported 32-bit file range");
         return;
@@ -5360,6 +5628,7 @@ void handleFileDownload()
         "Cache-Control: no-store\r\n"
         "Connection: close\r\n"
         "Content-Length: " + String(static_cast<unsigned long long>(totalBytes)) +
+        "\r\nSet-Cookie: " + sessionCookieValue() +
         "\r\n\r\n";
     auto writeExact = [&client](const std::uint8_t* data, std::size_t bytes) -> bool {
         std::size_t written = 0;
@@ -5375,6 +5644,8 @@ void handleFileDownload()
         }
         return true;
     };
+    sessionCookieEmittedForRequest = true;
+    beginWebConsoleForegroundWork();
     bool success = writeExact(
         reinterpret_cast<const std::uint8_t*>(responseHeader.c_str()),
         responseHeader.length());
@@ -5396,6 +5667,7 @@ void handleFileDownload()
     file.close();
     client.flush();
     client.stop();
+    endWebConsoleForegroundWork();
     if (!success || sentBytes != totalBytes) {
         Serial.printf("WEB_FILE_DOWNLOAD result=failed sent_bytes=%u expected_bytes=%u\n",
                       static_cast<unsigned int>(sentBytes),
@@ -5413,10 +5685,12 @@ void handleFileUploadData()
         uploadError = "";
         uploadBytes = 0;
         uploadCreated = false;
-        if (!requestHasValidCsrf()) {
+        if (!requestHasValidCsrfWithoutRefresh()) {
             uploadError = "Authentication required";
             return;
         }
+        recordSessionActivityForRequest();
+        beginWebConsoleForegroundWork();
         const OperationResult storage = requireSdWriteAccess(
             0, kStorageOperationalFloorBytes);
         if (!storage.success) {
@@ -5532,8 +5806,12 @@ void updateConsoleSerial()
             if (consoleSerialInput == "PING") {
                 Serial.println("PONG");
             } else if (consoleSerialInput == "STATUS") {
-                Serial.printf("WEB_CONSOLE status=ready authenticated=%s heap=%u\n",
-                              sessionToken.isEmpty() ? "no" : "yes",
+                const std::uint32_t now = millis();
+                Serial.printf(
+                              "WEB_CONSOLE status=ready authenticated=%s browser_presence=%s heap=%u\n",
+                              sessionAuthenticationActiveAt(now) ? "yes" : "no",
+                              webConsoleBrowserStateName(
+                                  webConsoleBrowserStateAt(now)),
                               static_cast<unsigned int>(ESP.getFreeHeap()));
             } else if (consoleSerialInput == "EXIT") {
                 exitRequested = true;
@@ -5560,6 +5838,9 @@ WebConsoleResult runWebConsole(const Settings& settings,
 {
     if (WiFi.status() != WL_CONNECTED) {
         return {false, initialChatId, "Web console requires an active Wi-Fi connection"};
+    }
+    if (!webSessionLifetimePolicy(settings.webSessionLifetime).valid) {
+        return {false, initialChatId, "Web session lifetime is invalid"};
     }
     setWebDiagnosticsEnabled(false);
     Serial.println("WEB_CONSOLE stage=load_password");
@@ -5632,8 +5913,11 @@ WebConsoleResult runWebConsole(const Settings& settings,
         consoleFiles.clear();
         storageStartupError = result.success ? startupStorage.error : result.error;
     }
-    sessionToken = "";
-    csrfToken = "";
+    clearSessionAuthentication();
+    sessionActivityRecordedForRequest = false;
+    sessionCookieEmittedForRequest = false;
+    presentedAuthenticationActive = false;
+    presentedBrowserState = WebConsoleBrowserState::Waiting;
     consoleStatus = storageStartupError;
     exitRequested = false;
     pythonRestartRequested = false;
@@ -5646,6 +5930,7 @@ WebConsoleResult runWebConsole(const Settings& settings,
             handleLogin,
             handleLogout,
             handleSession,
+            handleSessionHeartbeat,
             handleCloseConsole,
             handleState,
             handlePending,
@@ -5755,7 +6040,14 @@ WebConsoleResult runWebConsole(const Settings& settings,
     bool enterHeld = false;
     bool passwordWasVisible = consolePasswordVisible();
     while (!exitRequested) {
+        sessionActivityRecordedForRequest = false;
+        sessionCookieEmittedForRequest = false;
         server.handleClient();
+        if (browserPresenceBusy) {
+            endWebConsoleForegroundWork();
+        }
+        expireSessionAuthenticationAt(millis());
+        renderConsoleSessionPresentationIfChanged();
         if (pythonRestartRequested) {
             showPythonWorkspaceRunning("http://" + WiFi.localIP().toString() + "/",
                                        accessPassword);

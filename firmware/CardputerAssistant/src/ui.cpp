@@ -418,7 +418,8 @@ void showFilesPortal(const String& accessPointName, const String& accessPointPas
 
 void showWebConsoleAccess(const String& address,
                           const String& accessPassword,
-                          bool sessionActive,
+                          bool authenticationActive,
+                          WebConsoleBrowserState browserState,
                           bool passwordVisible)
 {
     canvas->fillScreen(TFT_BLACK);
@@ -428,17 +429,29 @@ void showWebConsoleAccess(const String& address,
     canvas->setTextColor(TFT_WHITE, TFT_NAVY);
     canvas->setCursor(18, 1);
     canvas->print("WEB CONSOLE");
-    canvas->setTextColor(sessionActive ? TFT_GREEN : TFT_YELLOW, TFT_BLACK);
+    canvas->setTextColor(authenticationActive ? TFT_GREEN : TFT_YELLOW, TFT_BLACK);
     canvas->setCursor(6, 27);
-    canvas->print(sessionActive ? "Browser session active" : "Waiting for browser");
+    canvas->print(authenticationActive ? "Authentication: active"
+                                       : "Authentication: waiting");
+    const bool browserConnected =
+        browserState == WebConsoleBrowserState::Connected;
+    canvas->setTextColor(
+        browserConnected ? TFT_GREEN :
+        browserState == WebConsoleBrowserState::Busy ? TFT_CYAN : TFT_YELLOW,
+        TFT_BLACK);
+    canvas->setCursor(6, 44);
+    canvas->print(
+        browserConnected ? "Browser: connected" :
+        browserState == WebConsoleBrowserState::Busy ? "Browser: busy"
+                                                     : "Browser: waiting");
     canvas->setTextColor(TFT_CYAN, TFT_BLACK);
-    canvas->setCursor(6, 45);
+    canvas->setCursor(6, 61);
     canvas->print(clippedLine(address, 29));
     canvas->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    canvas->setCursor(6, 68);
+    canvas->setCursor(6, 78);
     canvas->print(passwordVisible ? "Installation password:" : "Password hidden");
     canvas->setTextColor(TFT_YELLOW, TFT_BLACK);
-    canvas->setCursor(6, 86);
+    canvas->setCursor(6, 95);
     canvas->print(passwordVisible ? clippedLine(accessPassword, 29)
                                   : String("Press ENTER to reveal"));
     canvas->fillRect(0, 117, 240, 18, TFT_DARKGREY);

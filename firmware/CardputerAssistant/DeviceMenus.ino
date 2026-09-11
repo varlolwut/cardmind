@@ -176,10 +176,12 @@ std::vector<String> webConsoleMenuItems()
     const String pythonStatus = python.partitionLayoutReady && python.pythonImageReady
         ? String("Python workspace: ready")
         : String("Python workspace: not installed");
+    const cardputer::WebSessionLifetimePolicy sessionLifetime =
+        cardputer::webSessionLifetimePolicy(settings.webSessionLifetime);
     return {
         "Open Web Console",
         address,
-        "Session timeout: 15 min",
+        "Session lifetime: " + String(sessionLifetime.label),
         pythonStatus,
         "Start Python workspace",
         "Configure API and Wi-Fi",

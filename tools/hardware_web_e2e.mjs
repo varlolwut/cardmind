@@ -13,6 +13,33 @@ const p2LargeStreamMinimumHeapFloorBytes = 28 * 1024;
 const p2LargeStreamListingMinimumHeapLossBytes = 8192;
 const p2LargeStreamDownloadMinimumHeapLossBytes = 4 * 4096;
 const p2LargeStreamJsonWindowMinimumHeapLossBytes = 3 * 12_288;
+const httpTransportFailureCode = 'CARDMIND_HTTP_TRANSPORT_FAILURE';
+const p6SessionTransportExitCode = 20;
+const httpTransportMachineAllowlist = Object.freeze([
+  'ABORT_ERR',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ETIMEDOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+  'AbortError',
+  'BodyTimeoutError',
+  'ConnectTimeoutError',
+  'HeadersTimeoutError',
+  'SocketError',
+  'TimeoutError',
+]);
+const p6SessionOwnedSource = 'tools/hardware_web_e2e.mjs';
+const p6SessionLifetimeSeconds = Object.freeze({
+  '15m': 900,
+  '1h': 3600,
+  '8h': 28_800,
+  until_reboot: null,
+});
 const contextHistoryOrphanTitlePattern = /^P2 context history ([0-9]{13})$/;
 const historyHeapMessageBytes = 16_384;
 const historyHeapSmallMessages = 2;
@@ -24,6 +51,7 @@ const statePaths = {
   files: '/api/files',
   ssh: '/api/ssh/state',
   settings: '/api/settings',
+  session: '/api/session',
 };
 
 function requireString(value, field) {
@@ -99,16 +127,193 @@ function framedPromptRequest(promptValue, requestInstructions, maximumOutputToke
 async function fetchWithin(url, options, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  let body;
   try {
-    const response = await fetch(url, {...options, signal: controller.signal});
-    const body = await response.arrayBuffer();
-    return new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
+    response = await fetch(url, {...options, signal: controller.signal});
+    body = await response.arrayBuffer();
+  } catch (error) {
+    throw createHttpTransportFailure(url, options, error);
   } finally {
     clearTimeout(timer);
+  }
+  return new Response(response.status === 204 ? null : body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+function createHttpTransportFailure(url, options, cause) {
+  const method = typeof options.method === 'string' ? options.method : 'GET';
+  const failure = new Error(`HTTP ${method} ${url.pathname} transport failed`);
+  failure.code = httpTransportFailureCode;
+  failure.transportMachine = httpTransportMachine(cause);
+  return failure;
+}
+
+function isHttpTransportFailure(error) {
+  return error instanceof Error && error.code === httpTransportFailureCode;
+}
+
+function allowedHttpTransportMachine(value) {
+  return typeof value === 'string' &&
+    httpTransportMachineAllowlist.includes(value) ? value : 'UNCLASSIFIED';
+}
+
+function httpTransportMachine(error) {
+  const candidates = [error];
+  if (error !== null && typeof error === 'object') {
+    candidates.push(error.cause);
+  }
+  for (const candidate of candidates) {
+    if (candidate === null || typeof candidate !== 'object') continue;
+    const code = allowedHttpTransportMachine(candidate.code);
+    if (code !== 'UNCLASSIFIED') return code;
+    const name = allowedHttpTransportMachine(candidate.name);
+    if (name !== 'UNCLASSIFIED') return name;
+  }
+  return 'UNCLASSIFIED';
+}
+
+function p6SessionOwnedSourceLocations(error) {
+  if (!(error instanceof Error) || typeof error.stack !== 'string') return [];
+  const locations = [];
+  const framePattern = new RegExp(
+    '^\\s*at (?:(?:[^()]*) \\()?[^()\\r\\n]*[\\\\/]tools[\\\\/]' +
+      'hardware_web_e2e\\.mjs:([0-9]+):([0-9]+)\\)?\\s*$',
+  );
+  for (const frame of error.stack.split(/\r?\n/).slice(1)) {
+    const match = framePattern.exec(frame);
+    if (match === null) continue;
+    const line = Number.parseInt(match[1], 10);
+    const column = Number.parseInt(match[2], 10);
+    if (!Number.isSafeInteger(line) || line < 1 || line > 100_000 ||
+        !Number.isSafeInteger(column) || column < 1 || column > 9999) {
+      continue;
+    }
+    const location = `${p6SessionOwnedSource}:${line}:${column}`;
+    if (!locations.includes(location)) locations.push(location);
+    if (locations.length === 2) break;
+  }
+  return locations;
+}
+
+function contextualizeP6SessionTransportFailure(
+  transportError, stage, primaryError) {
+  if (!isHttpTransportFailure(transportError) ||
+      !['primary', 'restoration'].includes(stage)) {
+    throw new TypeError('P6-03 transport context is invalid');
+  }
+  const failure = new Error('P6-03 session transport failed');
+  failure.code = httpTransportFailureCode;
+  failure.transportMachine = allowedHttpTransportMachine(
+    transportError.transportMachine,
+  );
+  failure.transportStage = stage;
+  failure.primaryLocations = stage === 'restoration' ?
+    p6SessionOwnedSourceLocations(primaryError) : [];
+  return failure;
+}
+
+function p6SessionTransportReport(error) {
+  const stage = error.transportStage === 'restoration' ?
+    'restoration' : 'primary';
+  const machine = allowedHttpTransportMachine(error.transportMachine);
+  const locations = Array.isArray(error.primaryLocations) ?
+    error.primaryLocations.filter(
+      (value) => typeof value === 'string' &&
+        /^tools\/hardware_web_e2e\.mjs:[1-9][0-9]{0,5}:[1-9][0-9]{0,3}$/.test(value),
+    ).slice(0, 2) : [];
+  const primary = stage === 'restoration' ?
+    (locations.length > 0 ? locations.join(',') : 'unclassified') : 'none';
+  return `type=${httpTransportFailureCode} stage=${stage} ` +
+    `machine=${machine} primary=${primary}`;
+}
+
+function p6SessionLifetimeMaxAge(lifetime, label) {
+  if (!Object.prototype.hasOwnProperty.call(p6SessionLifetimeSeconds, lifetime)) {
+    throw new Error(`P6-03 ${label} has invalid session lifetime state`);
+  }
+  return p6SessionLifetimeSeconds[lifetime];
+}
+
+function parseP6SessionCookie(response, label) {
+  const values = response.headers.getSetCookie();
+  if (values.length !== 1) {
+    throw new Error(
+      `P6-03 ${label} returned ${values.length} Set-Cookie headers; expected exactly one`,
+    );
+  }
+  const parts = values[0].split(';').map((part) => part.trim());
+  const nameValue = parts.shift();
+  if (nameValue === undefined || !nameValue.startsWith('cm_session=')) {
+    throw new Error(`P6-03 ${label} did not return the CardMind session cookie`);
+  }
+  const token = nameValue.slice('cm_session='.length);
+  const attributes = new Map();
+  for (const part of parts) {
+    const separator = part.indexOf('=');
+    const name = (separator < 0 ? part : part.slice(0, separator)).toLowerCase();
+    const value = separator < 0 ? null : part.slice(separator + 1);
+    if (attributes.has(name)) {
+      throw new Error(`P6-03 ${label} returned a duplicate cookie attribute`);
+    }
+    attributes.set(name, value);
+  }
+  const allowed = new Set(['httponly', 'samesite', 'path', 'max-age']);
+  if ([...attributes.keys()].some((name) => !allowed.has(name)) ||
+      attributes.get('httponly') !== null ||
+      attributes.get('samesite')?.toLowerCase() !== 'strict' ||
+      attributes.get('path') !== '/') {
+    throw new Error(`P6-03 ${label} returned an invalid session cookie policy`);
+  }
+  let maxAgeSeconds = null;
+  if (attributes.has('max-age')) {
+    const value = attributes.get('max-age');
+    if (value === null || !/^(?:0|[1-9][0-9]*)$/.test(value)) {
+      throw new Error(`P6-03 ${label} returned an invalid cookie Max-Age`);
+    }
+    maxAgeSeconds = Number(value);
+    if (!Number.isSafeInteger(maxAgeSeconds)) {
+      throw new Error(`P6-03 ${label} cookie Max-Age exceeds the safe integer range`);
+    }
+  }
+  return {
+    cookie: `cm_session=${token}`,
+    token_empty: token.length === 0,
+    policy: {
+      count: 1,
+      http_only: true,
+      same_site: 'Strict',
+      path: '/',
+      max_age_seconds: maxAgeSeconds,
+    },
+  };
+}
+
+function requireP6SessionCookie(response, auth, lifetime, label) {
+  const parsed = parseP6SessionCookie(response, label);
+  const expectedMaxAge = p6SessionLifetimeMaxAge(lifetime, label);
+  if (parsed.token_empty || parsed.cookie !== auth.cookie ||
+      parsed.policy.max_age_seconds !== expectedMaxAge) {
+    throw new Error(`P6-03 ${label} returned the wrong session token or lifetime policy`);
+  }
+  return {...parsed.policy, token_unchanged: true};
+}
+
+function requireP6LogoutCookie(response, label) {
+  const parsed = parseP6SessionCookie(response, label);
+  if (!parsed.token_empty || parsed.policy.max_age_seconds !== 0) {
+    throw new Error(`P6-03 ${label} did not expire the session cookie`);
+  }
+  return {...parsed.policy, token_cleared: true};
+}
+
+function requireNoP6SessionCookie(response, label) {
+  const count = response.headers.getSetCookie().length;
+  if (count !== 0) {
+    throw new Error(`P6-03 ${label} returned ${count} unexpected Set-Cookie headers`);
   }
 }
 
@@ -133,6 +338,61 @@ async function login(baseUrl, password) {
   }
   const document = await session.json();
   return {cookie, csrf: requireString(document.csrf, 'csrf')};
+}
+
+async function loginFromCredentialFile() {
+  let raw = null;
+  let password = '';
+  try {
+    raw = JSON.parse(await readFile(credentialPath, 'utf8'));
+    const baseUrl = new URL(requireString(raw.web_ui?.url, 'web_ui.url'));
+    password = requireString(
+      raw.web_ui?.installation_password,
+      'web_ui.installation_password',
+    );
+    return {baseUrl, auth: await login(baseUrl, password)};
+  } finally {
+    if (raw !== null && typeof raw === 'object' &&
+        raw.web_ui !== null && typeof raw.web_ui === 'object') {
+      raw.web_ui.installation_password = '';
+    }
+    password = '';
+    raw = null;
+  }
+}
+
+async function loginP6SessionFromCredentialFile() {
+  let raw = null;
+  let password = '';
+  try {
+    raw = JSON.parse(await readFile(credentialPath, 'utf8'));
+    const baseUrl = new URL(requireString(raw.web_ui?.url, 'web_ui.url'));
+    password = requireString(
+      raw.web_ui?.installation_password,
+      'web_ui.installation_password',
+    );
+    const protectedResponse = await fetchWithin(
+      new URL(statePaths.session, baseUrl),
+      {method: 'GET'},
+      maximumRequestMs,
+    );
+    requireP6SessionHttpStatus(
+      protectedResponse, 401, 'protected request before first login');
+    requireNoP6SessionCookie(
+      protectedResponse, 'protected request before first login');
+    return {
+      baseUrl,
+      auth: await login(baseUrl, password),
+      protected_request_before_login: 'pass',
+    };
+  } finally {
+    if (raw !== null && typeof raw === 'object' &&
+        raw.web_ui !== null && typeof raw.web_ui === 'object') {
+      raw.web_ui.installation_password = '';
+    }
+    password = '';
+    raw = null;
+  }
 }
 
 async function requestWithin(baseUrl, auth, path, options, timeoutMs) {
@@ -601,6 +861,7 @@ function settingsUpdateForm(settings, globalInstructions) {
     model: settings.model,
     global_instructions: globalInstructions,
     project_chat_history_quota_mib: String(historyQuotaBytes / 1_048_576),
+    web_session_lifetime: settings.web_session_lifetime,
     stt_base_url: settings.stt_base_url,
     stt_model: settings.stt_model,
     stt_api_key: '',
@@ -4358,6 +4619,13 @@ function binaryTextNames(nonce) {
   ];
 }
 
+const p2BinaryTextFixtureSha256 =
+  'e57eec3c40ea8c6ce033eeb848f00dd2e8d86eeebe90777d9267620a96b574ae';
+
+function binaryTextFixtureBytes() {
+  return Buffer.from([0xff, 0xfe, 0x00, 0x80, 0x50, 0x32, 0x32, 0x39]);
+}
+
 function validateBinaryTextLedger(document, expectedNonce) {
   if (document === null || typeof document !== 'object' || Array.isArray(document) ||
       document.version !== 1 || !/^[0-9]{8,20}$/.test(document.nonce) ||
@@ -4445,6 +4713,7 @@ async function cleanupBinaryTextOwnership(baseUrl, auth, ledgerPath, inputLedger
       }
     }
   } catch (error) {
+    if (isHttpTransportFailure(error)) throw error;
     errors.push(`link/selection cleanup: ${error.message}`);
   }
   try {
@@ -4457,6 +4726,7 @@ async function cleanupBinaryTextOwnership(baseUrl, auth, ledgerPath, inputLedger
       throw new Error('owned files remain after cleanup');
     }
   } catch (error) {
+    if (isHttpTransportFailure(error)) throw error;
     errors.push(`file cleanup: ${error.message}`);
   }
   if (errors.length > 0) throw new Error(`P2-29 cleanup failed; ${errors.join('; ')}`);
@@ -4483,7 +4753,7 @@ async function verifyBinaryTextPolicy(baseUrl, auth, nonce, ledgerPath) {
     names, cleanup_complete: false,
   }, nonce);
   ledger = await writeBinaryTextLedger(ledgerPath, ledger, {});
-  const binary = Buffer.from([0xff, 0xfe, 0x00, 0x80, 0x50, 0x32, 0x32, 0x39]);
+  const binary = binaryTextFixtureBytes();
   let evidence = null;
   let testError = null;
   try {
@@ -6047,6 +6317,652 @@ async function verifyP6Providers(baseUrl, auth, nonce, ledgerPath) {
   };
 }
 
+function requireP6SessionHttpStatus(response, expectedStatus, label) {
+  if (response.status !== expectedStatus) {
+    throw new Error(
+      `P6-03 ${label} returned HTTP ${response.status}; expected ${expectedStatus}`,
+    );
+  }
+}
+
+function requireP6SessionDocument(document, auth, label) {
+  if (document === null || typeof document !== 'object' || Array.isArray(document) ||
+      document.ok !== true || document.authenticated !== true ||
+      document.csrf !== auth.csrf ||
+      !Object.prototype.hasOwnProperty.call(
+        p6SessionLifetimeSeconds, document.session_lifetime) ||
+      !['waiting', 'connected', 'busy'].includes(document.browser_presence)) {
+    throw new Error(`P6-03 ${label} returned invalid typed session state`);
+  }
+  return {
+    authenticated: true,
+    session_lifetime: document.session_lifetime,
+    browser_presence: document.browser_presence,
+  };
+}
+
+async function fetchP6Authenticated(
+  baseUrl, auth, path, options, timeoutMs) {
+  return fetchWithin(
+    new URL(path, baseUrl),
+    authenticatedOptions(auth, options, auth.csrf),
+    timeoutMs,
+  );
+}
+
+async function readP6SessionState(baseUrl, auth, label) {
+  const response = await fetchP6Authenticated(
+    baseUrl, auth, statePaths.session, {method: 'GET'}, maximumRequestMs);
+  requireP6SessionHttpStatus(response, 200, label);
+  const document = requireP6SessionDocument(await response.json(), auth, label);
+  const cookie = requireP6SessionCookie(
+    response, auth, document.session_lifetime, label);
+  return {document, cookie};
+}
+
+async function readP6SettingsState(baseUrl, auth, label) {
+  const response = await fetchP6Authenticated(
+    baseUrl, auth, statePaths.settings, {method: 'GET'}, maximumRequestMs);
+  requireP6SessionHttpStatus(response, 200, label);
+  let document;
+  try {
+    document = await response.json();
+  } catch {
+    throw new Error(`P6-03 ${label} returned invalid Settings JSON`);
+  }
+  if (document === null || typeof document !== 'object' || Array.isArray(document) ||
+      document.ok !== true ||
+      !Object.prototype.hasOwnProperty.call(
+        p6SessionLifetimeSeconds, document.web_session_lifetime)) {
+    throw new Error(`P6-03 ${label} returned invalid session-lifetime Settings state`);
+  }
+  const cookie = requireP6SessionCookie(
+    response, auth, document.web_session_lifetime, label);
+  return {document, cookie};
+}
+
+function p6SessionSettingsRevision(document, label) {
+  if (!Number.isSafeInteger(document.settings_revision) ||
+      document.settings_revision < 0 || document.settings_revision > 0xFFFF_FFFF) {
+    throw new Error(`P6-03 ${label} returned an invalid Settings revision`);
+  }
+  return document.settings_revision;
+}
+
+function p6SessionSettingsRevisionDelta(initial, current) {
+  return (current - initial) >>> 0;
+}
+
+function p6SessionStableSettingsSnapshot(document, label) {
+  const stringFields = [
+    'wifi_ssid',
+    'model',
+    'global_instructions',
+    'master_tool_policy',
+    'new_chat_tool_policy',
+    'api_base_url',
+    'stt_base_url',
+    'stt_model',
+    'search_base_url',
+    'tts_base_url',
+    'tts_model',
+    'tts_voice',
+  ];
+  const integerFields = [
+    'project_chat_history_quota_bytes',
+    'api_profile_limit',
+    'model_preset_limit',
+    'tts_volume',
+    'display_brightness',
+    'screen_sleep_minutes',
+    'keyboard_repeat_ms',
+    'power_profile',
+  ];
+  const booleanFields = [
+    'api_key_configured',
+    'stt_key_configured',
+    'search_key_configured',
+    'tts_key_configured',
+    'tts_auto_play',
+  ];
+  if (stringFields.some((field) => typeof document[field] !== 'string') ||
+      integerFields.some((field) =>
+        !Number.isSafeInteger(document[field]) || document[field] < 0) ||
+      booleanFields.some((field) => typeof document[field] !== 'boolean')) {
+    throw new Error(`P6-03 ${label} returned invalid stable Settings fields`);
+  }
+  const secretFields = [
+    'wifi_password', 'api_key', 'stt_api_key', 'search_api_key', 'tts_api_key',
+  ];
+  if (secretFields.some((field) => objectContainsExactKey(document, field))) {
+    throw new Error(`P6-03 ${label} exposed a write-only secret field`);
+  }
+  const provider = p6ProviderSnapshot(document);
+  return {
+    wifi_ssid: document.wifi_ssid,
+    model: document.model,
+    global_instructions: document.global_instructions,
+    master_tool_policy: document.master_tool_policy,
+    new_chat_tool_policy: document.new_chat_tool_policy,
+    project_chat_history_quota_bytes: document.project_chat_history_quota_bytes,
+    api_base_url: document.api_base_url,
+    api_key_configured: document.api_key_configured,
+    api_profile_limit: document.api_profile_limit,
+    model_preset_limit: document.model_preset_limit,
+    default_api_profile_id: provider.default_profile_id,
+    api_profiles: provider.profiles,
+    model_presets: provider.presets,
+    stt_base_url: document.stt_base_url,
+    stt_model: document.stt_model,
+    stt_key_configured: document.stt_key_configured,
+    search_base_url: document.search_base_url,
+    search_key_configured: document.search_key_configured,
+    tts_base_url: document.tts_base_url,
+    tts_model: document.tts_model,
+    tts_voice: document.tts_voice,
+    tts_key_configured: document.tts_key_configured,
+    tts_auto_play: document.tts_auto_play,
+    tts_volume: document.tts_volume,
+    display_brightness: document.display_brightness,
+    screen_sleep_minutes: document.screen_sleep_minutes,
+    keyboard_repeat_ms: document.keyboard_repeat_ms,
+    power_profile: document.power_profile,
+  };
+}
+
+function requireP6SessionStableSettingsEqual(actual, expected, label) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`P6-03 ${label} changed non-lifetime Settings`);
+  }
+}
+
+async function saveP6SessionLifetime(
+  baseUrl, auth, settings, lifetime, label) {
+  p6SessionLifetimeMaxAge(lifetime, label);
+  const candidate = {...settings, web_session_lifetime: lifetime};
+  const startedAt = performance.now();
+  const response = await fetchP6Authenticated(
+    baseUrl,
+    auth,
+    '/api/settings',
+    {
+      method: 'POST',
+      body: settingsUpdateForm(candidate, candidate.global_instructions),
+    },
+    maximumRequestMs,
+  );
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  requireP6SessionHttpStatus(response, 200, label);
+  const cookie = requireP6SessionCookie(response, auth, lifetime, label);
+  let document;
+  try {
+    document = await response.json();
+  } catch {
+    throw new Error(`P6-03 ${label} returned invalid Settings mutation JSON`);
+  }
+  if (document?.ok !== true) {
+    throw new Error(`P6-03 ${label} did not confirm the Settings mutation`);
+  }
+  return {candidate, cookie, elapsed_ms: elapsedMs};
+}
+
+async function rejectMalformedP6SessionLifetime(baseUrl, auth, settings) {
+  const candidate = {...settings, web_session_lifetime: 'invalid'};
+  const body = settingsUpdateForm(candidate, candidate.global_instructions);
+  const response = await fetchP6Authenticated(
+    baseUrl,
+    auth,
+    '/api/settings',
+    {method: 'POST', body},
+    maximumRequestMs,
+  );
+  requireP6SessionHttpStatus(response, 400, 'rejected Settings save');
+  const cookie = requireP6SessionCookie(
+    response, auth, 'until_reboot', 'rejected Settings save');
+  let document;
+  try {
+    document = await response.json();
+  } catch {
+    throw new Error('P6-03 rejected Settings save returned invalid JSON');
+  }
+  if (document?.ok === true || typeof document?.error !== 'string' ||
+      document.error.length === 0) {
+    throw new Error('P6-03 rejected Settings save did not return an explicit error');
+  }
+  return cookie;
+}
+
+async function sendP6SessionHeartbeat(baseUrl, auth, label) {
+  const startedAt = performance.now();
+  const response = await fetchP6Authenticated(
+    baseUrl, auth, statePaths.session, {method: 'POST'}, maximumRequestMs);
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  requireP6SessionHttpStatus(response, 204, label);
+  requireNoP6SessionCookie(response, label);
+  if ((await response.text()) !== '') {
+    throw new Error(`P6-03 ${label} returned a non-empty heartbeat body`);
+  }
+  return elapsedMs;
+}
+
+async function waitUntilP6Session(deadlineMs) {
+  while (performance.now() < deadlineMs) {
+    const remainingMs = deadlineMs - performance.now();
+    await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, remainingMs)));
+  }
+}
+
+async function readP6ManagedJson(
+  baseUrl, auth, path, lifetime, label) {
+  const response = await fetchP6Authenticated(
+    baseUrl, auth, path, {method: 'GET'}, maximumRequestMs);
+  requireP6SessionHttpStatus(response, 200, label);
+  requireP6SessionCookie(response, auth, lifetime, label);
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`P6-03 ${label} returned invalid JSON`);
+  }
+}
+
+async function downloadP6SessionTinyFixture(
+  baseUrl, auth, name, expected, expectedSha256, lifetime) {
+  const startedAt = performance.now();
+  const response = await fetchP6Authenticated(
+    baseUrl,
+    auth,
+    `/api/file/download?name=${encodeURIComponent(name)}`,
+    {method: 'GET'},
+    maximumRequestMs,
+  );
+  requireP6SessionHttpStatus(response, 200, 'tiny raw download');
+  const cookie = requireP6SessionCookie(
+    response, auth, lifetime, 'tiny raw download');
+  const contentLength = response.headers.get('content-length');
+  if (contentLength === null ||
+      parsePositiveSafeInteger(
+        contentLength, 'P6-03 tiny raw download Content-Length') !== expected.length ||
+      response.headers.get('content-type') !== 'application/octet-stream' ||
+      response.headers.get('content-disposition') !== 'attachment' ||
+      response.headers.get('cache-control') !== 'no-store' ||
+      response.headers.get('connection')?.toLowerCase() !== 'close') {
+    throw new Error('P6-03 tiny raw download returned invalid raw headers');
+  }
+  const body = Buffer.from(await response.arrayBuffer());
+  const actualSha256 = sha256(body);
+  if (!body.equals(expected) || actualSha256 !== expectedSha256) {
+    throw new Error('P6-03 tiny raw download changed the exact fixture bytes');
+  }
+  return {
+    bytes: body.length,
+    content_length: expected.length,
+    sha256: actualSha256,
+    headers: 'pass',
+    elapsed_ms: Math.round(performance.now() - startedAt),
+    cookie,
+  };
+}
+
+function p6SessionResourceSnapshot(document, label) {
+  const snapshot = {};
+  for (const field of ['free_heap', 'largest_heap', 'stack_free']) {
+    if (!Number.isSafeInteger(document[field]) || document[field] <= 0) {
+      throw new Error(`P6-03 ${label} status has invalid ${field}`);
+    }
+    snapshot[field] = document[field];
+  }
+  return snapshot;
+}
+
+function requireP6SessionResources(before, after) {
+  const freeLoss = before.free_heap - after.free_heap;
+  const largestLoss = before.largest_heap - after.largest_heap;
+  if (after.free_heap < 70 * 1024 || after.largest_heap < 28 * 1024 ||
+      after.stack_free <= 0 || freeLoss > maximumSteadyHeapLossBytes ||
+      largestLoss > maximumSteadyHeapLossBytes) {
+    throw new Error(
+      'P6-03 Web session lifecycle did not return to its resource floor: ' +
+      `free_loss=${freeLoss}, largest_loss=${largestLoss}, ` +
+      `free=${after.free_heap}, largest=${after.largest_heap}, ` +
+      `stack=${after.stack_free}`,
+    );
+  }
+}
+
+async function freshP6SessionLogin(expectedBaseUrl) {
+  const authenticated = await loginFromCredentialFile();
+  if (authenticated.baseUrl.href !== expectedBaseUrl.href) {
+    throw new Error('P6-03 credential URL changed during the focused suite');
+  }
+  return authenticated.auth;
+}
+
+async function verifyP6Session(
+  baseUrl, initialAuth, binaryTextNonce, binaryTextLedgerPath) {
+  let auth = initialAuth;
+  let baselineSnapshot = null;
+  let baselineRevision = null;
+  let finalBaseline = false;
+  let tinyLedger = null;
+  let tinyCleanupComplete = false;
+  let evidence = null;
+  let testError = null;
+  try {
+    const initialSession = await readP6SessionState(
+      baseUrl, auth, 'initial managed session');
+    const initialSettings = await readP6SettingsState(
+      baseUrl, auth, 'initial Settings state');
+    baselineSnapshot = p6SessionStableSettingsSnapshot(
+      initialSettings.document, 'initial Settings state');
+    baselineRevision = p6SessionSettingsRevision(
+      initialSettings.document, 'initial Settings state');
+    if (initialSession.document.session_lifetime !==
+        initialSettings.document.web_session_lifetime ||
+        initialSession.document.browser_presence !== 'waiting') {
+      throw new Error('P6-03 initial authentication/presence state is inconsistent');
+    }
+
+    let settings = initialSettings.document;
+    const choiceEvidence = [];
+    let expectedRevisionDelta = 0;
+    for (const lifetime of ['15m', '1h', '8h', 'until_reboot']) {
+      const saved = await saveP6SessionLifetime(
+        baseUrl, auth, settings, lifetime, `Settings save ${lifetime}`);
+      const stored = await readP6SettingsState(
+        baseUrl, auth, `Settings state ${lifetime}`);
+      expectedRevisionDelta++;
+      const storedRevision = p6SessionSettingsRevision(
+        stored.document, `Settings state ${lifetime}`);
+      if (stored.document.web_session_lifetime !== lifetime ||
+          p6SessionSettingsRevisionDelta(baselineRevision, storedRevision) !==
+            expectedRevisionDelta) {
+        throw new Error(
+          `P6-03 Settings did not retain exactly one revision for ${lifetime}`);
+      }
+      requireP6SessionStableSettingsEqual(
+        p6SessionStableSettingsSnapshot(
+          stored.document, `Settings state ${lifetime}`),
+        baselineSnapshot,
+        `Settings save ${lifetime}`,
+      );
+      settings = stored.document;
+      choiceEvidence.push({
+        value: lifetime,
+        max_age_seconds: p6SessionLifetimeMaxAge(lifetime, lifetime),
+        save_cookie: saved.cookie,
+        read_cookie: stored.cookie,
+        save_ms: saved.elapsed_ms,
+      });
+    }
+
+    const revisionBeforeRejected = p6SessionSettingsRevision(
+      settings, 'Settings before malformed lifetime');
+    const rejectedCookie = await rejectMalformedP6SessionLifetime(
+      baseUrl, auth, settings);
+    const afterRejectedSave = await readP6SettingsState(
+      baseUrl, auth, 'Settings after malformed lifetime');
+    const revisionAfterRejected = p6SessionSettingsRevision(
+      afterRejectedSave.document, 'Settings after malformed lifetime');
+    if (afterRejectedSave.document.web_session_lifetime !== 'until_reboot' ||
+        revisionAfterRejected !== revisionBeforeRejected ||
+        rejectedCookie.max_age_seconds !== null) {
+      throw new Error('P6-03 malformed lifetime changed Settings or cookie policy');
+    }
+    requireP6SessionStableSettingsEqual(
+      p6SessionStableSettingsSnapshot(
+        afterRejectedSave.document, 'Settings after malformed lifetime'),
+      baselineSnapshot,
+      'malformed lifetime rejection',
+    );
+
+    let staleCookie = auth.cookie;
+    const logout = await fetchP6Authenticated(
+      baseUrl, auth, '/logout', {method: 'POST'}, maximumRequestMs);
+    requireP6SessionHttpStatus(logout, 200, 'explicit logout');
+    const logoutCookie = requireP6LogoutCookie(logout, 'explicit logout');
+    auth = null;
+    const logoutDocument = await logout.json();
+    if (logoutDocument?.ok !== true) {
+      throw new Error('P6-03 explicit logout did not confirm completion');
+    }
+    const staleResponse = await fetchWithin(
+      new URL(statePaths.session, baseUrl),
+      {method: 'GET', headers: {Cookie: staleCookie}},
+      maximumRequestMs,
+    );
+    staleCookie = '';
+    requireP6SessionHttpStatus(staleResponse, 401, 'stale cookie after logout');
+    requireNoP6SessionCookie(staleResponse, 'stale cookie after logout');
+
+    auth = await freshP6SessionLogin(baseUrl);
+    const afterFreshLogin = await readP6SessionState(
+      baseUrl, auth, 'fresh login after stale-cookie rejection');
+    const settingsAfterFreshLogin = await readP6SettingsState(
+      baseUrl, auth, 'Settings after fresh login');
+    if (afterFreshLogin.document.session_lifetime !== 'until_reboot' ||
+        afterFreshLogin.document.browser_presence !== 'waiting' ||
+        settingsAfterFreshLogin.document.web_session_lifetime !== 'until_reboot' ||
+        p6SessionSettingsRevisionDelta(
+          baselineRevision,
+          p6SessionSettingsRevision(
+            settingsAfterFreshLogin.document, 'Settings after fresh login'),
+        ) !== 4) {
+      throw new Error('P6-03 fresh login did not retain the four Settings saves');
+    }
+    requireP6SessionStableSettingsEqual(
+      p6SessionStableSettingsSnapshot(
+        settingsAfterFreshLogin.document, 'Settings after fresh login'),
+      baselineSnapshot,
+      'fresh-login Settings',
+    );
+
+    const finalSaved = await saveP6SessionLifetime(
+      baseUrl,
+      auth,
+      settingsAfterFreshLogin.document,
+      '15m',
+      'final 15-minute Settings save',
+    );
+    const finalSettings = await readP6SettingsState(
+      baseUrl, auth, 'final 15-minute Settings state');
+    const finalSession = await readP6SessionState(
+      baseUrl, auth, 'final 15-minute Session state');
+    if (finalSettings.document.web_session_lifetime !== '15m' ||
+        finalSession.document.session_lifetime !== '15m' ||
+        finalSession.document.browser_presence !== 'waiting' ||
+        p6SessionSettingsRevisionDelta(
+          baselineRevision,
+          p6SessionSettingsRevision(
+            finalSettings.document, 'final 15-minute Settings state'),
+        ) !== 5) {
+      throw new Error('P6-03 final 15-minute baseline is inconsistent');
+    }
+    requireP6SessionStableSettingsEqual(
+      p6SessionStableSettingsSnapshot(
+        finalSettings.document, 'final 15-minute Settings state'),
+      baselineSnapshot,
+      'final 15-minute Settings',
+    );
+    finalBaseline = true;
+
+    const beforeResources = p6SessionResourceSnapshot(
+      await readP6ManagedJson(
+        baseUrl, auth, statePaths.status, '15m', 'pre-fixture resources'),
+      'pre-fixture',
+    );
+    const names = binaryTextNames(binaryTextNonce);
+    const existing = new Set(await listAllWorkspaceNames(baseUrl, auth));
+    const collisionMatches = names.filter((name) => existing.has(name)).length;
+    if (collisionMatches !== 0) {
+      throw new Error('P6-03 exact tiny fixture names already exist');
+    }
+    const initialChat = await activeChatState(baseUrl, auth);
+    tinyLedger = validateBinaryTextLedger({
+      version: 1,
+      nonce: binaryTextNonce,
+      original_project_id: initialChat.project_id,
+      names,
+      cleanup_complete: false,
+    }, binaryTextNonce);
+    tinyLedger = await writeBinaryTextLedger(
+      binaryTextLedgerPath, tinyLedger, {});
+
+    const expected = binaryTextFixtureBytes();
+    if (expected.length !== 8 || sha256(expected) !== p2BinaryTextFixtureSha256) {
+      throw new Error('P6-03 existing P2-29 fixture contract is inconsistent');
+    }
+    await uploadWorkspaceBytes(baseUrl, auth, names[0], expected);
+    const firstHeartbeatMs = await sendP6SessionHeartbeat(
+      baseUrl, auth, 'heartbeat before silent interval');
+    const silentStartedAt = performance.now();
+    await waitUntilP6Session(silentStartedAt + 26_000);
+    const silentElapsedMs = Math.round(performance.now() - silentStartedAt);
+    if (silentElapsedMs < 26_000) {
+      throw new Error('P6-03 local silent interval ended before 26 seconds');
+    }
+
+    const downloaded = await downloadP6SessionTinyFixture(
+      baseUrl,
+      auth,
+      names[0],
+      expected,
+      p2BinaryTextFixtureSha256,
+      '15m',
+    );
+    const waiting = await readP6SessionState(
+      baseUrl, auth, 'Session immediately after tiny download');
+    if (!waiting.document.authenticated ||
+        waiting.document.browser_presence !== 'waiting') {
+      throw new Error('P6-03 tiny download renewed or ended browser presence');
+    }
+    const secondHeartbeatMs = await sendP6SessionHeartbeat(
+      baseUrl, auth, 'heartbeat after tiny download');
+    const connected = await readP6SessionState(
+      baseUrl, auth, 'Session after new heartbeat');
+    if (!connected.document.authenticated ||
+        connected.document.browser_presence !== 'connected') {
+      throw new Error('P6-03 new heartbeat did not restore Connected');
+    }
+
+    tinyLedger = await cleanupBinaryTextOwnership(
+      baseUrl, auth, binaryTextLedgerPath, tinyLedger);
+    if (!tinyLedger.cleanup_complete) {
+      throw new Error('P6-03 tiny fixture cleanup did not complete');
+    }
+    tinyLedger = await cleanupBinaryTextOwnership(
+      baseUrl, auth, binaryTextLedgerPath, tinyLedger);
+    if (!tinyLedger.cleanup_complete) {
+      throw new Error('P6-03 tiny fixture idempotent cleanup did not complete');
+    }
+    tinyCleanupComplete = true;
+
+    const afterResources = p6SessionResourceSnapshot(
+      await readP6ManagedJson(
+        baseUrl, auth, statePaths.status, '15m', 'post-cleanup resources'),
+      'post-cleanup',
+    );
+    requireP6SessionResources(beforeResources, afterResources);
+    evidence = {
+      choices: choiceEvidence,
+      malformed_status: 400,
+      malformed_revision_unchanged: true,
+      malformed_old_policy: rejectedCookie,
+      logout_cookie: logoutCookie,
+      stale_cookie_rejected: 'pass',
+      fresh_login: 'pass',
+      final_save_cookie: finalSaved.cookie,
+      final_settings_cookie: finalSettings.cookie,
+      final_session_cookie: finalSession.cookie,
+      final_settings_15m: true,
+      final_session_15m: true,
+      settings_revision_delta: 5,
+      stable_configuration_unchanged: true,
+      write_only_empty_count: 5,
+      clear_flags_false_count: 3,
+      wifi_identity_unchanged: true,
+      credential_configuration_unchanged: true,
+      raw_secret_fields_absent: true,
+      first_heartbeat_ms: firstHeartbeatMs,
+      second_heartbeat_ms: secondHeartbeatMs,
+      heartbeat_no_cookie: 'pass',
+      silent_interval_ms: silentElapsedMs,
+      tiny_download: downloaded,
+      post_download_waiting: true,
+      post_heartbeat_connected: true,
+      fixture_collision_matches: collisionMatches,
+      fixture_cleanup: {
+        remaining_matches: 0,
+        cleanup_complete: tinyLedger.cleanup_complete,
+        idempotent: true,
+      },
+      resources: {before: beforeResources, after: afterResources},
+      cleanup: 'pass',
+    };
+  } catch (error) {
+    testError = error;
+  }
+
+  if (isHttpTransportFailure(testError)) {
+    auth = null;
+    throw contextualizeP6SessionTransportFailure(testError, 'primary', null);
+  }
+
+  let cleanupError = null;
+  if (testError !== null) {
+    try {
+      if (auth === null) auth = await freshP6SessionLogin(baseUrl);
+      if (!finalBaseline) {
+        const cleanupSettings = await readP6SettingsState(
+          baseUrl, auth, 'failure-path Settings state');
+        await saveP6SessionLifetime(
+          baseUrl,
+          auth,
+          cleanupSettings.document,
+          '15m',
+          'failure-path 15-minute Settings save',
+        );
+        const restoredSettings = await readP6SettingsState(
+          baseUrl, auth, 'failure-path 15-minute Settings state');
+        const restoredSession = await readP6SessionState(
+          baseUrl, auth, 'failure-path 15-minute Session state');
+        if (restoredSettings.document.web_session_lifetime !== '15m' ||
+            restoredSession.document.session_lifetime !== '15m') {
+          throw new Error('P6-03 failure cleanup did not restore 15 minutes');
+        }
+        finalBaseline = true;
+      }
+      if (!tinyCleanupComplete && tinyLedger !== null) {
+        tinyLedger = await cleanupBinaryTextOwnership(
+          baseUrl, auth, binaryTextLedgerPath, tinyLedger);
+        tinyLedger = await cleanupBinaryTextOwnership(
+          baseUrl, auth, binaryTextLedgerPath, tinyLedger);
+        if (!tinyLedger.cleanup_complete) {
+          throw new Error('P6-03 failure cleanup did not remove the tiny fixture');
+        }
+        tinyCleanupComplete = true;
+      }
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
+
+  if (isHttpTransportFailure(cleanupError)) {
+    auth = null;
+    throw contextualizeP6SessionTransportFailure(
+      cleanupError, 'restoration', testError);
+  }
+  auth = null;
+  if (testError !== null || cleanupError !== null || evidence === null) {
+    throw new Error(
+      `P6-03 direct session suite failed; test=${testError?.message ?? 'none'}; ` +
+      `cleanup=${cleanupError?.message ?? 'none'}; final_15m=${finalBaseline}; ` +
+      `tiny_cleanup=${tinyCleanupComplete}`,
+    );
+  }
+  return evidence;
+}
+
+
 async function verifyP4SshOutputDownload(baseUrl, auth, name, expectedBytesValue) {
   if (!/^ssh-command-[0-9a-f]{16}\.log$/.test(name)) {
     throw new Error('P4-05 output filename is not an exact collision-owned log name');
@@ -6079,26 +6995,6 @@ async function verifyP4SshOutputDownload(baseUrl, auth, name, expectedBytesValue
 }
 
 async function main() {
-  let raw = null;
-  let baseUrl;
-  let password = '';
-  let auth;
-  try {
-    raw = JSON.parse(await readFile(credentialPath, 'utf8'));
-    baseUrl = new URL(requireString(raw.web_ui?.url, 'web_ui.url'));
-    password = requireString(
-      raw.web_ui?.installation_password,
-      'web_ui.installation_password',
-    );
-    auth = await login(baseUrl, password);
-  } finally {
-    if (raw !== null && typeof raw === 'object' &&
-        raw.web_ui !== null && typeof raw.web_ui === 'object') {
-      raw.web_ui.installation_password = '';
-    }
-    password = '';
-    raw = null;
-  }
   const suiteIndex = process.argv.indexOf('--suite');
   const suite = suiteIndex >= 0 ? process.argv[suiteIndex + 1] : 'full';
   if (![
@@ -6108,7 +7004,8 @@ async function main() {
     'p4-ssh-output', 'workspace-tool',
     'large-stream', 'atomic-failure', 'sd-degraded', 'instructions',
     'version-history',
-    'request-settings', 'p6-providers', 'summary-regeneration', 'context-history',
+    'request-settings', 'p6-providers', 'p6-session', 'summary-regeneration',
+    'context-history',
     'context-history-recover', 'context-history-orphan-recover',
     'archive-quota', 'archive-quota-recover',
     'binary-text', 'binary-text-recover',
@@ -6116,6 +7013,11 @@ async function main() {
   ].includes(suite)) {
     throw new Error(`Unknown hardware Web E2E suite '${suite}'`);
   }
+  const authenticated = suite === 'p6-session' ?
+    await loginP6SessionFromCredentialFile() :
+    await loginFromCredentialFile();
+  const baseUrl = authenticated.baseUrl;
+  const auth = authenticated.auth;
   if (suite === 'diagnostics') {
     const response = await request(baseUrl, auth, '/api/diagnostics', {method: 'GET'});
     const report = await response.text();
@@ -6273,6 +7175,28 @@ async function main() {
       requiredCommandArgument('--p6-provider-ledger'),
     );
     console.log(JSON.stringify({result: 'pass', suite, providers}));
+    return;
+  }
+  if (suite === 'p6-session') {
+    const nonce = requiredCommandArgument('--binary-text-nonce');
+    if (!/^[0-9]{8,20}$/.test(nonce)) {
+      throw new Error('P6-03 tiny-fixture nonce must contain 8 to 20 decimal digits');
+    }
+    const session = await verifyP6Session(
+      baseUrl,
+      auth,
+      nonce,
+      requiredCommandArgument('--binary-text-ledger'),
+    );
+    console.log(JSON.stringify({
+      result: 'pass',
+      suite,
+      session: {
+        protected_request_before_login:
+          authenticated.protected_request_before_login,
+        ...session,
+      },
+    }));
     return;
   }
   if (suite === 'limits') {
@@ -6498,4 +7422,15 @@ async function main() {
   }
 }
 
-await main();
+try {
+  await main();
+} catch (error) {
+  const suiteIndex = process.argv.indexOf('--suite');
+  const suite = suiteIndex >= 0 ? process.argv[suiteIndex + 1] : 'full';
+  if (suite === 'p6-session' && isHttpTransportFailure(error)) {
+    console.error(`P6_SESSION_TRANSPORT_FAILURE ${p6SessionTransportReport(error)}`);
+    process.exitCode = p6SessionTransportExitCode;
+  } else {
+    throw error;
+  }
+}

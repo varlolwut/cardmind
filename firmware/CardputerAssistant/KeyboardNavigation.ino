@@ -1848,7 +1848,30 @@ void handleKeyboard()
                     : String("Connect CardMind to 2.4 GHz Wi-Fi first");
                 renderWebConsoleMenu();
             } else if (webConsoleMenuIndex == 2) {
-                menuStatus = "Inactive browser sessions expire after 15 minutes";
+                if (!cardputer::webSessionLifetimeIsValid(
+                        settings.webSessionLifetime)) {
+                    menuStatus = "Stored Web session lifetime is invalid";
+                    renderWebConsoleMenu();
+                    return;
+                }
+                cardputer::Settings updated = settings;
+                const std::uint8_t nextLifetime =
+                    (static_cast<std::uint8_t>(settings.webSessionLifetime) + 1U) %
+                    (static_cast<std::uint8_t>(
+                         cardputer::WebSessionLifetime::UntilReboot) + 1U);
+                updated.webSessionLifetime =
+                    static_cast<cardputer::WebSessionLifetime>(nextLifetime);
+                const cardputer::OperationResult result =
+                    cardputer::saveSettings(updated);
+                if (result.success) {
+                    settings = updated;
+                    const cardputer::WebSessionLifetimePolicy policy =
+                        cardputer::webSessionLifetimePolicy(
+                            settings.webSessionLifetime);
+                    menuStatus = "Session lifetime: " + String(policy.label);
+                } else {
+                    menuStatus = result.error;
+                }
                 renderWebConsoleMenu();
             } else if (webConsoleMenuIndex == 3) {
                 const cardputer::PythonModeStatus status = cardputer::inspectPythonMode();

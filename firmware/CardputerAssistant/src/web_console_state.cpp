@@ -3,6 +3,7 @@
 #include "python_mode.h"
 #include "sd_storage.h"
 #include "text_utils.h"
+#include "web_console.h"
 
 #include <M5Cardputer.h>
 #include <WiFi.h>
@@ -295,6 +296,11 @@ OperationResult buildWebConsoleSettingsState(
         newChatPolicy.error != ToolPolicyCodecError::None) {
         return {false, "Tool permission policy could not be encoded"};
     }
+    const WebSessionLifetimePolicy sessionLifetime =
+        webSessionLifetimePolicy(settings.webSessionLifetime);
+    if (!sessionLifetime.valid) {
+        return {false, "Web session lifetime could not be encoded"};
+    }
     document["ok"] = true;
     document["settings_revision"] = revision;
     document["firmware_version"] = runtime.firmwareVersion;
@@ -309,6 +315,7 @@ OperationResult buildWebConsoleSettingsState(
         JsonString::Copied);
     document["project_chat_history_quota_bytes"] =
         settings.projectChatHistoryQuotaBytes;
+    document["web_session_lifetime"] = sessionLifetime.value;
     document["api_base_url"] = settings.apiBaseUrl;
     document["api_key_configured"] = settings.apiKey.length() >= 8;
     document["provider_state"] = providerStoreStateName(providerState.state);

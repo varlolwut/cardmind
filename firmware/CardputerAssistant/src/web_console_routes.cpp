@@ -59,6 +59,8 @@ void configureWebConsoleRoutes(WebServer& server,
     server.on("/login", HTTP_POST, handler(handlers, WebConsoleRouteHandler::Login));
     server.on("/logout", HTTP_POST, handler(handlers, WebConsoleRouteHandler::Logout));
     server.on("/api/session", HTTP_GET, handler(handlers, WebConsoleRouteHandler::Session));
+    server.on("/api/session", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::SessionHeartbeat));
     server.on("/api/console/close", HTTP_POST,
               handler(handlers, WebConsoleRouteHandler::CloseConsole));
     server.on("/api/state", HTTP_GET, handler(handlers, WebConsoleRouteHandler::State));

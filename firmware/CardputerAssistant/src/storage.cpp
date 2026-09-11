@@ -13,6 +13,7 @@ namespace {
 constexpr const char* kNamespace = "assistant";
 constexpr const char* kSdVolumeIdentityKey = "sd_volume_id";
 constexpr const char* kToolPolicyKey = "tool_policy";
+constexpr const char* kWebSessionLifetimeKey = "session_life";
 constexpr std::size_t kSdVolumeIdentityBytes = 16;
 constexpr std::size_t kGlobalToolPolicyRecordLength =
     1 + (2 * kEncodedToolPolicyLength);
@@ -190,6 +191,21 @@ OperationResult loadSettings(Settings& settings, ProviderProfileStore& providerS
         preferences.getUChar("power", 1),
         preferences.getUInt("chat_quota", 0),
     };
+    const PreferenceType sessionLifetimeType =
+        preferences.getType(kWebSessionLifetimeKey);
+    if (sessionLifetimeType != PT_INVALID) {
+        if (sessionLifetimeType != PT_U8) {
+            preferences.end();
+            return {false, "Stored Web session lifetime has the wrong NVS type"};
+        }
+        const WebSessionLifetime lifetime = static_cast<WebSessionLifetime>(
+            preferences.getUChar(kWebSessionLifetimeKey, UINT8_MAX));
+        if (!webSessionLifetimeIsValid(lifetime)) {
+            preferences.end();
+            return {false, "Stored Web session lifetime is outside the supported range"};
+        }
+        loaded.webSessionLifetime = lifetime;
+    }
     const PreferenceType policyType = preferences.getType(kToolPolicyKey);
     if (policyType == PT_INVALID) {
         const EncodedGlobalToolPoliciesResult encoded = encodeGlobalToolPolicies(
@@ -326,6 +342,9 @@ OperationResult saveSettings(const Settings& settings)
     if (!isValidProjectChatHistoryQuota(settings.projectChatHistoryQuotaBytes)) {
         return {false, "Chat history quota must be 0 or at least 2 MiB"};
     }
+    if (!webSessionLifetimeIsValid(settings.webSessionLifetime)) {
+        return {false, "Web session lifetime is invalid"};
+    }
     const EncodedGlobalToolPoliciesResult encodedToolPolicies =
         encodeGlobalToolPolicies(
             settings.masterToolPolicy, settings.newChatToolPolicy);
@@ -410,6 +429,12 @@ OperationResult saveSettings(const Settings& settings)
         preferences.putUInt("chat_quota", settings.projectChatHistoryQuotaBytes) != 4) {
         result = {false, "Failed to store project chat history quota"};
     }
+    if (result.success &&
+        preferences.putUChar(
+            kWebSessionLifetimeKey,
+            static_cast<std::uint8_t>(settings.webSessionLifetime)) != 1) {
+        result = {false, "Failed to store Web session lifetime"};
+    }
     if (result.success) {
         result = verifyStoredLength(
             preferences.putString(kToolPolicyKey, encodedToolPolicies.value),
@@ -487,6 +512,15 @@ OperationResult saveSettings(const Settings& settings)
     if (result.success &&
         preferences.getUInt("chat_quota", 1) != settings.projectChatHistoryQuotaBytes) {
         result = {false, "Failed to verify project chat history quota after NVS write"};
+    }
+    if (result.success &&
+        preferences.getType(kWebSessionLifetimeKey) != PT_U8) {
+        result = {false, "Failed to verify Web session lifetime NVS type after write"};
+    }
+    if (result.success &&
+        preferences.getUChar(kWebSessionLifetimeKey, UINT8_MAX) !=
+            static_cast<std::uint8_t>(settings.webSessionLifetime)) {
+        result = {false, "Failed to verify Web session lifetime after NVS write"};
     }
     if (result.success) {
         result = verifyStoredValue(

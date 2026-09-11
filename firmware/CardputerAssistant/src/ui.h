@@ -54,6 +54,12 @@ struct DeviceDiagnosticsView {
     bool sshStorageReady;
 };
 
+enum class WebConsoleBrowserState {
+    Waiting,
+    Connected,
+    Busy,
+};
+
 enum class ChatCapabilityState {
     Off,
     Inherit,
@@ -70,7 +76,8 @@ void showProvisioning(const String& accessPointName, const String& accessPointPa
 void showFilesPortal(const String& accessPointName, const String& accessPointPassword);
 void showWebConsoleAccess(const String& address,
                           const String& accessPassword,
-                          bool sessionActive,
+                          bool authenticationActive,
+                          WebConsoleBrowserState browserState,
                           bool passwordVisible);
 void showPythonWorkspaceAccess(const String& address, const String& accessPassword);
 void showPythonWorkspaceRunning(const String& address, const String& accessPassword);

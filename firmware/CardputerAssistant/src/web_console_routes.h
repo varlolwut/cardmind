@@ -12,6 +12,7 @@ enum class WebConsoleRouteHandler : std::size_t {
     Login,
     Logout,
     Session,
+    SessionHeartbeat,
     CloseConsole,
     State,
     Pending,

@@ -13,6 +13,7 @@
 #include "../firmware/CardputerAssistant/src/tool_catalog.h"
 #include "../firmware/CardputerAssistant/src/tool_policy.h"
 #include "../firmware/CardputerAssistant/src/tool_policy_codec.h"
+#include "../firmware/CardputerAssistant/src/web_console.h"
 
 #include <algorithm>
 #include <array>
@@ -2373,6 +2374,74 @@ void testSshCommandOptions()
             "SSH output overflow must clear all partial output");
 }
 
+void testWebSessionTiming()
+{
+    using cardputer::WebSessionLifetime;
+    constexpr std::array<WebSessionLifetime, 3> finiteLifetimes = {
+        WebSessionLifetime::Minutes15,
+        WebSessionLifetime::Hour1,
+        WebSessionLifetime::Hours8,
+    };
+    constexpr std::array<std::uint32_t, 3> expectedSeconds = {
+        900U, 3600U, 28800U,
+    };
+    for (std::size_t index = 0; index < finiteLifetimes.size(); ++index) {
+        const cardputer::WebSessionLifetimePolicy policy =
+            cardputer::webSessionLifetimePolicy(finiteLifetimes[index]);
+        require(policy.valid && policy.expires &&
+                    policy.cookieMaxAgeSeconds == expectedSeconds[index] &&
+                    policy.idleMilliseconds == expectedSeconds[index] * 1000U,
+                "Finite Web session policy is incorrect");
+        require(!cardputer::webSessionAuthenticationExpired(
+                    finiteLifetimes[index], 0U,
+                    policy.idleMilliseconds - 1U) &&
+                    cardputer::webSessionAuthenticationExpired(
+                        finiteLifetimes[index], 0U,
+                        policy.idleMilliseconds) &&
+                    cardputer::webSessionAuthenticationExpired(
+                        finiteLifetimes[index], 0U,
+                        policy.idleMilliseconds + 1U),
+                "Finite Web session expiry boundary is incorrect");
+        constexpr std::uint32_t wrapStart = UINT32_MAX - 100U;
+        require(!cardputer::webSessionAuthenticationExpired(
+                    finiteLifetimes[index], wrapStart,
+                    static_cast<std::uint32_t>(
+                        wrapStart + policy.idleMilliseconds - 1U)) &&
+                    cardputer::webSessionAuthenticationExpired(
+                        finiteLifetimes[index], wrapStart,
+                        static_cast<std::uint32_t>(
+                            wrapStart + policy.idleMilliseconds)),
+                "Web session expiry failed across millis wraparound");
+    }
+    const cardputer::WebSessionLifetimePolicy rebootPolicy =
+        cardputer::webSessionLifetimePolicy(
+            WebSessionLifetime::UntilReboot);
+    require(rebootPolicy.valid && !rebootPolicy.expires &&
+                rebootPolicy.cookieMaxAgeSeconds == 0U &&
+                !cardputer::webSessionAuthenticationExpired(
+                    WebSessionLifetime::UntilReboot, UINT32_MAX, UINT32_MAX - 1U),
+            "Until-reboot Web session policy must not timer-expire");
+    require(!cardputer::webSessionLifetimeIsValid(
+                static_cast<WebSessionLifetime>(4U)) &&
+                !cardputer::webSessionLifetimeIsValid(
+                    static_cast<WebSessionLifetime>(255U)) &&
+                !cardputer::webSessionLifetimePolicy(
+                    static_cast<WebSessionLifetime>(4U)).valid,
+            "Invalid Web session lifetime was accepted");
+    require(!cardputer::webBrowserPresenceConnected(false, 0U, 0U) &&
+                cardputer::webBrowserPresenceConnected(true, 0U, 23999U) &&
+                !cardputer::webBrowserPresenceConnected(true, 0U, 24000U),
+            "Web browser presence boundary is incorrect");
+    constexpr std::uint32_t heartbeatAt = UINT32_MAX - 100U;
+    require(cardputer::webBrowserPresenceConnected(
+                true, heartbeatAt,
+                static_cast<std::uint32_t>(heartbeatAt + 23999U)) &&
+                !cardputer::webBrowserPresenceConnected(
+                    true, heartbeatAt,
+                    static_cast<std::uint32_t>(heartbeatAt + 24000U)),
+            "Web browser presence failed across millis wraparound");
+}
+
 }  // namespace
 
 int main()
@@ -2415,6 +2484,7 @@ int main()
         testWebSearchRouting();
         testSshTerminalFiltering();
         testSshCommandOptions();
+        testWebSessionTiming();
         testDocumentReader();
         testOfflineCalculator();
         std::cout << "host_tests: PASS\n";

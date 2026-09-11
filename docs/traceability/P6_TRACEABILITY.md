@@ -31,9 +31,15 @@ Device gaps through a stable, measured Wi-Fi baseline without introducing USB pr
   paginated profile framework.
 - Offer authentication lifetimes of 15 minutes, 1 hour, 8 hours and until reboot. Authentication
   lifetime is independent from browser presence.
-- Each visible Web tab sends a bounded heartbeat. Presence becomes waiting within 15-30 seconds
-  after the last heartbeat, while the authentication session remains valid. `pagehide` and
-  `sendBeacon` are only best-effort hints, and one closing tab cannot hide another live tab.
+- Each visible Web tab sends a bounded heartbeat. While the existing synchronous WebServer is
+  available to process requests, presence becomes waiting within 30 seconds after the last accepted
+  heartbeat while authentication remains valid. A blocking foreground request makes presence
+  temporarily unobservable and must show the existing operation state or compact Busy, never a
+  connected claim. Handler return evaluates the original heartbeat timestamp without renewal or
+  grace; only a newly accepted visible-tab heartbeat restores connected.
+- One closing tab cannot hide another live tab because any remaining visible tab continues the
+  aggregate heartbeat. `pagehide`/`sendBeacon` hints are optional and must not clear aggregate
+  presence. Existing transfers are neither redesigned nor restricted for this indicator.
 - Reuse the existing reconnect path while preserving the active project, active view and drafts.
   Exact scroll restoration is outside scope unless a measured defect changes `ROADMAP.md` first.
 - Reuse existing diagnostics, export, clipboard, file/download and single-QR paths. Add only explicit
@@ -60,11 +66,11 @@ Status values are `pending`, `in_progress`, and `completed`.
 | --- | --- | --- | --- |
 | P6-01 | Canonical phase transition and pre-edit freeze: confirm remote `develop`; inventory every required P3-P5 user-facing action; obtain Architect's consolidated replacement brief and independent visual red-team; create a materially different replacement artifact; freeze scope, non-goals, proof matrix, resource budget and first production-row write set for Architect GO | Exact baseline and branch evidence; complete action-to-surface inventory including project creation, Shared-workspace file creation/upload, chat creation/management and Settings; reviewed replacement brief; independent red-team verdict; Architect acceptance of the interactive artifact against complete functional coverage, current UX/design-system evidence, Web Console/ESP32 Cardputer feasibility and visual quality; reviewed first-row design/proof/write set before production | completed |
 | P6-02 | Add the bounded API-profile and model-preset contract through existing settings, persistence, Device and Web owners | Measured NVS capacity; explicit count/length limits; selection/default behavior; malformed/full-storage failure; reboot persistence; Device/Web parity; exact cleanup and resources | completed |
-| P6-03 | Add configurable authentication lifetime and independent multi-tab browser presence | Four exact lifetime choices; expiry and until-reboot semantics; visible-tab heartbeat; last-tab waiting within 30 seconds without auth loss; multi-tab correctness; reboot and stale-token behavior | pending |
+| P6-03 | Add configurable authentication lifetime and independent multi-tab browser presence | Four exact lifetime choices; expiry and until-reboot semantics; aggregate visible-tab heartbeat; while WebServer is available, waiting within 30 seconds after the last heartbeat without auth loss; multi-tab correctness; blocking foreground request shown as Busy/unobservable and original timestamp evaluated at return without renewal; final-image startup rejection before login plus stale-token rejection through the shared clear owner | completed |
 | P6-04 | Preserve active project, active view and drafts through the existing Web reconnect path | Same-address reconnect after transient disconnect and Python handoff; active project/view/draft restored; stale or missing state fails explicitly; no exact-scroll claim | pending |
-| P6-05 | Bring the Web Console to the Architect-reviewed replacement direction, add explicit discovered-network Wi-Fi selection through the smallest reviewed existing-owner backend mapping, and finish desktop/tablet/phone polish through the existing asset boundary | Every required Web capability reachable; explicit Wi-Fi scan/select/hidden-manual/connect states and other degraded states; stable-ID interaction checks; 1280, 900 and 390 px screenshots without overlap; soak and resource evidence | pending |
-| P6-06 | Bring the 240x135 Device UI to the Architect-reviewed replacement direction through existing screen/input owners | Every required Device capability reachable; coherent navigation and compact states; provider/SD/optional-API degradation; no Web-only requirement leakage; device resources and latency | pending |
-| P6-07 | Reconcile cross-surface behavior and run focused integration acceptance | Names/state/permissions consistent across Device and Web; profiles, sessions, presence, reconnect, SSH and Python boundaries interoperate; forbidden effects absent; exact-owned cleanup | pending |
+| P6-05 | Bring the Web Console to the Architect-reviewed replacement direction, add explicit discovered-network Wi-Fi selection through the smallest reviewed existing-owner backend mapping, add Web Pending to complete Python source and back through existing P5 owners, and finish desktop/tablet/phone polish through the existing asset boundary | Every required Web capability reachable; explicit Wi-Fi scan/select/hidden-manual/connect states and other degraded states; complete-source review returns to the same Pending identity; stable-ID interaction checks; 1280, 900 and 390 px screenshots without overlap; soak and resource evidence | pending |
+| P6-06 | Bring the 240x135 Device UI to the Architect-reviewed replacement direction through existing screen/input owners, including complete Python-source navigation and return to the originating Chat | Every required Device capability reachable; coherent navigation and compact states; Python source review returns to its originating Chat without changing approval state; provider/SD/optional-API degradation; no Web-only requirement leakage; device resources and latency | pending |
+| P6-07 | Reconcile cross-surface behavior and run focused integration acceptance | Names/state/permissions consistent across Device and Web; profiles, sessions, presence, reconnect, SSH and Python full-source review/return boundaries interoperate; forbidden effects absent; exact-owned cleanup | pending |
 | P6-08 | Establish and publish the stable Wi-Fi baseline and close Phase 6 | Full host/Device/Web regression; exact build options and binary hash; flash/RAM/heap/largest-block/stack/latency; screenshots; soak; cleanup; independent reviews; green CI; reviewed merge only to `develop` | pending |
 
 ## P6-01 locked boundary
@@ -2719,3 +2725,802 @@ regression remains P6-08. No further test or harness work is required for this r
 P6-02 completed at 2026-09-10T22:00:46+03:00. P6-03 remains `pending` during the required zero-active-row
 publication window and may become `in_progress` only after this exact row-only commit is pushed and its
 remote branch SHA is verified through the authenticated GitHub API.
+
+P6-02 publication was verified at 2026-09-10T22:17:44+03:00. The row-only commit
+`03151f07a1c2af9b434502fcf034346605f3f886` passed the local row-close check for its exact 28-path set,
+was pushed without force to `feature/phase-6-ui-stable-baseline`, and the authenticated GitHub API for
+`varlolwut/cardmind` resolved that branch to the same SHA with the required Author and Committer.
+No GitHub Actions run is claimed for this publication. P6-03 is now the sole `in_progress` row; this
+post-publication trace update is separate from the immutable P6-02 commit.
+
+## P6-03 pre-edit inventory, design and proof freeze
+
+P6-03 inventory began from published source
+`03151f07a1c2af9b434502fcf034346605f3f886` at 2026-09-10T22:17:44+03:00. At the
+2026-09-10T22:38:14+03:00 checkpoint the current root-cause hypothesis is that the shipped Web
+Console conflates three independent facts: one RAM authentication token, its fixed 15-minute idle
+clock, and Device `Browser session active` presentation. The expected information from the completed
+read-only experiments was: source inventory would identify every authentication/presence producer and
+consumer; existing-test inventory would find the smallest retained proof paths; pinned-vendor review
+would determine route, connection and timer constraints; and browser-standard review would determine
+which lifecycle signal can be authoritative. The results support one existing-owner correction below.
+No production, test, harness, Device, build or external state has changed, and no stall checkpoint or
+pivot threshold has been reached.
+
+### Locked contract and exclusions
+
+The binding clauses are the Phase 6 Work and Acceptance sections plus Web session/Browser presence
+limit decisions in `ROADMAP.md`, this trace's scope lock and P6-03 matrix row, and the approved P6-01
+session information architecture. The four persistent UX choices are exactly 15 minutes, 1 hour,
+8 hours and Until reboot. The approved P6-01 artifact calls the finite value an `Idle lifetime`;
+therefore finite authentication remains sliding-idle, preserving the shipped intent while removing
+the shipped server/cookie inconsistency. An authenticated non-presence request resets the idle clock.
+A heartbeat validates the current token and CSRF without resetting that clock. Until reboot has no
+timer expiry, but explicit Lock/logout, End Console, Console teardown and reboot still invalidate it.
+
+Presence is independent aggregate RAM state: one initialized flag and the timestamp of the last
+accepted visible-tab heartbeat. `Browser connected` means that aggregate timestamp is less than
+24 seconds old, never merely that an authentication token exists. While the existing synchronous
+WebServer can process requests, the aggregate becomes Waiting at 24 seconds without a heartbeat.
+Each visible tab sends the same bounded signal, so closing one tab cannot hide another tab that
+continues to heartbeat. Losing presence never clears authentication.
+
+While a synchronous foreground handler prevents heartbeat processing, presence is unobservable and
+the Device shows its existing operation state or compact Busy rather than Connected. At handler
+return the original heartbeat timestamp is evaluated without renewal or a new grace interval; only a
+newly accepted visible-tab heartbeat restores Connected. `pagehide`/`sendBeacon` is optional and
+cannot clear aggregate presence. Existing foreground transfers are preserved without redesign,
+restriction, asynchronous ownership or a second transport.
+
+P6-03 does not add a second server, route family, session store, microSD representation, background
+service, PWA/service worker, Web framework, reconnect/draft subsystem, diagnostic dashboard, retry or
+recovery framework, cookie-parser/security audit, Python/SSH redesign, general UI rewrite, or future
+USB work. The current substring cookie parser is retained for the Phase 9 security audit. Existing
+code, tests and harnesses remain in place; this row may only make the in-place additions listed in the
+frozen write set.
+
+### Complete current-owner inventory
+
+- `src/storage.cpp` owns the installation password in protected NVS and the single global `Settings`
+  load/save path. `src/app_types.h` has no session-lifetime field today. The lifetime choice belongs in
+  this existing protected-NVS settings owner; token, CSRF and tab presence remain RAM-only.
+- `src/web_console.cpp` owns the one global session token/CSRF pair, login throttling, idle timestamp,
+  login/session/logout handlers, authenticated/CSRF guards, Console loop, Device-screen render and
+  complete Console teardown. Its current authenticated guard both validates and touches the idle
+  timestamp, so using it unchanged for heartbeat would make finite authentication unbounded.
+- `src/web_console_routes.h/.cpp` owns the complete route table and collected request headers.
+  `/api/session` currently has only GET. The existing pinned WebServer permits distinct GET and POST
+  handlers for the same URI, so POST can own presence without a new route family.
+- Every authenticated read and mutation in `src/web_console.cpp`, including raw request start,
+  storage guard, prompt/Pending, Project/Chat, provider/preset, Settings, diagnostics, Python,
+  SSH/SFTP, QR and file paths, consumes the shared authentication or CSRF guards. They remain the one
+  activity owner. Presence POST alone uses the new non-touching authentication/CSRF guard.
+- `assets/web_console.html` owns tab-local CSRF bootstrap and the common request wrapper. It already
+  owns `visibilitychange`, bounded timers and visible-only SSH polling, but has no presence
+  heartbeat. Browser authentication remains the shared HttpOnly cookie.
+- `src/web_console_state.cpp` owns public Settings JSON. The existing Settings form and its one
+  `/api/settings` save action own the Web lifetime control. Browser-local appearance controls remain
+  separate and are not repurposed as persistence owners.
+- `DeviceMenus.ino` and `KeyboardNavigation.ino` own the current hard-coded `Session timeout: 15 min`
+  item and immediate per-item `saveSettings` behavior. `src/ui.h/.cpp` owns the 240x135 Console screen;
+  it currently renders token existence as browser presence. Serial `STATUS` has the same conflation.
+- `handleFileDownload` is the only Web response owner that constructs raw HTTP headers and writes
+  directly to `server.client()`. Every other mapped response uses WebServer header serialization.
+  Therefore a refreshed session cookie for a successful file download must be emitted by that raw
+  owner using the same cookie formatter; `server.sendHeader` alone cannot reach its response.
+- `tests/host_tests.cpp`, `tests/web_console_ui_test.mjs`, `tools/hardware_web_e2e.mjs/.ps1` and the
+  existing serial-held Web Console lifecycle are the proportional retained proof owners. They must be
+  extended in place, not replaced by a new runner. The generated `src/web_console_asset.h` remains
+  owned solely by `tools/embed_web_console.mjs`.
+
+### Frozen minimal design and legal transitions
+
+1. Add a typed `WebSessionLifetime` setting with exactly four legal enum values. Missing NVS state
+   migrates to 15 minutes without a write. A present wrong NVS type or out-of-range value fails with an
+   explicit settings-load error. `saveSettings` rejects invalid enum state, writes one bounded U8 key,
+   verifies the stored type/value and only then permits the caller to adopt the candidate.
+2. Keep the few portable lifetime, cookie-policy and wrap-safe expiry helpers in the existing
+   `src/web_console.h/.cpp` owner, with the typed setting in `src/app_types.h`. Add no
+   `web_session` files, registry abstraction, source-list plumbing or parallel runtime framework.
+   Tokens, CSRF and aggregate presence stay in `web_console.cpp`.
+3. Finite choices enforce server-side idle limits of 900, 3,600 and 28,800 seconds. Each successful
+   authenticated non-presence request refreshes the server timestamp and its cookie with the matching
+   `Max-Age`. One request-scoped refresh decision prevents duplicate cookie headers when storage guards
+   and handlers both authenticate. WebServer-managed responses serialize that decision with
+   `server.sendHeader`; the raw `handleFileDownload` success response writes the same formatted
+   `Set-Cookie` line into its own raw header without queueing it through `server.sendHeader`, while
+   that handler's WebServer-managed error responses use the normal serializer. Presence POST validates
+   without touching the timestamp
+   or emitting `Set-Cookie`. Until reboot emits a browser session cookie without `Max-Age` and never
+   timer-expires. The server remains authoritative if a stale browser cookie survives an expiry or
+   reboot. The Settings POST is the sole ordering exception to the ordinary guard: it
+   authenticates/validates CSRF without a touch or cookie, then owns exactly one explicit old-or-new
+   touch/cookie decision described next.
+4. Web Settings first validates the current token and CSRF without changing activity, parses a candidate
+   without modifying `consoleSettings`, and treats the submitted save as an authenticated activity. Any
+   validation or `saveSettings` failure touches the current idle timestamp, emits exactly one cookie
+   under the old runtime policy, returns the specific error, and retains that policy. Only after the NVS
+   write and verification succeed does the handler adopt the candidate, touch the same timestamp once,
+   emit exactly one cookie under the new policy and return success. This ordering cannot emit an old
+   success cookie, duplicate old/new cookies, or adopt before durability. Device selection cycles
+   15 min -> 1 h -> 8 h -> Until reboot -> 15 min through its existing menu item and adopts the
+   candidate only after the existing settings save succeeds.
+5. Register POST on the existing `/api/session` URI for one bounded heartbeat operation. It requires
+   the matching current cookie and constant-time CSRF, requires an empty body, accepts no tab identity,
+   validates without refreshing authentication, records `millis()` in one aggregate
+   `lastHeartbeatAt` timestamp, sets one initialized flag and returns 204. Missing or invalid
+   authentication/CSRF is an explicit failure with no state mutation. No heartbeat value is returned,
+   logged, placed in a URL or persisted.
+6. Each visible document sends the same non-overlapping heartbeat immediately, then eight seconds
+   after each completed attempt. Hidden documents stop; `visibilitychange` back to visible sends one
+   immediate attempt. There is no per-tab ID, registry, capacity error, leave protocol, request tab
+   header or stored browser identity. P6-03 adds no `pagehide`/`sendBeacon` request because aggregate
+   expiry is authoritative; any later optional hint still cannot clear aggregate presence. With tabs
+   A and B, closing A has no
+   adverse effect because visible B continues the aggregate heartbeat; after every visible tab stops,
+   the aggregate expires from the last accepted timestamp.
+7. Aggregate Connected is true only when initialized and the unsigned wrap-safe age is less than
+   24 seconds. Known synchronous foreground owners that can block heartbeat processing show their
+   existing operation state or a compact Busy state before blocking; during that interval the
+   presence claim is unobservable, not Connected. At handler return, clear Busy and evaluate the
+   original timestamp immediately, with no renewal, post-handler refresh, queued-signal assumption or
+   grace pass. Only a subsequently accepted heartbeat restores Connected. The existing File Download
+   URL, method, validation, synchronous streaming and transfer limits remain unchanged.
+8. The Console loop, already the only single-threaded state owner, expires aggregate presence and
+   finite authentication without waiting for another HTTP request whenever it is available to run.
+   It rerenders only when aggregate authentication, presence or Busy presentation changes. Auth
+   expiry, logout, token replacement, End Console, Python reboot handoff and teardown clear the
+   aggregate initialized flag. Presence expiry never clears authentication. Device and public session
+   state show Authentication and Browser presence separately; the screen uses `Browser connected`,
+   `Waiting for browser` or Busy/operation state, and the Web shell exposes authenticated lifetime plus
+   current presence without reviewer simulation controls.
+
+### Failure, reboot and durable-state windows
+
+- Before lifetime persistence, old valid NVS and current runtime policy remain. During the existing
+  multi-field `saveSettings`, power loss or a storage failure can leave the old or new U8 value; no new
+  transaction layer is introduced. A returned write/verify failure leaves the running policy old and
+  reports the exact error. On reboot, load accepts only one exact enum and otherwise fails closed.
+- After verified NVS success but before the Web response is observed, the choice and current runtime
+  policy can already be new. Server expiry is authoritative; a lost cookie-refresh response may cause
+  an earlier client-side login, never a session beyond the selected server limit. The next accepted
+  ordinary request emits the current policy again.
+- Token and presence mutations are RAM-only. A crash/reboot clears both before HTTP resumes; an old
+  cookie therefore receives 401 and cannot recreate either state. A fresh password login creates the
+  only new token/CSRF authority. Explicit logout clears aggregate presence globally by existing design;
+  heartbeat expiry never logs out.
+- A missed, rejected, hidden-tab or browser-killed heartbeat has no trusted side effect. The aggregate
+  ages out at 24 seconds from its last accepted timestamp whenever the server loop is available.
+  Network/server serialization can delay observation; while a synchronous foreground handler owns the
+  server, Busy replaces any presence claim. Handler completion never advances the timestamp or adds
+  grace, and no unprocessed heartbeat or beacon is assumed delivered.
+
+### Adopted primary-source constraints
+
+The exact local dependency is M5Stack board package 3.2.1 with embedded Arduino-ESP32/WebServer 3.2.0
+(`de184bd0`) and ESP-IDF libraries `idf-release_v5.4-2f7dcd86-v1`. Its WebServer handles one client and
+one current handler synchronously, closes each response connection, retains only explicitly collected
+headers, supports method-specific handlers on one URI, parses POST arguments before URL arguments and
+serializes application-owned `Set-Cookie` text. `millis()` is a boot-relative unsigned 32-bit
+truncation, so elapsed subtraction is correct for 24 seconds through 8 hours across wrap; Until reboot
+must be an explicit sentinel, not a large deadline. The shipped `handleFileDownload` bypasses
+WebServer's response serializer by building and writing its raw response header directly, so its
+authenticated success path must include the shared formatted cookie line at that exact owner.
+
+The W3C Beacon processing model at `https://w3c.github.io/beacon/#sendbeacon-method` defines a POST with
+credentials included, no response callback and no custom request-header facility; a true return only
+means queued, not delivered. The WHATWG page-visibility model at
+`https://html.spec.whatwg.org/multipage/interaction.html#dom-document-visibilitystate` exposes exact
+visible/hidden state and fires `visibilitychange`; it also notes that hiding can throttle browser work.
+The page lifecycle and Beacon sources therefore support only an optional best-effort hint that cannot
+clear aggregate presence; expiry from the last accepted visible heartbeat is authoritative.
+
+### Smallest frozen proof matrix
+
+| Requirement or forbidden effect | Smallest retained proof |
+| --- | --- |
+| Four exact choices, strict decode, finite idle expiry, Until reboot and `millis()` wrap | Existing host suite executes the production helpers at just-before/at/after 15 min, 1 h and 8 h, Until reboot at arbitrary elapsed values, invalid enum input, and wrap. No duplicated oracle state machine or new source-list plumbing. |
+| Aggregate presence ownership | Existing host suite proves uninitialized Waiting, heartbeat initialization/refresh, 23,999/24,000 ms boundary, wrap-safe expiry and authentication-clear reset using the production expiry helper. |
+| Persistent setting plus Device/Web owners | Existing WebUI tests check the stable select/status IDs, four values, one Settings save producer, Device label/cycle/save source owner, syntax and generated-asset equality. One bounded direct observation is planned to start from an unauthenticated final-image request, round-trip all four values through the existing complete Settings payload, reject a malformed lifetime before other fields/save, explicitly log out an Until-reboot session, reject its stale cookie, and finish on one coherent 15-minute baseline. It reports only status/count/policy booleans and leaves API/Wi-Fi configuration unchanged. |
+| Cookie versus heartbeat independence | The accepted auth-only interval proves finite 15-minute cookie policy and repeated heartbeat without idle refresh. The planned direct Settings observation covers finite Max-Age versus Until-reboot session-cookie policy, successful new-policy ordering, malformed-input old-policy preservation, explicit logout/stale-cookie rejection and final 15-minute baseline. The planned tiny File Download composition checks the raw success response carries the current policy without changing its URL, method or expected bytes. No proof prints or persists cookie/CSRF values. |
+| Real multi-tab and last-heartbeat semantics | One actual two-tab browser observation starts A+B, closes A while visible B continues heartbeat and remains Connected, then stops the last visible heartbeat and observes Waiting by the 24-second boundary while the same cookie remains authenticated. No per-tab identity, leave or beacon-delivery claim is made. |
+| Serialized foreground operation | The heavy greater-than-24-second transfer runtime is removed from the proof, not from product behavior. Independent complete writer inventory plus production helper tests prove that only init/reset and an accepted heartbeat change the aggregate timestamp/initialized state; Busy begin/end do not mutate or branch on its age, and Device/session JSON evaluate the same original timestamp after Busy clears. The planned replacement is one accepted heartbeat, a locally owned 26-second interval with no browser heartbeat producer, one successful ordinary tiny exact-owned nonempty File Download with expected bytes and raw current cookie policy, an immediate authenticated/Waiting GET, then one accepted heartbeat and Connected. Any begin/end timestamp renewal would make the GET Connected and fail. This replacement is planned and not PASS until observed; Busy during execution and deadline crossing inside a long handler remain source/composed evidence, not runtime claims. |
+| Finite expiry and Until-reboot invalidation | One real 15-minute sliding-idle/heartbeat interval proves the runtime guard rejects heartbeat after the refreshed finite deadline while repeated heartbeat itself never refreshes authentication. The inspected Console-loop call owns autonomous expiry; a GET after a silent interval would itself invoke the same expiry guard and is therefore not claimed as prior loop-state observation or repeated as a second 15-minute test. Final-image startup rejects a protected request before login; the production helper proves Until reboot has no timer expiry; a real explicit logout through the shared clear owner makes the old in-memory cookie receive 401 before fresh login. Source review confirms token/CSRF are RAM-only and startup clears them before WebServer request handling. No standalone physical reboot carries a live test cookie. |
+| Device state, resources and cleanup | Same-run serial `STATUS` distinguishes authentication from post-handler Connected/Waiting only; it cannot observe Busy while the synchronous handler owns the loop. Busy is covered by the inspected Device-render call path and post-return runtime state, without an in-handler serial claim. Direct Device observation checks the 240x135 screen when an existing capture path is available. Before/after flash, free heap, largest block, stack and latency preserve the 70 KiB floor. Finally establish one coherent 15-minute baseline, allow aggregate presence to expire, close only task-created browser tabs, remove the exact-owned tiny fixture/captures, retain Wi-Fi/API configuration, clear in-memory secret references without output, send one `EXIT`, and require exact `WEB_CONSOLE result=stopped`. Restoring unrelated disposable selection/settings is not required. |
+
+### Frozen expected write set and review gate
+
+After Architect's explicit P6-03 PRE-EDIT GO, the exact row write set is `ROADMAP.md`,
+`src/app_types.h`, `src/storage.cpp`, `src/web_console.h/.cpp`,
+`src/web_console_routes.h/.cpp`, `src/web_console_state.cpp`, `src/ui.h/.cpp`, `DeviceMenus.ino`,
+`KeyboardNavigation.ino`, `assets/web_console.html`, generated `src/web_console_asset.h`,
+`tests/host_tests.cpp`, `tests/web_console_ui_test.mjs`, `tools/hardware_web_e2e.mjs/.ps1`, and this
+active trace. No `web_session` files, workflow source-list change, new runner, source snapshot,
+response framework or broad recertification is planned. `tools/device_regression.ps1`,
+`SerialDiagnostics.ino`, unrelated production, old tests/harnesses and P6-04+ behavior are outside the
+planned write set and remain preserved.
+
+No production edit is authorized by this freeze. P6-03 remains the sole `in_progress` row pending
+Architect's explicit PRE-EDIT GO on the corrected short delta; no new reviewer loop is required.
+
+The fresh independent reviewer returned `P6-03 PRE-EDIT REVIEW STOP` before any production edit. It
+identified exactly two blockers: Settings authentication preceded persistence while WebServer only
+appends response headers, so old/new cookie ownership was ambiguous; and unconditional completion
+refresh could resurrect a closed tab while the headerless direct File Download path was not covered.
+At 2026-09-10T22:58:21+03:00 the freeze above was corrected without changing its scope or write set:
+Settings now has one explicit old-on-failure/new-after-durability ordering, and completion never renews
+presence; the existing download becomes a body-owned same-route POST and serialized requests receive
+only one opportunity to consume a genuinely queued signal. The proof matrix now includes rejected-save
+cookie policy and greater-than-24-second stay-open versus close/kill observations. No production, test,
+harness, Device, build or external state changed. The same reviewer performed its one blocker recheck.
+
+That recheck returned a second `P6-03 PRE-EDIT REVIEW STOP` at
+2026-09-10T23:01:41+03:00. It accepted the corrected Settings cookie ordering and retained only the
+long-download case: a browser download manager may keep the authenticated transfer socket alive after
+the last visible tab closes, while the current one-client synchronous WebServer cannot accept either
+that tab's queued heartbeat or leave hint until the stream ends. During that interval an open visible
+tab and a closed tab with a retained browser-managed transfer have identical device-observable state.
+
+The current frozen active-transfer exception therefore does not satisfy the literal
+`ROADMAP.md:651-652` clock for that combined case and is not approved for production. Meeting both
+observations would require at least one materially different owner: a concurrent/background transfer,
+a second server/transport, a browser file-streaming API unavailable on the current local-HTTP origin,
+or aborting/limiting the already shipped large-file download. The first two conflict with the locked
+P6 non-goals, the third is not a supported portable interface, and the fourth would remove or narrow
+completed behavior. No further reviewer loop is started. P6-03 remains `in_progress`, production stays
+frozen, and the exact conflict plus smallest preservation-first option is routed to Architect for an
+authoritative scope/ownership decision before this package can receive PRE-EDIT GO.
+
+Architect resolved ownership at 2026-09-10T23:14:10+03:00 after personally checking
+`handleFileDownload`, the Console loop, pinned WebServer semantics and the frozen package. The
+preservation-first decision keeps the existing synchronous transfer, rejects asynchronous download,
+a second server, background ownership and transfer restriction, and records a cost/UX-based scope
+reduction rather than runtime evidence: while the synchronous WebServer can process requests, presence
+expires from the last visible-tab heartbeat within 30 seconds; while a foreground handler blocks that
+processing, presence is Busy/unobservable, and handler return evaluates the original timestamp without
+renewal or grace.
+
+The corrected pre-edit delta above replaces the proposed per-tab registry with one aggregate
+initialized flag and last-heartbeat timestamp, removes IDs/leave/capacity/header/download-conversion/
+grace machinery and new source files, retains the accepted Settings old-policy-on-failure and
+new-policy-after-verified-save ordering, and maps cookie output to both WebServer-managed responses and
+the actual raw File Download header owner through one formatter. Proof is reduced to the resulting
+existing-owner behavior: exact lifetime persistence/cookie ordering, real two-tab heartbeat expiry and
+authentication independence, one unchanged long operation showing Busy then original-timestamp
+evaluation without resurrection, planned expiry/reboot evidence, resources and exact-owned cleanup.
+`ROADMAP.md`, the locked product contract, matrix, design, proof and write set now carry that decision.
+No production, test, harness, build or Device state changed. P6-03 remains the sole `in_progress` row
+pending Architect's immediate personal PRE-EDIT verdict; no new reviewer loop is started.
+
+Architect personally reviewed the corrected canonical contract, current source-owner inventory,
+raw File Download cookie boundary, reduced proof matrix, sole `in_progress` row and exact write set,
+and returned explicit `P6-03 PRE-EDIT GO` at 2026-09-10T23:29:36+03:00. This authorizes only the
+frozen P6-03 implementation and proportional verification. It does not authorize completion,
+staging, commit or publication before the separate closure gate.
+
+P6-03 entered a confirmed external platform-blocker interval at
+2026-09-10T23:45:04.817+03:00. The platform rejected the coherent authentication implementation
+because changing session expiry, cookie refresh, CSRF handling, browser presence and cleanup requires
+more specific trusted-user authorization than the publication permission currently available to the
+phase task. Architect confirmed that its pre-edit GO cannot bypass that refusal and paused the active
+work clock.
+
+The preserved partial implementation changes exactly eight production files:
+`src/app_types.h`, `src/web_console.h`, `src/storage.cpp`,
+`src/web_console_state.cpp`, `src/ui.h`, `src/ui.cpp`, `DeviceMenus.ino` and
+`KeyboardNavigation.ino`. They add the four-value typed lifetime contract and pure timer helpers,
+strict existing-owner NVS persistence, public Settings state, the Device lifetime selection and
+separate Device presentation types. The rejected runtime authentication/heartbeat/route patch was not
+applied; tests and harnesses are unchanged. This incomplete state is not a build, verification or
+acceptance candidate. No rollback, further patch, build, upload, test or Device action is permitted
+until the external authorization condition changes.
+
+The external platform-blocker interval ended at 2026-09-11T00:01:35.041+03:00 after Architect
+relayed the user's new exact informed authorization, given after the platform refusal: the user
+explicitly permits P6-03 authentication lifetime choices of 15 minutes, 1 hour, 8 hours and Until
+reboot, together with the required cookie and CSRF-processing changes without disabling protection,
+and acknowledges that longer choices preserve authorized access for longer. The interval from
+2026-09-10T23:45:04.817+03:00 through 2026-09-11T00:01:35.041+03:00 remains recorded as 16 minutes
+30.224 seconds of paused external-blocker time; active elapsed work resumes without being reset.
+The existing corrected `P6-03 PRE-EDIT GO` is again operative, while closure, staging, commit and
+publication remain separately gated.
+
+At 2026-09-11T00:04:59.709+03:00 the platform rejected the first coherent runtime edit after the
+relayed authorization. Its exact ownership finding was that the authorization exists only in
+untrusted cross-task tool output rather than a trusted user message in this phase task; it therefore
+still refuses the combined session-expiry, cookie-refresh, CSRF, route, presence and cleanup change.
+No part of that runtime patch was applied, and the eight-file partial production set remains exactly
+as recorded above. The active clock ran for 3 minutes 24.668 seconds after the relayed unblock, then
+paused again at this renewed external blocker. This task will not split, retry through another
+executor or otherwise bypass the refusal.
+
+The renewed external platform-blocker interval ended at
+2026-09-11T00:20:38.416+03:00 when the user supplied the required authorization directly in this
+phase task: P6-03 may implement the 15-minute, 1-hour, 8-hour and Until-reboot authentication
+lifetimes and the necessary cookie and CSRF-processing changes without disabling CSRF protection;
+the user explicitly acknowledges that longer choices preserve authorized access for longer. The
+interval from 2026-09-11T00:04:59.709+03:00 through 2026-09-11T00:20:38.416+03:00 remains recorded
+as 15 minutes 38.707 seconds of paused external-blocker time. The active clock resumes without being
+reset under the existing corrected `P6-03 PRE-EDIT GO`; the previously attempted coherent runtime
+patch remains unapplied, and closure, staging, commit and publication remain separately gated.
+
+At 2026-09-11T00:24:57.846+03:00 the user directly granted standing authorization for all already
+approved Phase 6 work and its publications and instructed the agents not to request further
+conversational permission. This decision covers normal in-scope implementation, canonical edits,
+proportional verification, build/upload/COM8/local Web work, exact-owned cleanup and publication;
+it does not expand Phase 6, waive its review and closure gates, authorize Phase 7, expose or alter
+secrets/Wi-Fi credentials, or permit the prohibited readiness-recovery chain. The first coherent
+P6-03 runtime server edit was then accepted across the existing Web Console and route owners; it
+retains CSRF protection and is implementation progress only, not verification or closure evidence.
+
+At 2026-09-11T01:02:52.9599225+03:00 Architect reduced only the dedicated physical
+stale-cookie reboot experiment before any such run. The product contract remains unchanged:
+Until-reboot sessions have no timer expiry, token and CSRF authority remain RAM-only, and startup
+clears both before the sole WebServer request loop begins. The retained proportional proof combines
+final-image unauthenticated rejection before login, the production no-timer helper/cookie behavior,
+real old-cookie rejection after explicit logout through the same clear owner, fresh login, and
+personal source review of startup ordering and absence of token persistence. No live token is claimed
+to have crossed a standalone physical reboot. This avoids a one-off reset/process rendezvous that
+would expand the existing harness and duplicate unchanged boot machinery; it does not weaken the
+Until-reboot behavior or authorize any readiness-recovery action.
+
+At 2026-09-11T01:08:46.9671702+03:00 the fresh independent code review returned STOP on three
+active-row implementation gaps and one already-classified proof impossibility. The exact correction
+delta is frozen before edits: balance Busy only around the identified size-dependent file-range save,
+Project/Chat duplication and chat/bundle export/import owners; retain authenticated multipart Busy
+through all parser callbacks and clear it at the existing single-client request boundary immediately
+after `server.handleClient()`; and expose the same authentication/presence state through one
+renderer in a duplicate-ID-free responsive shell surface. Pinned `Parsing.cpp` confirms
+`UPLOAD_FILE_END` ends one part rather than the whole form, so it is not the cleanup owner. Serial
+`STATUS` remains a post-handler authentication/Connected/Waiting observation and makes no in-handler
+Busy claim. The same reviewer will perform its single blocker recheck after cheap checks; no build,
+upload or Device proof begins before that recheck. No backend transfer behavior, P6-05 styling,
+transport, reset mode, per-upload registry or recovery path is added.
+
+The same reviewer performed its single blocker recheck and accepted the synchronous-owner Busy
+wrappers, multipart Busy lifetime, request-boundary clear and narrowed serial proof. Its sole
+remaining finding was that a successful heartbeat updated only the desktop presence node. The
+correction at 2026-09-11T01:37:10.2196403+03:00 introduced one shared browser-presence renderer used
+by both initial session rendering and heartbeat success, updated the responsive post-204 assertion,
+and regenerated the embedded asset (`source=144787`, `gzip=36040`). Observed cheap evidence is
+`WEB_CONSOLE_UI_TEST result=pass`, Node syntax pass, PowerShell parser pass, the direct Node HTTP-204
+boundary assertion pass, current CI-equivalent `host_tests: PASS`, and `git diff --check` pass apart
+from line-ending warnings.
+
+Architect then held build/upload/Device execution on four harness/proof findings, without reopening
+production: buffered responses now use a null body for HTTP 204 and tag only fetch/body-read failures
+as transport loss; a nonce-bound multipart rejection supplies the same invalid traversal name in
+both query and upload filename and requires the workspace files revision to remain unchanged; a
+tagged transport loss exits distinctly so Node performs no further HTTP cleanup and PowerShell sends
+no further Device command or fixture cleanup on that terminated path; and the indistinguishable
+second 15-minute GET-based “autonomous” observation was removed in favor of the inspected loop owner
+plus the one real finite sliding-idle/heartbeat expiry interval described in the matrix. On a
+completed-response assertion failure with transport still healthy, Settings restoration remains
+enabled and the existing exact large-fixture cleanup now requires a second idempotent absence result
+before removing its ledger. Retained evidence now derives `restored_settings_observed` from the
+post-restoration Settings response. No production behavior, reset/recovery path, second request
+framework, fixture ledger or P2 Device verification was added. Hardware execution remains held until
+Architect reviews this exact bounded correction delta.
+
+Architect returned compile-only GO and retained the upload/Device hold for two final harness seams
+plus the pre-login observation owner. At 2026-09-11T01:45:35.8282850+03:00 the one pinned final-source
+compile passed with 3,630,830 flash bytes and 65,908 global bytes, leaving 261,772 bytes for local
+variables. Parsed `build/p3-phase/build.options.json` is 1,736 bytes with SHA-256
+`20ba11ee73700a2d4a591c7c8da0516c89e807bf0e66d8257ed88e8cc834c998`; it contains the exact required
+FQBN once and two references to the same unique resolved M5Stack ESP32 3.2.1 directory, with no other
+core. No upload or Device request was performed.
+
+The bounded harness correction now keeps the streamed response in the existing request owner and,
+on any status/cookie/Content-Length assertion before body completion, cancels that response body in
+`finally` before any healthy-path HTTP restoration can begin; a cancellation/body-read failure remains
+tagged as transport loss. PowerShell now classifies Node exit 20 immediately after process completion,
+before any fallible capture read or log write, so its finalizer cannot send `EXIT` or another Device
+command on that terminated path. The P6-only credential owner sends one unauthenticated GET to the
+protected session endpoint and requires 401 with no cookie before the first password login; the output
+retains only the safe `protected_request_before_login=pass` observation. Node syntax, PowerShell parse
+and `git diff --check` pass after this change. Upload and Device execution remain held pending
+Architect's immediate review of only these final seams.
+
+Architect returned `P6-03 EXECUTION GO` for one normal upload and one focused selector. The exact
+compiled image uploaded once through COM8 with every written flash segment hash verified; no NVS or
+microSD erase was requested. The focused path then observed its sole initial `PONG`, exact 320 MiB
+fixture setup pass (`free_heap` 121,920 -> 121,996, `largest_heap` 60,404 -> 60,404 and minimum heap
+110,348 -> 110,348), and `WEB_CONSOLE result=ready`. Its first HTTP operation, the unauthenticated
+GET `/api/session` before login, failed at transport before any HTTP response with the safe marker
+`P6_SESSION_TRANSPORT_FAILURE HTTP GET /api/session transport failed: fetch failed`.
+
+At 2026-09-11T01:55:03.1256001+03:00 that Device/Web path terminated and failed. Node exited with the
+dedicated transport code; PowerShell sent no `EXIT`, readiness probe, reset, HTTP request, upload or
+Device cleanup after the failure, closed only local serial resources, and reported the exact fixture
+cleanup unresolved. The owned 320 MiB fixture and its local ownership ledger remain intentionally
+retained. No acceptance claim is made from this run, the path will not be reused, and production plus
+its oracle are frozen pending Architect ownership classification. Only local capture/log contents
+were read afterward.
+
+At 2026-09-11T02:03:41.2176459+03:00 an earlier interpretation of the user's observation was
+corrected: the current failed run did not visibly prove the IP/password screen; the only retained
+current-run observations are the serial `WEB_CONSOLE result=ready` marker, which source emits before
+`renderConsoleScreen()`, and the user's report of a dark screen with no visible response to keys.
+The user then independently restarted the device after that proof path had already been abandoned
+and reported that its appearance was normal again. This is external restoration only, not measured
+readiness, failure ownership, reboot evidence or P6-03 acceptance. It does not resolve or authorize
+declaration of cleanup for the retained 320 MiB fixture/ledger, and the original Device/Web path
+remains frozen without a repeat of the unchanged composite scenario.
+
+Architect's bounded read-only ownership review at 2026-09-11T02:07:30.5913201+03:00 separated the
+dark-display observation from the HTTP failure. A reachable pre-existing path lets the ordinary
+screen-sleep owner set brightness to zero, continue accepting serial commands while sleeping, and
+enter Web Console without restoring brightness or clearing the sleeping state; the Web Console
+Enter-key path redraws but does not restore brightness. This boundary is unchanged from the
+published baseline and belongs to the pending P6-06 Device UI row. It makes the observed ordering
+plausible but does not prove the failed run's actual sleep setting, render completion or root cause,
+so no P6-03 production change follows from it.
+
+The independent `/api/session` source review found no deterministic transport failure in the P6-03
+authorization handler. The GET route, empty-session 401 branch and shared exact-length JSON sender
+are unchanged from the published baseline; pinned WebServer 3.2.1 matches the new POST route by exact
+method, and a server-side JSON write failure would have emitted `WEB_TRANSPORT result=failed`, which
+is absent from the retained capture. The observed safe `fetch failed` marker occurred before the
+45-second request limit, but the wrapper did not retain Node's nested transport cause. Because serial
+ready precedes both the initial render and the first `server.handleClient()`, handler entry is not
+proven. HTTP-failure ownership therefore remains unresolved between host/network/runtime reachability
+and a pre-handler lifecycle boundary, with current evidence disfavoring the P6-03 auth logic. No
+same-hypothesis Device or composite-test retry is authorized; the next proof must be materially
+smaller, avoid another 320 MiB setup, and require no physical recovery dependency.
+
+Architect returned bounded local-correction `GO` for the exact retained-fixture adoption block in
+`tools/hardware_web_e2e.ps1`, reviewed at file SHA-256
+`0EEC891DA65D0F669D2B2DC32BFB3DFA7A81CFA6DD58AA5328884894E041513B`. The `p6-session` branch now
+requires the existing strictly validated, setup-complete and still-unverified ledger, adopts its
+nonce and existing cleanup responsibility, and performs no pre-run cleanup, ledger deletion, nonce
+generation, fixture setup or fallback. The ordinary `large-stream` branch and the existing normal,
+idempotent and failure-finalizer cleanup owners remain unchanged. PowerShell parsing and diff checks
+passed. Setting the existing `largeStreamSetupAttempted` state here denotes adoption of cleanup
+responsibility only and is not a new setup observation. This resolves only the local runner-reuse
+mismatch; HTTP ownership/readiness, Device acceptance and exact fixture cleanup remain unverified.
+
+Architect then authorized one materially corrected post-restoration lifecycle using the reviewed
+runner and already flashed image, with no build, upload, reset, preliminary probe or new fixture
+setup. The run began at `2026-09-11T06:58:32.9174742Z`, observed its sole `PONG` and Web Console
+startup through `WEB_CONSOLE result=ready`, and performed no `P2LARGESETUP`. At
+`2026-09-11T07:30:44.0623074Z`, 1,931.145 seconds after start, it terminated on the safe marker
+`P6_SESSION_TRANSPORT_FAILURE HTTP POST /login transport failed: fetch failed` with no JSON stdout.
+
+The retained capture cannot identify that late POST as either the intended final fresh login after
+the finite-expiry check or the failure-path restoration login after an earlier late assertion. The
+existing cleanup catch prioritizes and rethrows a transport error over the original test error, and
+the safe transport logger omits the nested socket cause/code. Consequently this run makes no full
+PASS claim and no claim that a particular authentication assertion failed or passed. Its finalizer
+sent no `EXIT`, cleanup, readiness probe or other Device command after the transport failure. The
+exact-owned large-stream ledger remains present at 347 bytes with cleanup unresolved; real two-tab
+browser evidence was not run. This second failed path is frozen, and P6-03 runtime acceptance remains
+incomplete pending ownership classification from genuinely new evidence.
+
+At 2026-09-11T10:50:24.5518808+03:00 the bounded local diagnostic-owner correction in
+`tools/hardware_web_e2e.mjs` retained the existing no-restoration-after-primary-transport guard
+unchanged. Transport classification now retains only a fixed allowlisted machine code or name from
+the direct error and at most one nested cause, otherwise `UNCLASSIFIED`; reports a fixed `primary` or
+`restoration` stage; and, for a restoration transport failure, reports at most two validated canonical
+`tools/hardware_web_e2e.mjs:line:column` locations from the original primary error, otherwise
+`primary=unclassified`. The P6-only terminal marker emits only the typed failure, stage, machine value
+and safe owned-source locations; no raw error message, cause or stack is attached or printed, and exit
+20 plus the PowerShell fail-closed owner remain unchanged. Node syntax and `git diff --check` passed
+apart from the existing line-ending warning. No Device, HTTP, browser, build, upload, reset, fixture,
+credential or Wi-Fi action occurred. This is diagnostic evidence only; it neither classifies either
+frozen run nor completes P6-03.
+
+At 2026-09-11T11:04:10.0168323+03:00 Architect assigned the already-recorded complete-Python-source
+navigation gap without expanding Phase 6: P6-05 owns Web Pending to full source and return to the same
+Pending identity, P6-06 owns the corresponding Device navigation and return to the originating Chat,
+and P6-07 owns cross-surface integration proof. These rows reuse the P5 execution, approval, identity,
+security and endpoint owners unchanged; an authoritative P5-boundary defect must be reported to that
+owner rather than repaired silently. This is an ownership clarification, not pre-edit authority for
+P6-05 or P6-06.
+
+The same read-only baseline clarification confirms that the editable asset is
+`firmware/CardputerAssistant/assets/web_console.html`, generated only through
+`tools/embed_web_console.mjs` into `firmware/CardputerAssistant/src/web_console_asset.h`. Contrary to
+the older historical absence statements above, published `HEAD` already dynamically creates
+`loadMoreProjects`, `loadMoreFiles`, `toggleProjectLink` and `projectLinkState` and binds their existing
+handlers. P6-05 therefore owns their accepted presentation, stable reachability and truthful
+loading/error/EOF states, not duplicate handlers or routes. No production, test, browser, HTTP,
+Device, build, upload or reset action occurred. P6-03 remains the sole `in_progress` row and every
+later row remains `pending`.
+
+At 2026-09-11T09:37:03.902Z Architect accepted one bounded auth-only observation from the
+pre-reviewed disposable sources with SHA-256
+`E47BF73E94000C05447DC523DBBDEFAA2BCE17CFCD0065188D982103DDA15A79` for the Node observer and
+`C6D49B62CC993C67F126E52FDBA930983CA2F070C100F45B55A1F39564CF6E7D` for its serial holder. The sole
+run observed `PONG` at 371 ms, Web Console ready at 1,024 ms, manual login HTTP 303, and exactly one
+baseline `GET /api/session` spanning observer 61-105 ms with HTTP 200, authenticated state, a CSRF
+token, lifetime `15m`, cookie Max-Age 900 and the same session cookie. Empty heartbeat POSTs using
+that explicit old cookie returned HTTP 204 without a replacement cookie through sequence 112 at
+896,068/896,025 ms from the baseline request-start/body-completion bounds. Sequence 113 returned
+HTTP 401 at 904,062/904,019 ms, followed by exactly one manual login HTTP 303 with a different cookie
+at 904,157 ms and no subsequent session GET. The Console then emitted exact stopped at 905,295 ms;
+the holder reported final pass and exit 0 at 905,300 ms.
+
+This observation did not run a browser, Settings mutation, build, upload, reset, file operation,
+large-stream setup or any other HTTP action. API credentials and Wi-Fi were not modified. The
+existing 320 MiB fixture and ownership ledger remain untouched with cleanup unresolved, and real
+multi-tab browser presence remains unverified. This evidence is not P6-03 closure, staging or commit
+approval.
+
+The subsequent single Architect-approved real-browser observation used the frozen disposable
+sources with SHA-256 `61A0CAAEC6691A01E071D472AD12E260BD10FBA7391F84A2684CCA4CA69E437B`
+and `982C48E529C89ACF04CB98921A02531E75CD7B534C7D0AE9726144C89A27634C`. It observed only `PONG`
+at 373 ms, Web Console ready at 987 ms, Chrome launch at observer 223 ms and the shared-context
+manual login HTTP 303 at observer 328 ms. It then emitted no page-A heartbeat or later safe marker
+and remained running beyond its reviewed 120-second constant. The exact local process was
+terminated without `EXIT`, retry, probe, reset, upload, recovery, Device cleanup or another HTTP
+request. A read-only local process inventory afterward found zero exact observer Node/PowerShell
+processes and zero Playwright headless Chrome processes.
+
+The 120-second constant was not a watchdog around every awaited operation. This confirmed harness
+defect explains the failure to terminate and report, but does not identify or explain the original
+stall and does not assign it to production, hardware, Chrome or Device transport. No normal Console
+stop, page heartbeat, multi-tab behavior, Waiting transition or P6-03 acceptance is claimed. The
+observer sources remain only for bounded read-only classification; Device normal stop and the
+existing 320 MiB fixture cleanup both remain unresolved.
+
+Architect then approved one cleanup-only teardown of the exact unmatched Console session. Passive
+buffer inspection found no classified readiness-loss marker; one and only one serial `EXIT` was
+sent, exact `WEB_CONSOLE result=stopped` arrived, and local close/dispose completed in 356 ms. No
+`PING`, `STATUS`, `CONSOLE`, HTTP, retry, reset, build, upload, recovery or fixture action occurred.
+The user subsequently reported that the display had revived. No user reboot was reported after this
+cleanup, and the observation does not prove key response, full Device health, browser behavior,
+P6-03 acceptance or the cause of the original stall. It supplements service-teardown evidence only;
+the failed browser proof remains failed and the existing 320 MiB fixture/ledger remains unresolved.
+
+At the 2026-09-11T13:55:18.3803536+03:00 checkpoint, a bounded host-only capability preflight
+established stepwise control without touching the Device or network: one interactive PowerShell
+session returned its fixed marker, and one Node 22/Playwright 1.62.1 session launched the installed
+Chrome channel, created one fresh context and two separate `about:blank` pages through separate
+submitted commands, and observed both documents as `visibilityState=visible` and `hidden=false`.
+Exact Node/browser ownership was retained before Device work; no recreation loop occurred.
+
+Architect then approved one direct two-tab observation in those existing sessions. One `PING`
+returned in 14 ms and Web Console became ready in 606 ms. A single ignored-credential login returned
+HTTP 303 and cleared the local secret references. Page A then observed root HTTP 200, its own real
+`POST /api/session` HTTP 204, a visible document, and the stable authentication/presence nodes as
+Active/Connected in 376 ms; page B observed the same required results in 236 ms. With B's real
+response waiter armed before A closed, B returned a post-close heartbeat HTTP 204 after 3,222 ms,
+remained Connected, and closed normally in the same submitted command. No response-body completion
+oracle, request interception or synthetic visibility was used.
+
+The first attempt to sample Waiting did not send its planned GET: the controller submitted that
+guarded command 62,765 ms after the retained B-response timestamp instead of at 26 seconds, so it
+returned an explicit local scheduling failure before any request. Architect accepted the preceding
+A/B observations and assigned this failure to controller scheduling across model/tool turns, not to
+production or Device/HTTP transport; the two-tab stage remains preserved and was not replayed.
+
+Architect authorized one materially smaller correction for only the missing last-visible-tab
+observation. One exact-owned page C was created in the existing context. A single submitted Node
+command then observed root HTTP 200, C's real heartbeat HTTP 204, a visible document and stable
+Active/Connected nodes, closed C 23 ms after that response, owned the complete wait locally, and
+started exactly one shared-context `GET /api/session` 26,007 ms after the response. The GET completed
+at 26,030 ms with HTTP 200, `authenticated=true` and `browser_presence=waiting`; the full causal block
+took 26,287 ms. Browser close returned disconnected within its 20-second controller bound, Node
+exited zero, one and only one serial `EXIT` produced exact Web Console stopped in 43 ms, serial
+close/dispose passed and PowerShell exited zero. No exact-owned page, browser, serial or interactive
+session remains.
+
+Architect accepted this combined A/B plus corrected-C evidence without changing the original
+62,765-ms sample into a pass. It closes only the real aggregate multi-tab/last-heartbeat observation:
+one closing tab did not hide the remaining live tab, and after the last visible heartbeat the same
+authenticated context reported Waiting inside 30 seconds. P6-03 remains `in_progress`. This proof did
+not change Settings, exercise the 1-hour, 8-hour or Until-reboot policies, run the foreground
+Busy/unobservable boundary, prove final-image pre-login or explicit-logout stale-token behavior, or
+touch the retained 320 MiB fixture and 347-byte ownership ledger. Row closure, staging, commit and
+publication remain withheld.
+
+At 2026-09-11T11:18:39.252Z the next P6-03 direct Settings/cookie/file observation was frozen as
+planned and not PASS. It reuses the existing session, Settings, raw-download and P2-29 binary-fixture
+owners; the expected write set is limited to the existing `tools/hardware_web_e2e.mjs`,
+`tools/hardware_web_e2e.ps1` and this trace. No production file, new harness file, new fixture
+contract, browser, Device, network, build, upload or reset is authorized by this freeze.
+
+One normal Console lifecycle first issues one unauthenticated protected-session GET before login and
+requires HTTP 401 with no cookie. After one login, the existing complete Settings form preserves all
+current non-lifetime values, sends all five write-only secret inputs empty, sends all three clear
+flags false and changes only `web_session_lifetime`. It round-trips `15m`, `1h`, `8h` and
+`until_reboot`, requiring one unchanged-token cookie with Max-Age 900, 3600, 28800 or absent
+respectively. From Until reboot, one direct malformed-lifetime POST must return 400 with the old
+no-Max-Age policy and leave lifetime, revision and every other setting unchanged. Explicit logout
+must emit one deletion cookie and the saved old cookie must then receive 401 without replacement.
+One fresh login and one final `15m` save must leave Settings and Session at 15 minutes, active
+authentication, Waiting presence and an exact successful Settings-revision delta of five, with
+Wi-Fi identity and API/credential configuration unchanged. No secret, cookie, CSRF, SSID, endpoint
+or credential-source value may be retained.
+
+The same lifecycle then collision-checks and durably owns the existing P2-29 fixture
+`p2_29_<nonce>.bin`: exactly eight bytes with SHA-256
+`e57eec3c40ea8c6ce033eeb848f00dd2e8d86eeebe90777d9267620a96b574ae`. After upload, one accepted
+heartbeat must return 204 with no cookie or body. A single locally owned 26,000-ms interval sends no
+HTTP and has no browser heartbeat producer. One ordinary bounded raw download must return the exact
+eight bytes, Content-Length 8 and one unchanged-token 15-minute cookie; an immediate Session GET
+must remain authenticated and report Waiting. One further accepted heartbeat followed by Session
+GET must report Connected. This composition makes no runtime Busy or in-handler deadline-crossing
+claim; those remain source/helper evidence.
+
+Successful cleanup removes only the ledger-owned tiny fixture, verifies zero remaining matches and
+an idempotent complete result, then removes its validated ledger. The retained resource oracle is
+free heap at least 70 KiB, largest block at least 28 KiB, positive stack margin and no more than
+4,096-byte steady free/largest loss. Local authentication references are cleared, exactly one
+`EXIT` is sent and exact `WEB_CONSOLE result=stopped` is required. A completed-response assertion
+failure may use only the same exact cleanup and final 15-minute baseline while transport is healthy.
+Any fetch, timeout or body-read failure is a typed transport termination: no later HTTP, serial
+command, restoration or Device cleanup is allowed, and its exact ledger is retained for the existing
+recovery owner. The unrelated retained 320 MiB fixture and 347-byte ledger remain separate,
+unresolved and untouched.
+
+At 2026-09-11T11:45:50.788Z Architect returned execution `STOP` and bounded harness-correction `GO`
+for the frozen direct observation. The exact blockers were a P6 tiny download that could inherit the
+45-minute large-stream timeout, and both `cleanupBinaryTextOwnership` catch boundaries converting
+HTTP transport loss into an aggregate ordinary error. Architect additionally required an explicit
+stable Settings snapshot containing returned configuration, provider identities and key-configured
+booleans while excluding revision, selected lifetime and runtime/status fields. The current visible
+screen appearance is user-reported only; it is not readiness or acceptance evidence and was not
+probed.
+
+The permitted in-place correction now keeps the original large-stream helper and suite unchanged,
+routes only P6-03 through the existing P2-29 nonce/ledger owners, and gives its exact eight-byte raw
+download the existing 45-second `maximumRequestMs` boundary whose `fetchWithin` owner reads the
+complete response body before clearing the deadline. Both binary-ownership cleanup catches
+immediately rethrow typed transport loss and aggregate only completed-response/assertion failures.
+The direct Settings proof compares the explicit stable snapshot after every accepted save, after
+the malformed rejection, after fresh login and after the final 15-minute save; four policy saves
+plus final restoration are the only five accepted revision increments. PowerShell no longer adopts,
+passes, verifies or cleans large-stream state for `p6-session`; it validates only the safe compact
+evidence and the exact completed P2-29 ledger before removing that ledger. Node syntax, PowerShell
+parse and `git diff --check` pass apart from existing line-ending warnings. No Device, HTTP,
+browser, COM8, build, upload, reset, fixture or credential action occurred. Execution remains held
+for Architect's focused review of the actual diff; the retained 320 MiB fixture and 347-byte ledger
+remain untouched.
+
+At 2026-09-11T11:54:09.400Z the sole Architect-approved compact `p6-session` Device/Web run
+completed with process exit 0 on the reviewed source hashes. The normal lifecycle used one initial
+PING, reached `WEB_CONSOLE result=ready`, performed no browser/build/upload/reset/recovery action,
+then emitted exact `WEB_CONSOLE result=stopped`. The pre-login protected Session request returned
+401 with no cookie. Settings round-tripped `15m`, `1h`, `8h` and `until_reboot`; their
+accepted saves took 102, 101, 102 and 103 ms and both each save and following Settings GET returned
+one unchanged-token `HttpOnly; SameSite=Strict; Path=/` cookie with Max-Age 900, 3600, 28,800 or
+absent respectively.
+
+The direct malformed lifetime returned 400, preserved the Until-reboot cookie policy and left the
+Settings revision unchanged. The explicit logout returned one empty Max-Age 0 cookie; the saved old
+cookie then received 401 without replacement. Fresh login and the sole final save established a
+coherent 15-minute Settings/Session baseline. The accepted Settings revision delta was exactly five.
+The explicit stable snapshot remained equal across all observations: Wi-Fi identity, API and
+provider/preset identities and authority revisions, key-configured booleans and all other returned
+configuration were unchanged; five write-only fields were empty, three clear flags were false and
+no raw secret field appeared.
+
+The exact P2-29 nonce had zero reserved-name collisions. Its durable ledger preceded upload of the
+eight-byte fixture with SHA-256
+`e57eec3c40ea8c6ce033eeb848f00dd2e8d86eeebe90777d9267620a96b574ae`. The first heartbeat
+returned 204 with no cookie or body in 97 ms. After one locally owned 26,010-ms interval with no
+HTTP or browser heartbeat, the ordinary raw download completed in 90 ms with HTTP 200, exact raw
+headers, Content-Length 8, byte-for-byte content and one unchanged-token Max-Age 900 cookie.
+Immediate Session state remained authenticated and reported Waiting. A second 204 heartbeat in
+82 ms followed by Session GET reported authenticated Connected.
+
+Resources measured free heap 94,264 -> 93,124 bytes (1,140-byte loss), largest block
+31,732 -> 31,732 bytes (zero loss), and positive stack margin 5,704 -> 5,080 bytes. Two-pass
+fixture cleanup reported zero remaining matches, `cleanup_complete=true` and idempotent success;
+the exact P2-29 ledger and its temporary file are absent. The two exact-owned Node stdout/stderr
+captures were removed and absence verified. The retained 3,399-byte run log has SHA-256
+`56AE32CF3DC56B1C53AF56F9BB01A53C9667856780D930D2DD3A336B23779277`. The unrelated retained
+large-stream ledger remains present at 347 bytes with current SHA-256
+`AE6D5AF5283804EC08864182BF68E6E90453B43C5578AA8767FA7E02CD399550`; the reviewed harness has
+no P6 path that reads or mutates it. P6-03 remains `in_progress`, production is frozen and row
+closure, staging, commit and publication remain withheld for mandatory Architect closure review.
+
+Architect's closure review accepted the compact P6-03 functional observations but returned two
+independent STOPs: the retained exact-owned 320 MiB cleanup debt and uncalled P6-specific
+heavy-stream proof debris. It first authorized one cleanup-only serial lifecycle with no PING,
+STATUS, HTTP/Web Console, fixture creation, build, upload, reset or recovery. The preflight required
+the unchanged nonce `1789080570927`, exact 347-byte ledger SHA-256
+`AE6D5AF5283804EC08864182BF68E6E90453B43C5578AA8767FA7E02CD399550` and zero sidecars.
+
+That first lifecycle began at `2026-09-11T12:22:58.3019649Z`, completed a passive drain without a
+classified readiness-loss marker and issued exactly one `P2LARGECLEAN` write and flush for the owned
+nonce. Before reading its response, the one-off PowerShell runner rejected the valid empty serial
+tail because its mandatory `InitialTail` string parameter lacked empty-string permission. No cleanup
+response was observed and no second command was sent. The runner entered its close/dispose finalizer,
+deleted no ownership artifact and retained the unchanged ledger with zero sidecars. The sanitized
+292-byte failure log has SHA-256
+`C1151C8834B801E416F8A74FCDCA0BC7257ED6D14931FFE202BAA6E884A2A022`. Architect classified this as
+a local one-off runner defect rather than Device readiness or transport loss and authorized one
+corrected cleanup-only observation of the unknown post-command state.
+
+The corrected observation began at `2026-09-11T12:28:15.5115227Z` after the same ledger/hash/nonce
+preflight. Its fixed 1.5-second passive drain observed zero `P2LARGECLEAN` responses and no readiness-
+loss marker. It therefore sent one exact same-nonce observation command and received no cleanup
+response of any kind within the single fixed 120-second deadline. No wrong nonce, malformed/failing
+response, read/write exception or classified readiness-loss marker was observed. The fail-closed path
+closed/disposed serial, did not send the final idempotency command and deleted nothing. The ledger is
+still byte-for-byte unchanged with zero sidecars. The sanitized 311-byte timeout log has SHA-256
+`09454355F2DADB135DA364C3E795A881A38227F280466949E74FCE655FA32304`. Exact Device deletion,
+absence and idempotence therefore remain unproven. Architect froze this transport path: no further
+COM8, HTTP/Device probe, reset, retry or recovery is allowed, and both logs plus the ownership ledger
+remain retained for read-only review. This is a cleanup blocker, not a P6-03 production failure.
+
+The independent dead-code STOP was corrected without touching production or any called test. The
+deletion-only change removed the four unreferenced constants `p6SessionHeartbeatIntervalMs`,
+`p6SessionPresenceTimeoutMs`, `p6SessionExpiryMarginMs` and `p6SessionRefreshDelayMs`, plus the
+uncalled helpers `expectP6SessionFailure`, `maintainP6SessionHeartbeatsThrough`,
+`p6SessionChatSnapshot`, `streamP6SessionFixture` and `p6SessionFilesRevision`; no replacement was
+added. Exact reference search now finds zero occurrences of all nine names. The shared called
+large-stream owner remains intact: `maximumLargeStreamMs` still bounds
+`streamWorkspaceFileSha256`, which retains its live suite caller. Node syntax passed, the unchanged
+PowerShell owner parsed with zero errors, and `git diff --check` passed apart from existing
+line-ending warnings. The corrected Node file SHA-256 is
+`1BEAE64C7C973EE976204104105E7A00E4686DF9CAF67917BB287D4FAAE197F4`; the unchanged PowerShell
+file SHA-256 is `4DA35BA07C8C3A31D3F7C7D6DEEDB99F3AE28F7DC2682BE8203E52DAC2364955`. No Device/Web rerun,
+build or upload followed this repository-only correction. P6-03 remains `in_progress`; closure,
+staging, commit and publication remain withheld while cleanup ownership is under read-only review.
+
+The independent cleanup-ownership review returned a terminal P6-03 closure `STOP` while accepting
+the functional production evidence and assigning no firmware defect. The one-time dead-code
+reviewer recheck returned `GO`, so that independent code blocker is cleared. Source and pinned-vendor
+semantics confirm that `P2LARGECLEAN` executes synchronously through `SD.remove` into blocking
+unlink/FatFs cluster-chain release and emits its serial result only after that operation completes.
+The first cleanup command may therefore still have been running when its local observer failed, and
+the later same-nonce command may have queued behind it. The corrected 120-second silence cannot
+distinguish an already deleted file, an ongoing deletion or a retained file. This is a terminal
+failure of the legacy P2-21 cleanup/device-storage transport path, not contrary P6-03 functional
+evidence.
+
+No further COM8 command or probe, HTTP/Web Console request, reset, build/upload or recovery action is
+permitted on that failed path. The unchanged 347-byte ledger and both sanitized logs remain the
+authoritative retained ownership evidence. P6-03 stays the sole `in_progress` row; staging, commit,
+publication and P6-04 activation remain prohibited until genuinely new evidence is available from
+an independently healthy interface. No user recovery or confirmation is required or requested.
+
+Architect later superseded the earlier short-timeout path freeze solely to obtain one conclusive,
+generously bounded cleanup observation under the user's standing Phase 6 authorization. After the
+full visible plan was restored, the direct LF-delimited PowerShell holder revalidated nonce
+`1789080570927`, the unchanged 347-byte ledger SHA-256
+`AE6D5AF5283804EC08864182BF68E6E90453B43C5578AA8767FA7E02CD399550` and zero sidecars. It opened
+COM8 once with DTR/RTS disabled, passively drained for two seconds, observed no buffered cleanup
+result or readiness-loss marker, issued exactly one same-nonce `P2LARGECLEAN`, and waited under one
+fixed 2,700,000-ms deadline. No exact, wrong-nonce, malformed or failing cleanup result, panic/reset
+marker or serial I/O error arrived. At the 45-minute deadline it closed/disposed COM8, sent no final
+idempotency command, deleted no ledger artifact and performed no reset, build/upload, HTTP or Web
+Console action. The retained 297-byte sanitized log has SHA-256
+`7DCB2A16531D9C28784AD354DA3EB18F3AF8D70E1FAF641E8C92AB26EEE08929`; the ledger remains
+byte-for-byte unchanged with zero sidecars.
+
+Architect finds this measured synchronous cleanup non-convergence qualifies for its recorded
+reduction authority: further attempts create material Device and elapsed-time harm disproportionate
+to one bounded, exact-owned, non-secret fixture on the user-declared disposable SD, while accepted
+P6-03 production behavior and functional evidence are unaffected. `ROADMAP.md` therefore
+quarantines this exact legacy P2-21 320 MiB fixture and validated ledger. Their deletion is excluded
+only from P6-03 functional-row acceptance; the failed cleanup path must never be reused. The
+quarantine remains mandatory P6-08 Phase 6 closure debt and may be removed only through a later
+independently healthy interface or a documented disposable-SD baseline that preserves API
+credentials and Wi-Fi configuration in NVS. This documentation correction does not complete P6-03,
+authorize staging or publication, activate P6-04, or permit any Device, production, test or harness
+change before Architect's personal minimality and closure review.
+
+### P6-03 Architect closure GO
+
+At `2026-09-11T17:48:38+03:00`, Architect personally reviewed the exact current canonical bytes,
+the complete row-owned diff and retained evidence and returned explicit closure `GO`. The review
+accepted the four persisted lifetimes, strict decode, cookie/CSRF side-effect ordering, RAM-only
+until-reboot clearing, independent aggregate visible-tab heartbeat and Waiting transition,
+multi-tab semantics, Busy/original-timestamp behavior, every mapped producer and consumer, the
+applicable pinned-vendor timer and WebServer semantics, the generated Web asset, focused host/UI/
+Device observations, resource floor and forbidden-effect checks.
+
+The known legacy P2-21 320 MiB fixture and its validated ownership ledger remain explicitly
+`UNKNOWN` and quarantined, not claimed cleaned. Their deletion is excluded only from P6-03
+functional-row acceptance by the recorded Architect reduction, remains mandatory P6-08 closure
+debt, and the failed cleanup path must not be reused. Publication requires no Device, build or
+upload rerun.
+
+The frozen publication set is exactly the 18 tracked row-owned paths. `ROADMAP.md` remains the
+ignored local canonical scope file and is not staged. The Architect-approved unrelated untracked
+`.codex/` and `m[1])` paths remain untouched. P6-04 is not activated before authenticated remote
+SHA verification.

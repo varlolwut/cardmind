@@ -112,6 +112,16 @@ const requiredFragments = [
     'id="startPython"',
     'id="globalInstructions"',
     'id="projectChatHistoryQuotaMiB"',
+    'id="sessionLifetime"',
+    'id="sessionAuthenticationState"',
+    'id="browserPresenceState"',
+    'class="responsive-session"',
+    'id="responsiveSessionAuthenticationState"',
+    'id="responsiveBrowserPresenceState"',
+    '<option value="15m">',
+    '<option value="1h">',
+    '<option value="8h">',
+    '<option value="until_reboot">',
     'id="diagnosticMetrics"',
     "fetch('/api/session'",
     "let csrf=''",
@@ -286,6 +296,171 @@ if (scriptMatch === null) {
 }
 
 new Function(scriptMatch[1]);
+
+const sessionScriptStart = page.indexOf("let csrf=''");
+const sessionScriptEnd = page.indexOf("\nconst q=", sessionScriptStart);
+if (sessionScriptStart < 0 || sessionScriptEnd < 0) {
+    throw new Error("Cannot extract Web session functions");
+}
+const sessionElements = {
+    "#sessionAuthenticationState": {textContent: ""},
+    "#browserPresenceState": {textContent: ""},
+    "#responsiveSessionAuthenticationState": {textContent: ""},
+    "#responsiveBrowserPresenceState": {textContent: ""},
+};
+const sessionDocument = {hidden: false};
+const sessionTimers = new Map();
+let nextSessionTimerId = 1;
+const sessionRequests = [];
+const sessionErrors = [];
+const sessionHarness = new Function(
+    "document", "q", "request", "showError", "setTimeout", "clearTimeout",
+    "AbortController",
+    page.slice(sessionScriptStart, sessionScriptEnd) +
+        ";return {renderSessionState,startSessionHeartbeat," +
+        "stopSessionHeartbeat,updateSessionHeartbeatVisibility," +
+        "sendSessionHeartbeat,getCsrf:()=>csrf};",
+)(
+    sessionDocument,
+    (selector) => sessionElements[selector],
+    (path, options) => new Promise((resolve) => {
+        sessionRequests.push({path, options, resolve});
+    }),
+    (error) => sessionErrors.push(error),
+    (callback, delay) => {
+        const id = nextSessionTimerId++;
+        sessionTimers.set(id, {callback, delay});
+        return id;
+    },
+    (id) => sessionTimers.delete(id),
+    AbortController,
+);
+sessionHarness.renderSessionState({
+    authenticated: true,
+    csrf: "test-csrf",
+    session_lifetime: "8h",
+    browser_presence: "waiting",
+});
+if (sessionHarness.getCsrf() !== "test-csrf" ||
+    sessionElements["#sessionAuthenticationState"].textContent !==
+        "Authentication: active · 8 hours" ||
+    sessionElements["#responsiveSessionAuthenticationState"].textContent !==
+        "Authentication: active · 8 hours" ||
+    sessionElements["#browserPresenceState"].textContent !==
+        "Browser: waiting" ||
+    sessionElements["#responsiveBrowserPresenceState"].textContent !==
+        "Browser: waiting") {
+    throw new Error(
+        "Web session state did not render desktop and responsive authentication/presence",
+    );
+}
+let invalidSessionRejected = false;
+try {
+    sessionHarness.renderSessionState({
+        authenticated: true,
+        csrf: "test-csrf",
+        session_lifetime: "2h",
+        browser_presence: "connected",
+    });
+} catch {
+    invalidSessionRejected = true;
+}
+if (!invalidSessionRejected) {
+    throw new Error("Web session state accepted an unsupported lifetime");
+}
+sessionHarness.startSessionHeartbeat();
+let scheduledHeartbeat = [...sessionTimers.entries()][0];
+if (sessionTimers.size !== 1 || scheduledHeartbeat[1].delay !== 0) {
+    throw new Error("Visible Web session did not schedule an immediate heartbeat");
+}
+sessionTimers.delete(scheduledHeartbeat[0]);
+scheduledHeartbeat[1].callback();
+await sessionHarness.sendSessionHeartbeat();
+if (sessionRequests.length !== 1 ||
+    sessionRequests[0].path !== "/api/session" ||
+    sessionRequests[0].options.method !== "POST") {
+    throw new Error("Web session heartbeat overlapped or used the wrong endpoint");
+}
+sessionRequests[0].resolve({status: 204});
+await Promise.resolve();
+await Promise.resolve();
+scheduledHeartbeat = [...sessionTimers.entries()][0];
+if (sessionTimers.size !== 1 ||
+    scheduledHeartbeat[1].delay !== 8000 ||
+    sessionElements["#browserPresenceState"].textContent !==
+        "Browser: connected" ||
+    sessionElements["#responsiveBrowserPresenceState"].textContent !==
+        "Browser: connected") {
+    throw new Error("Completed heartbeat did not schedule the next 8-second attempt");
+}
+sessionDocument.hidden = true;
+sessionHarness.updateSessionHeartbeatVisibility();
+if (sessionTimers.size !== 0) {
+    throw new Error("Hidden Web session retained a scheduled heartbeat");
+}
+sessionDocument.hidden = false;
+sessionHarness.updateSessionHeartbeatVisibility();
+scheduledHeartbeat = [...sessionTimers.entries()][0];
+if (sessionTimers.size !== 1 || scheduledHeartbeat[1].delay !== 0) {
+    throw new Error("Visible Web session did not restart heartbeat immediately");
+}
+sessionHarness.stopSessionHeartbeat();
+if (sessionTimers.size !== 0 || sessionErrors.length !== 0) {
+    throw new Error("Web session heartbeat cleanup failed");
+}
+
+const renderSettingsStart = page.indexOf("function renderSettingsState(s)");
+const renderSettingsEnd = page.indexOf(
+    "\nfunction renderSshCeilingSelect", renderSettingsStart,
+);
+if (renderSettingsStart < 0 || renderSettingsEnd < 0) {
+    throw new Error("Cannot extract Web settings renderer");
+}
+const settingsElements = new Map();
+const settingsElement = (selector) => {
+    if (!settingsElements.has(selector)) {
+        settingsElements.set(selector, {
+            value: "", checked: false, textContent: "", disabled: false,
+        });
+    }
+    return settingsElements.get(selector);
+};
+const renderSettingsState = new Function(
+    "q", "setPolicyEditor", "renderProviderState",
+    page.slice(renderSettingsStart, renderSettingsEnd) +
+        ";return renderSettingsState;",
+)(settingsElement, () => {}, () => {});
+renderSettingsState({
+    web_session_lifetime: "until_reboot",
+    tts_volume: 128,
+    display_brightness: 128,
+    screen_sleep_minutes: 5,
+    keyboard_repeat_ms: 125,
+    power_profile: 1,
+    python_layout_ready: false,
+    python_image_ready: false,
+    master_tool_policy: "",
+    new_chat_tool_policy: "",
+});
+if (settingsElement("#sessionLifetime").value !== "until_reboot") {
+    throw new Error("Web settings renderer omitted the saved session lifetime");
+}
+const settingsValuesStart = page.indexOf("function settingsUpdateValues(secret)");
+const settingsValuesEnd = page.indexOf(
+    "\nq('#saveSettings')", settingsValuesStart,
+);
+if (settingsValuesStart < 0 || settingsValuesEnd < 0) {
+    throw new Error("Cannot extract Web settings update producer");
+}
+const settingsUpdateValues = new Function(
+    "q", "readPolicyEditor",
+    page.slice(settingsValuesStart, settingsValuesEnd) +
+        ";return settingsUpdateValues;",
+)(settingsElement, () => "policy");
+settingsElement("#sessionLifetime").value = "1h";
+if (settingsUpdateValues(() => "").web_session_lifetime !== "1h") {
+    throw new Error("Web settings update omitted the selected session lifetime");
+}
 
 const policyStart = page.indexOf("const capabilityDefinitions=");
 const policyEnd = page.indexOf("function createPolicySelect", policyStart);

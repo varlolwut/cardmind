@@ -7,7 +7,7 @@ param(
     [int]$BaudRate,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet("projects", "retry", "compaction", "summary-regeneration", "context-history", "context-history-orphan-recover", "archive-quota", "archive-quota-recover", "binary-text", "binary-text-recover", "history-heap", "limits", "chat-scale", "workspace-scale", "file-scale", "unicode-path", "shared-isolation", "large-stream", "atomic-failure", "version-history", "sd-degraded", "instructions", "request-settings", "p6-providers", "diagnostics", "ssh", "p4-ssh-output", "workspace-tool", "full")]
+    [ValidateSet("projects", "retry", "compaction", "summary-regeneration", "context-history", "context-history-orphan-recover", "archive-quota", "archive-quota-recover", "binary-text", "binary-text-recover", "history-heap", "limits", "chat-scale", "workspace-scale", "file-scale", "unicode-path", "shared-isolation", "large-stream", "atomic-failure", "version-history", "sd-degraded", "instructions", "request-settings", "p6-providers", "p6-session", "diagnostics", "ssh", "p4-ssh-output", "workspace-tool", "full")]
     [string]$Suite,
 
     [Parameter(Mandatory = $true)]
@@ -944,6 +944,8 @@ $largeStreamNonce = ""
 $largeStreamSetupAttempted = $false
 $largeStreamWebVerified = $false
 $largeStreamDeviceVerified = $false
+$p6SessionWebVerified = $false
+$p6SessionTransportFailed = $false
 $largeStreamClean = $false
 $largeStreamLedgerPath = Join-Path (
     Get-Location).Path "artifacts\p2-21-large-stream-ledger.json"
@@ -1199,7 +1201,7 @@ try {
         -not (Test-Path -LiteralPath $archiveQuotaLedgerPath)) {
         throw "P2-28 recovery ledger is absent; refusing ambiguous cleanup"
     }
-    if ($Suite -eq "binary-text") {
+    if ($Suite -in @("binary-text", "p6-session")) {
         if (Test-Path -LiteralPath $binaryTextLedgerPath) {
             throw "P2-29 recovery ledger exists; run binary-text-recover before a new fixture"
         }
@@ -1777,7 +1779,7 @@ try {
     if ($Suite -eq "archive-quota-recover") {
         $nodeArguments += @("--archive-quota-ledger", $archiveQuotaLedgerPath)
     }
-    if ($Suite -eq "binary-text") {
+    if ($Suite -in @("binary-text", "p6-session")) {
         $nodeArguments += @(
             "--binary-text-nonce", $binaryTextNonce,
             "--binary-text-ledger", $binaryTextLedgerPath)
@@ -1799,6 +1801,10 @@ try {
         -PassThru `
         -Wait
     $nodeExitCode = $nodeProcess.ExitCode
+    if ($Suite -eq "p6-session" -and $nodeExitCode -eq 20) {
+        $p6SessionTransportFailed = $true
+        throw "P6-03 HTTP transport failed; the Device path is terminated and fixture cleanup remains unresolved"
+    }
     if ($Suite -eq "p6-providers" -and
         (Test-Path -LiteralPath $p6ProviderLedgerPath)) {
         $p6ProviderLedgerPresent = $true
@@ -1889,6 +1895,159 @@ try {
         $p6ProviderLedgerPresent = $false
         $p6ProviderWebClean = $true
     }
+    if ($Suite -eq "p6-session") {
+        $resultLines = @(Get-Content -LiteralPath $nodeStdoutPath -Encoding UTF8)
+        if ($resultLines.Count -ne 1) {
+            throw "P6-03 session suite must emit exactly one JSON evidence line"
+        }
+        $evidence = $resultLines[0] | ConvertFrom-Json
+        $sessionEvidence = $evidence.session
+        $choiceEvidence = @($sessionEvidence.choices)
+        if ($evidence.result -ne "pass" -or $evidence.suite -ne $Suite -or
+            $sessionEvidence.protected_request_before_login -ne "pass" -or
+            $choiceEvidence.Count -ne 4 -or
+            [int64]$sessionEvidence.malformed_status -ne 400 -or
+            $sessionEvidence.malformed_revision_unchanged -ne $true -or
+            $sessionEvidence.stale_cookie_rejected -ne "pass" -or
+            $sessionEvidence.fresh_login -ne "pass" -or
+            $sessionEvidence.final_settings_15m -ne $true -or
+            $sessionEvidence.final_session_15m -ne $true -or
+            [int64]$sessionEvidence.settings_revision_delta -ne 5 -or
+            $sessionEvidence.stable_configuration_unchanged -ne $true -or
+            [int64]$sessionEvidence.write_only_empty_count -ne 5 -or
+            [int64]$sessionEvidence.clear_flags_false_count -ne 3 -or
+            $sessionEvidence.wifi_identity_unchanged -ne $true -or
+            $sessionEvidence.credential_configuration_unchanged -ne $true -or
+            $sessionEvidence.raw_secret_fields_absent -ne $true -or
+            $sessionEvidence.heartbeat_no_cookie -ne "pass" -or
+            [int64]$sessionEvidence.first_heartbeat_ms -lt 0 -or
+            [int64]$sessionEvidence.first_heartbeat_ms -gt 45000 -or
+            [int64]$sessionEvidence.second_heartbeat_ms -lt 0 -or
+            [int64]$sessionEvidence.second_heartbeat_ms -gt 45000 -or
+            [int64]$sessionEvidence.silent_interval_ms -lt 26000 -or
+            [int64]$sessionEvidence.silent_interval_ms -ge 30000 -or
+            $sessionEvidence.post_download_waiting -ne $true -or
+            $sessionEvidence.post_heartbeat_connected -ne $true -or
+            [int64]$sessionEvidence.fixture_collision_matches -ne 0 -or
+            [int64]$sessionEvidence.fixture_cleanup.remaining_matches -ne 0 -or
+            $sessionEvidence.fixture_cleanup.cleanup_complete -ne $true -or
+            $sessionEvidence.fixture_cleanup.idempotent -ne $true -or
+            $sessionEvidence.cleanup -ne "pass") {
+            throw "P6-03 direct session evidence contract is incomplete"
+        }
+
+        $expectedChoices = @("15m", "1h", "8h", "until_reboot")
+        $expectedMaxAges = @(900, 3600, 28800, $null)
+        $unchangedCookies = [System.Collections.Generic.List[object]]::new()
+        for ($index = 0; $index -lt $expectedChoices.Count; $index++) {
+            $choice = $choiceEvidence[$index]
+            if ($choice.value -ne $expectedChoices[$index] -or
+                [int64]$choice.save_ms -lt 0 -or [int64]$choice.save_ms -gt 45000) {
+                throw "P6-03 lifetime round-trip evidence is incomplete"
+            }
+            if ($index -lt 3) {
+                if ([int64]$choice.max_age_seconds -ne
+                    [int64]$expectedMaxAges[$index] -or
+                    [int64]$choice.save_cookie.max_age_seconds -ne
+                    [int64]$expectedMaxAges[$index] -or
+                    [int64]$choice.read_cookie.max_age_seconds -ne
+                    [int64]$expectedMaxAges[$index]) {
+                    throw "P6-03 finite lifetime cookie evidence is incomplete"
+                }
+            }
+            elseif ($null -ne $choice.max_age_seconds -or
+                $null -ne $choice.save_cookie.max_age_seconds -or
+                $null -ne $choice.read_cookie.max_age_seconds) {
+                throw "P6-03 Until-reboot cookie evidence is incomplete"
+            }
+            $unchangedCookies.Add($choice.save_cookie)
+            $unchangedCookies.Add($choice.read_cookie)
+        }
+        foreach ($cookieEvidence in @(
+                $sessionEvidence.malformed_old_policy,
+                $sessionEvidence.final_save_cookie,
+                $sessionEvidence.final_settings_cookie,
+                $sessionEvidence.final_session_cookie,
+                $sessionEvidence.tiny_download.cookie)) {
+            $unchangedCookies.Add($cookieEvidence)
+        }
+        foreach ($cookieEvidence in $unchangedCookies) {
+            if ([int64]$cookieEvidence.count -ne 1 -or
+                $cookieEvidence.http_only -ne $true -or
+                $cookieEvidence.same_site -ne "Strict" -or
+                $cookieEvidence.path -ne "/" -or
+                $cookieEvidence.token_unchanged -ne $true) {
+                throw "P6-03 unchanged-token cookie evidence is incomplete"
+            }
+        }
+        if ($null -ne $sessionEvidence.malformed_old_policy.max_age_seconds -or
+            [int64]$sessionEvidence.final_save_cookie.max_age_seconds -ne 900 -or
+            [int64]$sessionEvidence.final_settings_cookie.max_age_seconds -ne 900 -or
+            [int64]$sessionEvidence.final_session_cookie.max_age_seconds -ne 900 -or
+            [int64]$sessionEvidence.tiny_download.cookie.max_age_seconds -ne 900 -or
+            [int64]$sessionEvidence.logout_cookie.count -ne 1 -or
+            $sessionEvidence.logout_cookie.http_only -ne $true -or
+            $sessionEvidence.logout_cookie.same_site -ne "Strict" -or
+            $sessionEvidence.logout_cookie.path -ne "/" -or
+            $sessionEvidence.logout_cookie.token_cleared -ne $true -or
+            [int64]$sessionEvidence.logout_cookie.max_age_seconds -ne 0) {
+            throw "P6-03 logout or final cookie policy evidence is incomplete"
+        }
+
+        if ([int64]$sessionEvidence.tiny_download.bytes -ne 8 -or
+            [int64]$sessionEvidence.tiny_download.content_length -ne 8 -or
+            $sessionEvidence.tiny_download.sha256 -ne
+                "e57eec3c40ea8c6ce033eeb848f00dd2e8d86eeebe90777d9267620a96b574ae" -or
+            $sessionEvidence.tiny_download.headers -ne "pass" -or
+            [int64]$sessionEvidence.tiny_download.elapsed_ms -lt 0 -or
+            [int64]$sessionEvidence.tiny_download.elapsed_ms -gt 45000) {
+            throw "P6-03 tiny download evidence is incomplete"
+        }
+
+        $freeLoss = [int64]$sessionEvidence.resources.before.free_heap -
+            [int64]$sessionEvidence.resources.after.free_heap
+        $largestLoss = [int64]$sessionEvidence.resources.before.largest_heap -
+            [int64]$sessionEvidence.resources.after.largest_heap
+        if ([int64]$sessionEvidence.resources.after.free_heap -lt (70 * 1024) -or
+            [int64]$sessionEvidence.resources.after.largest_heap -lt (28 * 1024) -or
+            [int64]$sessionEvidence.resources.after.stack_free -le 0 -or
+            $freeLoss -gt 4096 -or $largestLoss -gt 4096) {
+            throw "P6-03 direct session resource evidence is incomplete"
+        }
+
+        if (-not (Test-Path -LiteralPath $binaryTextLedgerPath)) {
+            throw "P6-03 validated tiny-fixture ledger is absent after cleanup"
+        }
+        $completedLedger = Get-Content -LiteralPath $binaryTextLedgerPath -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+        $expectedNames = @(
+            "p2_29_${binaryTextNonce}.bin",
+            "p2_29_${binaryTextNonce}_moved.BIN",
+            "p2_29_${binaryTextNonce}.TXT",
+            "p2_29_${binaryTextNonce}.Md",
+            "p2_29_${binaryTextNonce}.JSONL",
+            "p2_29_${binaryTextNonce}.exe",
+            "p2_29_${binaryTextNonce}.zip",
+            "p2_29_${binaryTextNonce}")
+        $ledgerNames = @($completedLedger.names)
+        if ([int64]$completedLedger.version -ne 1 -or
+            [string]$completedLedger.nonce -ne $binaryTextNonce -or
+            [string]$completedLedger.original_project_id -notmatch
+                '^[A-Za-z0-9._-]{1,180}$' -or
+            $completedLedger.cleanup_complete -ne $true -or
+            $ledgerNames.Count -ne $expectedNames.Count) {
+            throw "P6-03 tiny-fixture ledger has an invalid completed shape"
+        }
+        for ($index = 0; $index -lt $expectedNames.Count; $index++) {
+            if ([string]$ledgerNames[$index] -ne $expectedNames[$index]) {
+                throw "P6-03 tiny-fixture ledger contains unexpected ownership"
+            }
+        }
+        Remove-Item -LiteralPath $binaryTextLedgerPath
+        $binaryTextWebClean = $true
+        $p6SessionWebVerified = $true
+    }
+
     if ($Suite -in @("archive-quota", "archive-quota-recover")) {
         $resultLines = @(Get-Content -LiteralPath $nodeStdoutPath -Encoding UTF8)
         if ($resultLines.Count -ne 1) {
@@ -2056,6 +2215,9 @@ try {
     }
     if ($Suite -eq "large-stream" -and -not $largeStreamWebVerified) {
         throw "P2-21 Node suite did not prove exact bounded Web access"
+    }
+    if ($Suite -eq "p6-session" -and -not $p6SessionWebVerified) {
+        throw "P6-03 Node suite did not prove the Web session lifecycle"
     }
 
     Assert-SerialWriteAllowed -Serial $serial -ResolvedLogPath $resolvedLogPath `
@@ -2279,7 +2441,8 @@ finally {
     if ($serial.IsOpen) {
         if ($script:webConsoleConfirmedActive -and
             $script:serialReadinessConfirmed -and
-            -not $script:serialReadinessLost) {
+            -not $script:serialReadinessLost -and
+            -not $p6SessionTransportFailed) {
             try {
                 Assert-SerialWriteAllowed -Serial $serial `
                     -ResolvedLogPath $resolvedLogPath `
@@ -2298,8 +2461,14 @@ finally {
             }
         }
         elseif ($script:webConsoleConfirmedActive) {
-            $finalizerFailures.Add(
-                "Web Console remained active after normal Device readiness was lost; EXIT was not sent")
+            if ($p6SessionTransportFailed) {
+                $finalizerFailures.Add(
+                    "P6-03 HTTP transport failed; no further Device command or fixture cleanup was attempted")
+            }
+            else {
+                $finalizerFailures.Add(
+                    "Web Console remained active after normal Device readiness was lost; EXIT was not sent")
+            }
         }
         if ($p4SshOutputFixtureOwned -and -not $p4SshOutputFixtureClean -and
             $script:serialReadinessConfirmed -and
