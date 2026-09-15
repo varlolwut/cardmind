@@ -73,6 +73,127 @@ Status values are `pending`, `in_progress`, and `completed`.
 | P6-07 | Reconcile cross-surface behavior and run focused integration acceptance | Names/state/permissions consistent across Device and Web; profiles, sessions, presence, reconnect, SSH and Python full-source review/return boundaries interoperate; forbidden effects absent; exact-owned cleanup | pending |
 | P6-08 | Establish and publish the stable Wi-Fi baseline and close Phase 6 | Full host/Device/Web regression; exact build options and binary hash; flash/RAM/heap/largest-block/stack/latency; screenshots; soak; cleanup; independent reviews; green CI; reviewed merge only to `develop` | pending |
 
+## P6-01 reopened by Architect — 2026-09-15
+
+At 2026-09-15T22:39:54+03:00, the new Architect explicitly reopens P6-01 following
+the user's request for a complete personal prototype audit, the missing Device SD
+indicator, a reported Web navigation-layout concern and explicit rejection of the
+clinical cream/green palette. P6-01 is the sole active row. P6-04 is suspended as
+`pending`; its five changed files, implementation, accepted code/build evidence and
+uncompleted browser acceptance remain preserved, not discarded or declared failed.
+P6-02 and P6-03 remain completed. No P6-04 proof, firmware/test edit, build or upload
+runs while this reopened artifact boundary is active.
+
+The reviewed artifact still has exact SHA-256
+`D0B55029E1A1CFAE0CA596AC3AF3D1B52C470A2DFD070E7D6DB95E9469C2A16B`.
+Personal Chromium inspection at 720x450 reproduced overlapping Shared-file list text:
+the wrapped bundle name/metadata intersects the following entry. This contradicts
+the prior final claim of separated collection rows at that size. Source comparison
+also confirms that `ui.cpp::drawCarouselHeader` displays the existing SD-ready
+indicator, while the prototype's `renderDevice` header emits only Wi-Fi and battery
+for ordinary screens. The final P6-01 visual/functional acceptance is revoked for
+these concrete defects; historical observations remain historical, not a current GO.
+
+The user rejects the prior dominant clinical palette. The new visual brief must use
+recognizable retro electronic-instrument composition: graphite instrument regions,
+warm gray body surfaces, readable light labels and restrained amber interaction
+accents. Reserve state colors for actual state. Preserve useful list/detail
+architecture and every required action; add no decorative instrumentation, new
+framework, backend simulation or broad aesthetic rewrite unrelated to this correction.
+
+Architect owns the complete read-only Web/Device audit and one consolidated correction
+brief: layout at desktop, tablet, phone and short/narrow sizes; all required
+object/action routes, selection identity and displayed permission state; dialogs,
+scroll/focus, degraded states and Device status. A prototype control count is not
+functional proof. Explicit future production gaps remain separately owned by P6-05/06.
+
+Phase 6 remains the sole implementation author. Before any artifact edits, freeze
+the exact affected selectors/handlers, smallest proof and non-goals, then obtain
+the required bounded independent pre-edit review. The allowed artifact correction
+surface is the existing external prototype plus this trace and explicit user-scope
+decisions in `ROADMAP.md`; production, retained tests, P6-04 files and device state
+remain outside it. Do not rewrite working tests or construct another test runner.
+
+### Architect consolidated correction contract — 2026-09-15
+
+This current decision supersedes historical P6-01 visual GO, warm-light palette locks
+and the standalone artifact's 184,320-byte ceiling. Unchanged ownership, product
+contracts and explicit P6-05/06 gaps remain binding. The byte ceiling was assigned
+as headroom over an earlier mock, without measured Device cost; the current artifact
+has only two bytes remaining and its last correction removed formatting to fit.
+Do not minify, delete functionality or add abstractions to satisfy that superseded
+ceiling. Report before/after artifact bytes as diagnostic evidence. The artifact
+budget remains one self-contained HTML/CSS/JS presentation, with no added dependency,
+external asset/font/request, storage, timer, backend clone or persistent allocation.
+Actual firmware flash/RAM/stack/latency acceptance remains in the production rows.
+
+On the unchanged D0B55029 artifact, Architect personally observed:
+
+- Shared-file rows at 720x450 shrink to 36 px while wrapped title/metadata extend
+  into the next row. A bounded read-only visual audit found the same cause in SSH
+  profiles: metadata y276.19..307.58 intersects the next title y294.08..310.08;
+  Architect inspected that screenshot. Connected Terminal -> Remote files collapses
+  its list to 4 px at 720x450 and 320x568 even after a scroll attempt. Architect
+  inspected the narrow screenshot; a technically successful hit-test does not make
+  the clipped names readable.
+- `renderDevice` omits SD while production `ui.cpp::drawCarouselHeader` retains it.
+  This is a prototype regression, not evidence of a failed physical card.
+- Chat settings expose Ask/Ask/Allow/Ask/Off/Off/Off/Off, while Capability status
+  renders every entry as Ask / Project policy. Device also has a hard-coded status
+  snapshot. These are misleading presentation values, not an observed firmware
+  permission bypass.
+- Opening the second Web search source (ESP32 power management) opens the first
+  source's M5Stack title and URL. The selected identity is not passed to the detail.
+- Uploading a small valid UTF-8 `.yaml` file yields Binary / transfer-only and removes
+  the editor, although the shipped text classifier and locked safe-text acceptance
+  include YAML. The mock uses a narrower independent extension list. A further
+  direct control check at 900x720 on the same SHA uploaded a 28-byte valid UTF-8
+  `.txt`: it became Text / 0 B with an empty `cmFileEditor`. `genericConfirm`
+  constructs text uploads from an empty string and never reads the selected File.
+  This same Upload owner must preserve selected text content and byte count as well
+  as classification; its correction adds no backend or editing engine.
+- At 320x568, Device FileViewer has 106 px visible / 138 px content with hidden
+  overflow; Down leaves the text and scroll position unchanged despite its page
+  footer. FileEditor similarly clips 125 px into 106 px. SSH profile actions have
+  113 px content in 106 px. All 88 Device catalog states were visually inspected;
+  catalog selection proves presentation only, not navigation or execution.
+
+The completed bounded Web audit covered four destinations, ten Settings categories,
+manual Python and reachable dialogs at 1280x720, 900x720, 720x450, 390x780 and 320x568.
+Its 52 presentation states per viewport are layout evidence only. Covered dialog
+footers and enabled actions remained reachable, and Escape closed them. Do not
+rewrite that working dialog boundary without a concrete changed-boundary defect.
+
+Phase 6 shall make one coherent correction within existing owners:
+
+1. Replace the rejected dominant cream/green with graphite/warm-gray instrument
+   surfaces, readable light labels and restrained amber selection/action emphasis.
+   Preserve browser appearance preferences and meaningful state distinctions. Keep
+   navigation icons/labels aligned and legible, including the reported narrow rail;
+   no decorative machinery, new font/asset system or new breakpoint family.
+2. Correct collection item sizing and task/list scroll ownership so full filenames,
+   metadata, selected SSH profiles and SFTP entries remain readable at short/narrow
+   sizes. Audit all consumers of the affected existing list styles, not just Files.
+3. Restore visible SD-ready/unavailable status through the existing Device header
+   and presentation state. Retain the existing 240:135 logical display model; make
+   selected rows and complete file content reachable through truthful Device keys.
+   Do not substitute shrinking every font or scrolling the outside review page for
+   usable content inside the Device screen. No editor/backend engine is requested.
+4. Bind Web source detail to the chosen source; align uploaded safe-text presentation
+   with the shipped classifier; show truthful raw/effective capability and origin
+   values from the selected presentation record on Web and Device. Reuse existing
+   state and helpers, with no parallel authoritative policy resolver or backend clone.
+5. Freeze exact selectors/handlers and the smallest direct proof before edits, then
+   obtain the one required independent pre-edit review. Prove changed interactions
+   through real controls and capture all four Web destinations at the five sizes,
+   all Settings/Device presentation screens and changed degraded states. Personally
+   inspect text/row clipping, not only outer control boxes; catalog traversal alone
+   never proves an action. No new retained harness or rewrite of repository tests.
+6. Send Architect exact old/new SHA, scoped diff, observations, screenshots and any
+   unverified boundary. Architect personally decides GO/STOP. P6-04 stays suspended
+   and unchanged until this correction is accepted; full firmware release acceptance
+   remains a later gate, not a claim made from this mock.
+
 ## P6-01 locked boundary
 
 P6-01 is a pre-production phase-transition row. The prior task-owned Concept C visual-polish
@@ -3524,3 +3645,209 @@ The frozen publication set is exactly the 18 tracked row-owned paths. `ROADMAP.m
 ignored local canonical scope file and is not staged. The Architect-approved unrelated untracked
 `.codex/` and `m[1])` paths remain untouched. P6-04 is not activated before authenticated remote
 SHA verification.
+
+## P6-01 correction implementation and proof — 2026-09-16
+
+**Correction interval:** 2026-09-15T22:39:54+03:00 through
+2026-09-16T01:18:55+03:00. No unchanged-hypothesis stall reached a 30-minute
+alert or 60-minute pivot threshold. New evidence successively assigned the observed
+failures to palette inheritance, text-viewport ownership, upload cancellation
+identity, two QA-oracle label mismatches, Device policy projection, degraded-SD
+catalog state, danger-action contrast, persistent-settings footer content and
+short-height Chat viewport ownership, fixed-menu close reachability and mobile
+composer width.
+
+The exact artifact-only inventory, design, proof matrix, non-goals and write set
+were frozen before edits. The bounded independent pre-edit reviewer first returned
+`STOP` because async upload failure/cancellation and unaffected Chat/Project
+capability snapshots lacked direct proof. The corrected design added those
+observations and the same reviewer performed its single blocker recheck, returning
+`GO`: upload failure/cancellation is contained without mutation or console leakage,
+BOM/native-byte identity is preserved, capability invalidation is correctly scoped,
+and Web/Device unavailable states are directly observable. The adopted browser
+semantics are W3C File API `Blob.arrayBuffer()` exact asynchronous byte reading and
+WHATWG Encoding fatal UTF-8 decoding with BOM retained as content.
+
+The only task-owned implementation file is
+`C:/Users/84vs1/.codex/visualizations/2026/09/02/01a06386-22d5-7833-bb82-40a4f499f52e/p6-01-neutral-coverage-ia.html`.
+The rejected input was 184,318 bytes at SHA-256
+`D0B55029E1A1CFAE0CA596AC3AF3D1B52C470A2DFD070E7D6DB95E9469C2A16B`.
+The final correction candidate is 201,354 bytes at SHA-256
+20065781CC1C8618A79475DC17BEA21D3F61BA89A7919DB9BC4DF139DF6AF103,
+a diagnostic increase of 17,036 bytes under the superseding no-byte-ceiling
+decision. It remains one self-contained HTML/CSS/JS file with no dependency,
+font, storage, timer, request or backend simulation.
+
+The coherent correction keeps the existing information architecture while adding
+the graphite/warm-gray/amber instrument palette and explicit readable foregrounds
+for controls on dark headers, footers and composer surfaces; non-overlapping
+natural-height collection rows; visible SD ready/unavailable state; distinct Web
+source identities and exact URLs; API-shaped per-Chat capability snapshots with
+Chat- and Project-scoped invalidation; the shipped editable-text extension set;
+fatal UTF-8 rejection; exact text/BOM byte preservation; transfer-only bundle and
+binary classification; and Device text paging from measured `clientHeight` and
+`scrollHeight`. Device FileViewer consumes every existing content window, and
+two-step host-key confirmation/result remains visible inside the 240x135 screen.
+Device Project and Chat policy menus project the raw selected-record values, the
+degraded-SD catalog explicitly shows unavailable state, and unselected danger
+actions retain readable contrast. At 720x450 and 320x568, the Chat filter and
+collection row remain operable while the selected-conversation transcript alone
+owns overflow. The six existing per-message intent controls plus Output &
+instructions and Available SSH tools reuse a native details menu whose compact
+summary shows Auto, No tools or every selected required group. Its fixed centered
+panel escapes existing clipping ancestors, and its local Done action only removes
+the menu's open attribute. At the existing 640px breakpoint, Tools occupies the
+first composer row and full-width Draft plus Send occupy the second; desktop and
+720px retain the compact side-by-side composer.
+
+The comprehensive disposable real-Chrome matrix passed on the immediate precursor
+at SHA-256 A64760EE945EB6EF9E4E53AF540EA3B08BA048F08B04FF30916264FA1AE7CD40.
+Its retained observations and 11 screenshots are in
+C:/Users/84vs1/.codex/visualizations/2026/09/02/01a06386-22d5-7833-bb82-40a4f499f52e/p6-01-proof-a64760ee945e-2026-09-15T21-20-08-810Z/.
+Observed coverage is 20 Web destination/viewport cases (four destinations at
+1280x720, 900x720, 720x450, 390x780 and 320x568), all 10 Settings categories at
+all five viewports (50 cases), and all 88 catalogued Device screens at 320x568.
+Geometry checks found no page-level horizontal overflow, collection-row overlap,
+clipped collection-row text, navigation-control overlap or selected Device row
+outside its screen. The minimum measured contrast among the specifically corrected
+enabled controls was 10.78:1. Architect retained this matrix for unchanged
+boundaries and required only focused proof after each later concrete defect.
+
+Seven upload observations passed: exact TXT and YAML content/native bytes;
+BOM-bearing YAML retained U+FEFF and the original bytes; Project bundle and binary
+remained transfer-only; malformed UTF-8 YAML was explicitly rejected with no
+record; and a delayed old text read followed by close, reopen and a different file
+left the new dialog open, committed neither identity and reported cancellation.
+Only a later explicit Confirm can add the new selection. Both QA attempts that
+used shortened capability labels stopped before acceptance; production remained
+frozen, the oracle was corrected from the canonical displayed labels, and the full
+matrix then passed.
+
+Web and Device showed the exact initial capability snapshot. Saving one Chat made
+only that Chat unavailable while another Chat retained all eight records. Saving
+one Project made every Chat in that Project unavailable while the other Project
+retained all eight records. Device Down/Up changed actual rendered text scroll
+positions, exposed distinct first and final file-window text at 320x568, paged
+FileEditor and capability status, traversed all seven SSH profile actions inside
+the display, and showed the complete host-key prompt and result. Ready, missing,
+removed, replaced and full SD states matched their required Device/Web presentation.
+The second Web source showed the ESP32 title and `https://docs.espressif.com/`.
+No page error, console error or external request occurred.
+
+The focused policy/SD proof passed on the next correction candidate at SHA-256
+9A2776C8CD1FBB28D2577E019E9E4082E63CF87CD79F686E982005679C9E163B.
+Its retained evidence is in
+C:/Users/84vs1/.codex/visualizations/2026/09/02/01a06386-22d5-7833-bb82-40a4f499f52e/p6-01-focused-9a2776c8cd1f-2026-09-15T21-30-15-650Z/.
+All 10 Project-policy rows and all 10 Chat-policy rows exactly matched the selected
+Web records; the degraded catalog showed SD unavailable and five normal SD
+scenarios retained their required states. Three screenshots were retained, with no
+page error, console error or external request.
+
+The focused danger/settings proof passed on the following correction candidate at
+SHA-256 5679ADA2821C1EA2DD59CB99F2C0D33FE70AC5D72199C7372256609AFC1B3E1F.
+Its retained evidence is in
+C:/Users/84vs1/.codex/visualizations/2026/09/02/01a06386-22d5-7833-bb82-40a4f499f52e/p6-01-style-5679ada2821c-2026-09-15T21-36-05-318Z/.
+The Device danger text measured 10.26:1 contrast, and all five persistent mobile
+Settings footers kept the complete Save action visible without the rejected
+technical ownership note. Two screenshots were retained, with no page error,
+console error or external request.
+
+An intermediate focused short-layout proof executed candidate
+EFBDFA467BB4E2B1BC447E95523DAD6B42E401E25A5D1B4A671BC92D925A234C.
+Its retained evidence is in
+C:/Users/84vs1/.codex/visualizations/2026/09/02/01a06386-22d5-7833-bb82-40a4f499f52e/p6-01-short-efbdfa467bb4-2026-09-15T21-41-40-333Z/.
+At 720x450 the filter, readable selected row, Draft and Send controls were inside
+their viewports and hittable. At 320x568 the detail view kept Draft and Send
+inside and hittable, while the collection view kept the filter and readable rows
+inside. All three cases had no horizontal overflow, page error, console error or
+external request; three screenshots were retained. Architect then disproved its
+closure claim: the transcript had only 23px client height at 720x450 and 21px at
+320x568, so the visible conversation was a one-line slit. This candidate is
+retained only as predecessor evidence for the unchanged collection geometry.
+
+Candidate F406FF7E11DC2AC9841D880FD16A203C132BBC3BF725B7E9B7A1F1511EEE14AE
+then moved the secondary composer controls into the existing native menu and
+restored 121px/138px transcript client heights at 720x450/320x568. Architect
+disproved that candidate too: at 320x568 its side-by-side Tools placement left the
+Draft control only 65.30px wide, approximately 47px for text, so ordinary input
+was unusable. That observation owns the final two-row mobile composer correction;
+F406 is not closure evidence.
+
+The final focused real-Chrome proof passed on SHA-256
+20065781CC1C8618A79475DC17BEA21D3F61BA89A7919DB9BC4DF139DF6AF103.
+Its observations and six screenshots are retained in
+C:/Users/84vs1/.codex/visualizations/2026/09/02/01a06386-22d5-7833-bb82-40a4f499f52e/p6-01-chattools-20065781cc1c-2026-09-15T22-18-53-447Z/.
+At 720x450 the transcript had 121px client height, 361px scroll height and a
+real scrollTop of 21; the complete 65.98px two-line message, Tools, a 211px
+content-width Draft and Send were simultaneously visible and hittable. At
+320x568 the transcript had 98px client height, 479px scroll height and scrollTop
+99; the complete 86.28px three-line message, the full-width Tools summary, a
+213.30px Draft with 195px content width and Send were simultaneously visible and
+hittable. At 1280x720 the complete transcript fit without requiring a scroll and
+the 395px content-width Draft remained available.
+
+At all three sizes the centered fixed menu stayed inside the viewport despite its
+existing overflow-hidden ancestors. Auto, No tools, all four required groups, the
+two existing option dialogs and Done were hit-testable; every menu control measured
+10.78:1 contrast. On mobile, the closed summary exactly reflected No tools, Auto
+and each accumulated required group. Open-to-Done, Output dialog Close-to-Done and
+SSH tools cancel-to-Done preserved the exact selected Chat, draft and intent.
+There was no page error, console error, external request or horizontal overflow.
+
+Architect read the final source, personally inspected the final 320px Chat/menu
+and 720px Chat screenshots, and reproduced the same three viewport boundaries in
+direct Chrome on the exact final SHA. The independent observations and six
+screenshots are retained in
+C:/Users/84vs1/.codex/visualizations/2026/09/15/01a0a682-5410-7ed1-8f67-c2ab499bf055/prototype-audit/candidate-20065781/.
+The raw local-HTTP response matched the exact 201,354 artifact bytes and final
+SHA. System antivirus injected its own script into browser HTTP navigation, so the
+CDP response-body hash differed; nothing in that environment was disabled, and
+Architect's accepted browser proof used the exact native bytes through setContent.
+Architect returned personal visual/functional GO and stated that every blocker in
+the consolidated correction contract was closed; row-completion GO still awaits
+the final canonical/cleanup reconciliation.
+
+The phase agent personally inspected the retained desktop palette, 720x450 Shared
+and SSH lists, 320x568 mobile palette, Settings and SFTP, 900x720 Device SFTP,
+320x568 FileViewer first/final-window, final Device policy/degraded-SD, danger
+contrast, persistent-footer, final Chat/message and open-menu screenshots at
+720x450, 320x568 and desktop. Architect independently reproduced the principal
+upload, source, viewport, SFTP, Device paging and host-key boundaries on earlier
+candidates and personally accepted the final Chat boundary above. No row-completion
+result is claimed until the separate explicit closure GO. All disposable QA
+scripts, failed-run directories and temporary review PNG copies were removed; all
+referenced successful evidence directories remain.
+
+The suspended P6-04 production/test files were unchanged during this correction.
+Their verified SHA-256 values are
+198A86A9B2E2502EB51B047DE4F6A172DCA7E82167D5E7D93C0C4B4660BB86C2 for
+the Web source,
+2901D20D986F516BD6DA81733F66F23D9362D9782DC81DE7B7665BA7D3BF52E9 for
+the server source,
+6CF8DA42293BB3D3E3A2291DEC727C129439B594A89DE091EE550CC19FE9E797 for
+the generated asset, and
+B9F964FCE04D13FF147F5F359271D28A179DAEC210625CB510065BA461A2FE1D for
+the retained Web test. No firmware, retained test, build, upload, HTTP or physical
+Device action is P6-01 evidence. This prototype therefore does not claim production
+runtime, resource or real-hardware acceptance. This evidence package remained
+in progress until the explicit closure GO below; P6-04 stayed suspended and
+untouched.
+
+## P6-01 row-completion GO — 2026-09-16
+
+At 2026-09-15T22:26:15Z (2026-09-16T01:26:15+03:00), Architect returned
+explicit P6-01 ROW-COMPLETION GO after personally reconciling the final canonical
+section, cleanup, changed source boundary, retained scoped observations and exact-SHA
+browser/screenshots. Architect accepted the 201,354-byte artifact at SHA-256
+20065781CC1C8618A79475DC17BEA21D3F61BA89A7919DB9BC4DF139DF6AF103 and
+confirmed that all concrete blockers in the consolidated correction contract were
+closed. The presentation-only residual is explicit; firmware runtime, resource and
+release acceptance remain owned by P6-05, P6-06 and P6-08.
+
+All phase-agent disposable QA scripts, failed proof directories and temporary PNG
+copies are absent; every referenced successful evidence directory remains.
+Architect also removed the exact-owned temporary comparison snapshot of the rejected
+D0B55029 baseline after verifying its full hash, and verified its absence. The four
+suspended P6-04 hashes above still match. P6-01 is completed. P6-04 remains pending
+during the zero-active-row publication window and may become the sole active row
+only after the exact P6-01 remote SHA is verified.
