@@ -1,3 +1,5 @@
+#include <esp_wifi.h>
+
 namespace {
 
 std::vector<String> voiceMenuItems()
@@ -86,18 +88,69 @@ cardputer::OperationResult applyDisplayAndCpuSettings(const cardputer::Settings&
 
 cardputer::OperationResult applyWifiPowerSetting(const cardputer::Settings& candidate)
 {
+    const wifi_ps_type_t requested = candidate.powerProfile == 0
+        ? WIFI_PS_NONE
+        : WIFI_PS_MIN_MODEM;
+    const bool cachedModeMatches = WiFi.getSleep() == requested;
+    if (!cachedModeMatches && !WiFi.setSleep(requested)) {
+        return {
+            false,
+            "ESP32 rejected Wi-Fi power-save mode " +
+                String(static_cast<int>(requested)),
+        };
+    }
     if (WiFi.getMode() == WIFI_OFF) {
         return {true, ""};
     }
-    const wifi_ps_type_t requested = candidate.powerProfile == 2
-        ? WIFI_PS_MIN_MODEM
-        : WIFI_PS_NONE;
-    if (WiFi.getSleep() == requested) {
+
+    wifi_ps_type_t applied = WIFI_PS_NONE;
+    esp_err_t driverResult = esp_wifi_get_ps(&applied);
+    if (driverResult != ESP_OK) {
+        return {
+            false,
+            "Failed to read active Wi-Fi power-save mode: " +
+                String(esp_err_to_name(driverResult)) + " (" +
+                String(static_cast<int>(driverResult)) + ")",
+        };
+    }
+    if (applied == requested) {
         return {true, ""};
     }
-    return WiFi.setSleep(requested)
+    if (!cachedModeMatches) {
+        return {
+            false,
+            "Wi-Fi power-save mode mismatch after apply: requested=" +
+                String(static_cast<int>(requested)) + " actual=" +
+                String(static_cast<int>(applied)),
+        };
+    }
+
+    driverResult = esp_wifi_set_ps(requested);
+    if (driverResult != ESP_OK) {
+        return {
+            false,
+            "Failed to apply Wi-Fi power-save mode: " +
+                String(esp_err_to_name(driverResult)) + " (" +
+                String(static_cast<int>(driverResult)) + ")",
+        };
+    }
+    driverResult = esp_wifi_get_ps(&applied);
+    if (driverResult != ESP_OK) {
+        return {
+            false,
+            "Failed to verify active Wi-Fi power-save mode: " +
+                String(esp_err_to_name(driverResult)) + " (" +
+                String(static_cast<int>(driverResult)) + ")",
+        };
+    }
+    return applied == requested
         ? cardputer::OperationResult{true, ""}
-        : cardputer::OperationResult{false, "ESP32 rejected the Wi-Fi power-save setting"};
+        : cardputer::OperationResult{
+              false,
+              "Wi-Fi power-save mode verification mismatch: requested=" +
+                  String(static_cast<int>(requested)) + " actual=" +
+                  String(static_cast<int>(applied)),
+          };
 }
 
 cardputer::OperationResult saveAndApplyDeviceSettings(const cardputer::Settings& candidate)
@@ -627,6 +680,9 @@ void openWebConsole(Screen returnScreen)
         const cardputer::OperationResult runtimeResult = settingsResult.success
             ? applyDisplayAndCpuSettings(settings)
             : settingsResult;
+        const cardputer::OperationResult wifiPowerResult = runtimeResult.success
+            ? applyWifiPowerSetting(settings)
+            : cardputer::OperationResult{true, ""};
         const bool wifiChanged = settingsResult.success &&
             (settings.wifiSsid != previousWifiSsid ||
              settings.wifiPassword != previousWifiPassword);
@@ -642,6 +698,8 @@ void openWebConsole(Screen returnScreen)
             : activeResult;
         if (!runtimeResult.success) {
             menuStatus = runtimeResult.error;
+        } else if (!wifiPowerResult.success) {
+            menuStatus = wifiPowerResult.error;
         } else if (!wifiResult.success) {
             menuStatus = wifiResult.error;
         } else if (!clockResult.success) {

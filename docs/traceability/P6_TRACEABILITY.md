@@ -4602,3 +4602,64 @@ has zero in_progress rows during row-only publication; P6-05 remains pending unt
 authenticated remote SHA, parent, identity, complete path set and exact blob
 verification. Per-tab session storage and omitted exact-scroll restoration remain
 intentional scope; broader P6 integration and release gates remain open.
+
+### FIX-POWER-01 completed — Architect acceptance 2026-09-16
+
+This is the independently authorized inherited power correction, not a P6 scope
+expansion. Its isolated production write set is only `DeviceMenus.ino`; it does
+not include the concurrent P6 visual or Chat-performance changes. The unchanged
+source file SHA-256 is
+`FBBFB88B5593C0D182C30C16F54F91CDE39E4137677442A94D0D6B54FEF50A42`.
+Performance requests WIFI_PS_NONE; Balanced and Saver request WIFI_PS_MIN_MODEM.
+The existing settings owner verifies actual driver state, handles the Arduino
+cached-mode distinction and returns explicit failures. The existing post-Console
+settings consumer now invokes that owner and propagates failure to its menu status.
+Stored credentials, CPU profile values and other settings semantics are preserved.
+
+Architect personally reviewed the source, consumers and pinned vendor semantics
+and returned closure GO after the following real-device evidence. The bounded
+independent pre-edit review, strict host suite and exact-core build had already
+passed; no retained tests or diagnostic hooks were added. The shared accepted
+P6 integration image used core 3.2.1, exact Cardputer 8M/custom FQBN, application
+3,650,432 bytes at SHA-256
+`339D99C25AD3A2FCC6C125202B148B46FA3AD6F8C1C46AFF328D3748B397CD8F`
+and options SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`.
+The pending P6 changes in that integration image are not accepted by this correction.
+
+At 2026-09-16T19:46:15+03:00 the old-image PRE completed with Balanced1,
+160MHz and Wi-Fi connected. One warm GET /api/chats returned three chats in
+105.35ms; free heap 95112 -> 94680, largest block 31732 unchanged, minimum heap
+77520 and stack margin 5688 bytes. The two prior observer failures remain failed:
+one assumed normal STATUS while Console owned the dispatcher, and one required
+an absent Web power_profile field. Neither reached the measured refresh. Their
+cleanup and the subsequently abandoned unmeasured third session observed exact
+Console stop; they were not firmware failures or successful latency evidence.
+
+After one coordinated upload, DEVICESETTINGSTEST passed with error=none. Its
+existing production calls applied Performance0/NONE and restored Balanced1/
+MIN_MODEM, including actual esp_wifi_get_ps equality checks. Serial then confirmed
+power1, CPU160MHz and Wi-Fi connected. The identical warm GET /api/chats returned
+three chats in 77.17ms; free heap 95192 -> 94744, largest block 31732 unchanged,
+minimum heap 90196 -> 89748 and stack margin 5608 bytes. There was no reset
+within either observation. Different boot histories make the cross-image minimum
+heap values descriptive, not a claimed improvement. Single latency samples show
+no observed slowdown, not a statistical speedup or battery-current measurement.
+
+By 2026-09-16T19:55:20+03:00 two existing settings/Console-close API transactions
+changed only power1 -> 0 -> 1. Serial after each close confirmed power0/240MHz
+then restored power1/160MHz with connected Wi-Fi and unchanged reset reason1.
+All other submitted settings, API/profile/key-present state and Wi-Fi public
+state compared equal; inspected blank-secret semantics preserve stored keys and
+Wi-Fi password. Final free heap97652, largest31732, minimum85936 and stack5592.
+Every Console session observed exact WEB_CONSOLE result=stopped; all HTTP clients
+and serial holders exited0 and were disposed. No fixtures remained and no recovery
+or additional upload occurred. The Device slot was explicitly returned to Phase6.
+This is API/serial/source evidence, not a physical-display or current-meter claim.
+The separate FIX-PERF-01 Chat implementation and P6 runtime gates remain open.
+
+Publication preserves this correction as one source-and-evidence commit after
+P6-04, without concurrent P6 or Chat-performance production changes. The existing
+phase-row checker accepts only Pn-n row IDs and therefore does not apply to this
+parallel FIX row; its relevant exact-parent, path, identity, filename-only secret
+and artifact checks are performed directly without changing the checker.
