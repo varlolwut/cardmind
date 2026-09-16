@@ -4797,3 +4797,23 @@ Architect personally reviewed the installed version, pinned archive identity,
 upload command, four verified flash writes and final normal STATUS and returns
 closure GO for this upload-only pin. Its publication contains only the lock file
 and this observed-evidence section; historical USB causality remains open.
+
+### FIX-PERF-02 proportional input acceptance — 2026-09-16 23:08 UTC
+
+Architect applied the user's accepted synthetic-input proof to the existing
+modifier-only correction and recorded that interpretation in ROADMAP.md.
+Personal review of handleKeyboard confirms that recognized shortcuts still reach
+their earlier branches; only empty printable input and unhandled modifiers return
+before the unchanged draft-clock/render tail. This small change adds no keyboard
+queue, storage operation or state mutation. The retained bounded source review,
+exact-core integrated build and 22:12 UTC HOTFIXINPUTTEST on5619 remain accepted:
+full60967us/input2732us, final normal readiness and unchanged configuration.
+No FIFO injection or new diagnostic is required solely to re-prove those explicit
+early returns. Physical dispatch/key-to-pixel latency remains unmeasured.
+
+Architect returns closure GO for only the KeyboardNavigation hunk replacing the
+direct printableNewKeys append with an empty-input early return and adding the
+unhandled-modifier early return, plus this compact trace record. The accepted
+publication parent is636970153afc012454e0567fac5c7c5305197eda. All other Keyboard
+changes remain outside this commit. The separate navigation-consumer and
+populated-history TLS-stream obligations remain open.

@@ -2897,7 +2897,13 @@ void handleKeyboard()
         submitPrompt();
         return;
     } else if (!keys.fn && !keys.ctrl && !keys.alt && !keys.opt) {
-        appendKeyboardWord(printableNewKeys(newPresses));
+        const std::vector<char> printable = printableNewKeys(newPresses);
+        if (printable.empty()) {
+            return;
+        }
+        appendKeyboardWord(printable);
+    } else {
+        return;
     }
     if (inputBuffer != previousChatInput) {
         lastDraftEditAt = millis();
