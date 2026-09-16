@@ -1595,7 +1595,14 @@ void renderConsoleSessionPresentationIfChanged()
     }
 }
 
-String loginPage(const String& error)
+bool requestHasPythonReconnectReturn()
+{
+    return server.hasArg("python_run_return") ||
+        server.arg("return") == "python" ||
+        server.arg("reconnect_return") == "python";
+}
+
+String loginPage(const String& error, const bool reconnectReturn)
 {
     String page =
         "<!doctype html><html><head><meta charset='utf-8'>"
@@ -1608,21 +1615,24 @@ String loginPage(const String& error)
     if (!error.isEmpty()) {
         page += "<p class='error'>" + htmlEscape(error) + "</p>";
     }
+    if (reconnectReturn) {
+        page += "<input type='hidden' name='reconnect_return' value='python'>";
+    }
     page += "<label for='password'>Installation password</label><input id='password' name='password' type='password' required autocomplete='current-password' autofocus>"
             "<button type='submit'>Open device console</button><p class='hint'>Keep this page on the same trusted Wi-Fi network as the Cardputer.</p></form></body></html>";
     return page;
 }
 
-void sendLoginPage()
+void sendLoginPage(const bool reconnectReturn)
 {
     server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "text/html; charset=utf-8", loginPage(""));
+    server.send(200, "text/html; charset=utf-8", loginPage("", reconnectReturn));
 }
 
 void sendRoot()
 {
     if (!sessionIsActive()) {
-        sendLoginPage();
+        sendLoginPage(requestHasPythonReconnectReturn());
         return;
     }
     server.sendHeader("Cache-Control", "no-store");
@@ -1668,9 +1678,10 @@ void handleSessionHeartbeat()
 
 void handleLogin()
 {
+    const bool reconnectReturn = requestHasPythonReconnectReturn();
     if (static_cast<std::int32_t>(millis() - loginLockedUntil) < 0) {
         server.send(429, "text/html; charset=utf-8",
-                    loginPage("Too many attempts; wait 30 seconds"));
+                    loginPage("Too many attempts; wait 30 seconds", reconnectReturn));
         return;
     }
     if (!constantTimeEquals(server.arg("password"), accessPassword)) {
@@ -1680,7 +1691,8 @@ void handleLogin()
             loginLockedUntil = millis() + kLoginLockMs;
         }
         delay(250);
-        server.send(401, "text/html; charset=utf-8", loginPage("Invalid password"));
+        server.send(401, "text/html; charset=utf-8",
+                    loginPage("Invalid password", reconnectReturn));
         return;
     }
     loginFailures = 0;
@@ -1696,7 +1708,7 @@ void handleLogin()
     sessionActivityRecordedForRequest = true;
     server.sendHeader("Set-Cookie", sessionCookieValue());
     sessionCookieEmittedForRequest = true;
-    server.sendHeader("Location", "/");
+    server.sendHeader("Location", reconnectReturn ? "/?return=python" : "/");
     server.send(303, "text/plain", "Authenticated");
     passwordRevealUntil = 0;
     renderConsoleScreen();

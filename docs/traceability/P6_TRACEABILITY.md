@@ -74,7 +74,7 @@ Status values are `pending`, `in_progress`, and `completed`.
 | P6-01 | Canonical phase transition, reopened full visual inspection and consolidated correction under the 2026-09-16 user decision, and pre-edit freeze: confirm remote `develop`; inventory every required P3-P5 user-facing action; obtain Architect's consolidated replacement brief and independent visual red-team; create a materially different replacement artifact; freeze scope, non-goals, proof matrix, resource budget and first production-row write set for Architect GO | Exact baseline and branch evidence; complete action-to-surface inventory including project creation, Shared-workspace file creation/upload, chat creation/management and Settings; reviewed replacement brief; independent red-team verdict; Architect acceptance of the interactive artifact against complete functional coverage, current UX/design-system evidence, Web Console/ESP32 Cardputer feasibility and visual quality; reviewed first-row design/proof/write set before production | completed |
 | P6-02 | Add the bounded API-profile and model-preset contract through existing settings, persistence, Device and Web owners | Measured NVS capacity; explicit count/length limits; selection/default behavior; malformed/full-storage failure; reboot persistence; Device/Web parity; exact cleanup and resources | completed |
 | P6-03 | Add configurable authentication lifetime and independent multi-tab browser presence | Four exact lifetime choices; expiry and until-reboot semantics; aggregate visible-tab heartbeat; while WebServer is available, waiting within 30 seconds after the last heartbeat without auth loss; multi-tab correctness; blocking foreground request shown as Busy/unobservable and original timestamp evaluated at return without renewal; final-image startup rejection before login plus stale-token rejection through the shared clear owner | completed |
-| P6-04 | Preserve active project, active view and drafts through the existing Web reconnect path | Same-address reconnect after transient disconnect and Python handoff; active project/view/draft restored; stale or missing state fails explicitly; no exact-scroll claim | pending |
+| P6-04 | Preserve active project, active view and drafts through the existing Web reconnect path | Same-address reconnect after transient disconnect and Python handoff; active project/view/draft restored; stale or missing state fails explicitly; no exact-scroll claim | completed |
 | P6-05 | Bring the Web Console to the Architect-reviewed replacement direction, add explicit discovered-network Wi-Fi selection through the smallest reviewed existing-owner backend mapping, add Web Pending to complete Python source and back through existing P5 owners, and finish desktop/tablet/phone polish through the existing asset boundary | Every required Web capability reachable; explicit Wi-Fi scan/select/hidden-manual/connect states and other degraded states; complete-source review returns to the same Pending identity; stable-ID interaction checks; 1280, 900 and 390 px screenshots without overlap; soak and resource evidence | pending |
 | P6-05A | Bring the existing basic setup/provisioning page and save/error responses to the accepted shared visual style | All Wi-Fi/API/STT/search/TTS fields and actions remain usable at desktop/tablet/phone sizes; write-only secrets and validation/save/restart semantics preserved; flash-resident setup works without SD or external assets; focused runtime and resource evidence | pending |
 | P6-05B | Bring the existing manual Python login/workspace/return pages to the accepted shared visual style and deliver them through the existing VFS image | Script list/editor/output/actions, splitters and responsive layout remain usable; login and same-address CardMind return preserved; no execution/authentication changes; exact updated VFS delivery plus focused real-browser/runtime evidence | pending |
@@ -4516,3 +4516,89 @@ evidence had been verified; both targets are absent. No production, P6-04, COM8,
 HTTP or Device state was changed by cleanup. The matrix intentionally has zero
 `in_progress` rows during the publication window; P6-04 remains `pending` until the
 exact row commit is pushed and its remote SHA is authenticated.
+
+### P6-04 resumed acceptance, Architect closure GO and publication window
+
+Authenticated GitHub publication of P6-01 established remote phase parent
+d3e1d84a7d3620f687805a4bac886b8c16a4e7be. P6-04 then resumed from its
+previously reviewed production/test boundary. The exact complete snapshots accepted
+for this row are:
+
+| Path | Git blob | Raw bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| firmware/CardputerAssistant/assets/web_console.html | 2aee942c0021ba2130027bbbd7beb3ece1d1bf47 | 151507 | DC2F45D7C053B8F562DB9EFBE69605358FAF58C18C8198320A9142A20F9B2BC4 |
+| firmware/CardputerAssistant/src/web_console.cpp | 5a90a09ea028c48e641d0c44b94fbe0998399df2 | 224079 | 9FDBA21B814C5C68A444490B7E34CC38F554C7177DAC47BD031ED8388589763C |
+| firmware/CardputerAssistant/src/web_console_asset.h | cc54eca22dd0eafde251116faf6c4a7d073e5fed | 235553 | 6CF8DA42293BB3D3E3A2291DEC727C129439B594A89DE091EE550CC19FE9E797 |
+| tests/web_console_ui_test.mjs | 033213667d093623b6a8fa393366bf9c8d89fd7e | 67514 | 17F8136F706DEB073BE84DF8D07B4C109D90413B0329DA5822F4FED44D3AE892 |
+
+The original pre-edit reviewer STOP on the fixed login-return boundary was
+corrected and rechecked GO. Fresh post-implementation STOP findings covering exact
+view membership, sticky reconnect errors, interleaved draft ownership, pageshow
+ordering, retained SSH status and prompt-completion ordering were corrected; a
+different fresh code reviewer returned GO. Immediately before closure, Architect
+personally reread these exact four snapshots against the accepted parent and found
+no source blocker. The row creates no new route, backend state, storage format,
+retry/replay path, Python behavior or exact-scroll claim.
+
+Retained host evidence is Node syntax pass, WEB_CONSOLE_UI_TEST result=pass with
+generated-asset equality, scoped diff-check pass and strict CI-equivalent host_tests
+PASS with its temporary ELF removed. The corrected pinned build used exact FQBN
+m5stack:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=custom and only
+M5Stack ESP32 core 3.2.1. Sketch flash was 3,632,994 bytes, globals 65,908 bytes
+and reported local-variable headroom 261,772 bytes. The 3,633,184-byte application
+binary SHA-256 was
+636C7D2F2F80922412AE9AC6D0D82E51B300DA94C4CAE6DDE35364CBEDC08D72;
+the 1,736-byte build.options.json SHA-256 was
+20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998.
+That binary was uploaded once with every segment hash verified and without erasing
+NVS or microSD. Later pending-row builds were not uploaded.
+
+Earlier P6-04 runtime attempts remain failed evidence. After two separate
+user-requested vendor resets, the latest single STATUS observation established a
+new application-1.12.1 baseline with SD, chats and files ready and Wi-Fi connected.
+The last retained-v3 invocation then failed with a generic HTTP-readiness result.
+A bounded read-only classification observed the handler still answering HTTP 200
+and identified the first browser event as POST /api/session cancelled with
+net::ERR_ABORTED while Chat and Files remained loaded and no UI error appeared.
+Architect assigned that result to the disposable v3 classifier, froze v3 against
+rerun or rewrite, and personally reviewed one smaller direct proof before final
+run GO.
+
+The final reviewed direct proof at SHA-256
+FC23B7DAC98D0F092758F2150ADCF15238A2BF6AA939DCE8A22170A230EAB9B6 ran
+exactly once against the already-live Console and exited 0. Fixed result
+P604_DIRECT_RECONNECT was pass for authentication return, Files reconnect, Chat
+reconnect, missing and stale state, with forbidden_mutations=0 and
+cleanup_errors=0. The fixed Python-return intent survived one invalid and one valid
+login without executing Python. Files remained active through one browser-only
+offline interval whose bounded GET /api/status failed as required; the online
+same-origin reload preserved exact authoritative IDs, Files view, reconnect
+snapshot and active draft in 780 ms. A separate Chat reload preserved exact
+identity and draft and returned focus to the prompt in 777 ms. Missing and stale
+records produced stable explicit errors, never exposed the stale draft, never
+mutated identity and never replayed an action.
+
+Two session heartbeats completed before reconnect and six had completed by the end.
+Six ordinary POST /api/session net::ERR_ABORTED cancellations were counted
+separately and never treated as success or Device loss; one planned offline failure
+was also separate. Every required online GET, navigation and panel transition
+completed. Comparable Files samples were free heap 92,592 -> 92,592 bytes,
+minimum heap 77,520 -> 77,520, largest block 31,732 -> 31,732 and stack margin
+5,688 -> 5,688. The 70-KiB/28-KiB/positive-stack floors and 4,096-byte
+steady-loss limits passed with zero free/largest loss.
+
+The exact reconnect, active-draft and stale-draft keys were removed and read back
+absent twice before the fresh context closed. The disposable final proof and
+retained-v3 stdout/stderr paths were verified absent. API credentials and Wi-Fi
+configuration were neither exposed nor changed. The Console remained running.
+No COM, reset, build, upload, production change, retained-test change or Python
+execution occurred in the final proof.
+
+At 2026-09-16T18:25:46+03:00 the runtime, resource, forbidden-effect and cleanup
+evidence was complete. Architect then personally reviewed the exact row diff,
+inventory, vendor semantics, retained tests, runtime and residual scope and
+returned explicit P6-04 CLOSURE GO. P6-04 is completed. The matrix intentionally
+has zero in_progress rows during row-only publication; P6-05 remains pending until
+authenticated remote SHA, parent, identity, complete path set and exact blob
+verification. Per-tab session storage and omitted exact-scroll restoration remain
+intentional scope; broader P6 integration and release gates remain open.

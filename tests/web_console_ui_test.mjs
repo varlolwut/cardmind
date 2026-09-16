@@ -258,6 +258,18 @@ const requiredFragments = [
     'function showPythonRunHandoff()',
     'Date.now()+60000',
     'python_run_return=',
+    "const reconnectStorageKey='cardmind_reconnect_v1'",
+    'function isReconnectView(value)',
+    'function canRemoveSubmittedDraft(storedDraft,composerDraft,submittedDraft)',
+    'function decodeReconnectState(value)',
+    'function validateReconnectIdentity(result,projectId,chatId)',
+    'function validatedActiveReconnectIdentity(projects,chats)',
+    'function captureReconnectState(view)',
+    'function applyReconnectComposerState(draft)',
+    'function restoreReconnectComposerOnChat(draft)',
+    'function showServerStatus(message)',
+    'function initializeWebConsole()',
+    "status.dataset.reconnectState='error'",
 ];
 
 for (const fragment of requiredFragments) {
@@ -407,6 +419,407 @@ if (sessionTimers.size !== 1 || scheduledHeartbeat[1].delay !== 0) {
 sessionHarness.stopSessionHeartbeat();
 if (sessionTimers.size !== 0 || sessionErrors.length !== 0) {
     throw new Error("Web session heartbeat cleanup failed");
+}
+
+const reconnectStart = page.indexOf("const panelCopy=");
+const reconnectEnd = page.indexOf("function readReconnectState()", reconnectStart);
+if (reconnectStart < 0 || reconnectEnd < 0) {
+    throw new Error("Cannot extract Web reconnect codec");
+}
+const reconnectHarness = new Function(
+    page.slice(reconnectStart, reconnectEnd) +
+        ";return {decodeReconnectState,validateReconnectIdentity," +
+        "validatedActiveReconnectIdentity,chatDraftKey,isReconnectView," +
+        "canRemoveSubmittedDraft};",
+)();
+const reconnectProjectId = "0123456789abcdef";
+const reconnectChatId = "fedcba9876543210";
+for (const view of ["chat", "files", "ssh", "settings"]) {
+    const decoded = reconnectHarness.decodeReconnectState(JSON.stringify({
+        version: 1,
+        project_id: reconnectProjectId,
+        chat_id: reconnectChatId,
+        view,
+        draft_key: reconnectHarness.chatDraftKey(reconnectChatId),
+        unrelated: "ignored",
+        scroll_top: 421,
+    }));
+    if (decoded.status !== "ready" || decoded.error !== "" ||
+        decoded.state.project_id !== reconnectProjectId ||
+        decoded.state.chat_id !== reconnectChatId || decoded.state.view !== view ||
+        decoded.state.draft_key !== `cardmind_draft_${reconnectChatId}` ||
+        Object.hasOwn(decoded.state, "unrelated") ||
+        Object.hasOwn(decoded.state, "scroll_top")) {
+        throw new Error(`Reconnect codec did not normalize the ${view} view`);
+    }
+    const matched = reconnectHarness.validateReconnectIdentity(
+        decoded, reconnectProjectId, reconnectChatId,
+    );
+    if (matched.status !== "ready") {
+        throw new Error(`Reconnect codec rejected authoritative ${view} identity`);
+    }
+}
+if (reconnectHarness.decodeReconnectState(null).status !== "missing") {
+    throw new Error("Absent reconnect state was not classified as missing");
+}
+for (const invalid of [
+    "{",
+    JSON.stringify({
+        version: 2,
+        project_id: reconnectProjectId,
+        chat_id: reconnectChatId,
+        view: "chat",
+        draft_key: `cardmind_draft_${reconnectChatId}`,
+    }),
+    JSON.stringify({
+        version: 1,
+        project_id: reconnectProjectId,
+        view: "chat",
+        draft_key: `cardmind_draft_${reconnectChatId}`,
+    }),
+    JSON.stringify({
+        version: 1,
+        project_id: reconnectProjectId,
+        chat_id: reconnectChatId,
+        view: "activity",
+        draft_key: `cardmind_draft_${reconnectChatId}`,
+    }),
+    JSON.stringify({
+        version: 1,
+        project_id: reconnectProjectId,
+        chat_id: reconnectChatId,
+        view: "constructor",
+        draft_key: `cardmind_draft_${reconnectChatId}`,
+    }),
+    JSON.stringify({
+        version: 1,
+        project_id: reconnectProjectId,
+        chat_id: reconnectChatId,
+        view: "__proto__",
+        draft_key: `cardmind_draft_${reconnectChatId}`,
+    }),
+    JSON.stringify({
+        version: 1,
+        project_id: reconnectProjectId,
+        chat_id: reconnectChatId,
+        view: "chat",
+        draft_key: "cardmind_draft_0000000000000000",
+    }),
+]) {
+    if (reconnectHarness.decodeReconnectState(invalid).status !== "stale") {
+        throw new Error("Invalid reconnect state was not classified as stale");
+    }
+}
+const readyReconnect = reconnectHarness.decodeReconnectState(JSON.stringify({
+    version: 1,
+    project_id: reconnectProjectId,
+    chat_id: reconnectChatId,
+    view: "files",
+    draft_key: `cardmind_draft_${reconnectChatId}`,
+}));
+for (const [projectId, chatId] of [
+    ["1111111111111111", reconnectChatId],
+    [reconnectProjectId, "2222222222222222"],
+]) {
+    if (reconnectHarness.validateReconnectIdentity(
+        readyReconnect, projectId, chatId,
+    ).status !== "stale") {
+        throw new Error("Authoritative reconnect identity mismatch was accepted");
+    }
+}
+const activeReconnectIdentity = reconnectHarness.validatedActiveReconnectIdentity(
+    {ok: true, active_project_id: reconnectProjectId},
+    {ok: true, project_id: reconnectProjectId, active_chat_id: reconnectChatId},
+);
+if (activeReconnectIdentity.projectId !== reconnectProjectId ||
+    activeReconnectIdentity.chatId !== reconnectChatId) {
+    throw new Error("Authoritative reconnect identity was not retained exactly");
+}
+let invalidActiveReconnectRejected = false;
+try {
+    reconnectHarness.validatedActiveReconnectIdentity(
+        {ok: true, active_project_id: reconnectProjectId},
+        {ok: true, project_id: "1111111111111111", active_chat_id: reconnectChatId},
+    );
+} catch {
+    invalidActiveReconnectRejected = true;
+}
+if (!invalidActiveReconnectRejected) {
+    throw new Error("Mismatched active Project/Chat response was accepted");
+}
+if (!reconnectHarness.canRemoveSubmittedDraft("draft A", "", "draft A") ||
+    reconnectHarness.canRemoveSubmittedDraft("draft B", "draft B", "draft A") ||
+    reconnectHarness.canRemoveSubmittedDraft("draft B", "", "draft A") ||
+    reconnectHarness.canRemoveSubmittedDraft("draft A", "draft A", "draft A")) {
+    throw new Error("Prompt completion can remove a newer composer draft");
+}
+
+const manualPythonStart = page.indexOf("q('#startPython').onclick=async()=>");
+const manualPythonEnd = page.indexOf("q('#exportDiagnostics')", manualPythonStart);
+const manualPythonSource = page.slice(manualPythonStart, manualPythonEnd);
+if (manualPythonStart < 0 || manualPythonEnd < 0 ||
+    manualPythonSource.indexOf("captureReconnectState(activePanel)") < 0 ||
+    manualPythonSource.indexOf("captureReconnectState(activePanel)") >
+        manualPythonSource.indexOf("post('/api/python/start'") ) {
+    throw new Error("Manual Python starts before reconnect state is captured");
+}
+const oneShotHandoffStart = page.indexOf("function showPythonRunHandoff()");
+const oneShotHandoffEnd = page.indexOf(
+    "function setPendingActionsDisabled", oneShotHandoffStart,
+);
+const oneShotHandoffSource = page.slice(oneShotHandoffStart, oneShotHandoffEnd);
+if (oneShotHandoffStart < 0 || oneShotHandoffEnd < 0 ||
+    oneShotHandoffSource.indexOf("captureReconnectState(activePanel)") < 0 ||
+    oneShotHandoffSource.indexOf("captureReconnectState(activePanel)") >
+        oneShotHandoffSource.indexOf("document.body.innerHTML")) {
+    throw new Error("One-shot Python replaces the document before reconnect capture");
+}
+const reconnectInitializationStart = page.indexOf(
+    "async function initializeWebConsole()",
+);
+const reconnectInitializationEnd = page.indexOf(
+    "initializeWebConsole().catch(showError)", reconnectInitializationStart,
+);
+const reconnectInitializationSource = page.slice(
+    reconnectInitializationStart, reconnectInitializationEnd,
+);
+const reconnectRead = reconnectInitializationSource.indexOf("readReconnectState()");
+const reconnectIdentity = reconnectInitializationSource.indexOf(
+    "loadActiveReconnectIdentity()", reconnectRead,
+);
+const reconnectValidate = reconnectInitializationSource.indexOf(
+    "validateReconnectIdentity(", reconnectIdentity,
+);
+const reconnectRender = reconnectInitializationSource.indexOf(
+    "await showPanel(target)", reconnectValidate,
+);
+if (reconnectInitializationStart < 0 || reconnectInitializationEnd < 0 ||
+    reconnectRead < 0 || reconnectIdentity < reconnectRead ||
+    reconnectValidate < reconnectIdentity || reconnectRender < reconnectValidate ||
+    reconnectInitializationSource.includes("/api/project/select") ||
+    reconnectInitializationSource.includes("/api/chat/select") ||
+    reconnectInitializationSource.includes("/api/prompt") ||
+    reconnectInitializationSource.includes("/api/pending/")) {
+    throw new Error("Reconnect startup mutates state or bypasses validation ordering");
+}
+
+const loginBoundaryStart = consoleSource.indexOf(
+    "bool requestHasPythonReconnectReturn()",
+);
+const loginBoundaryEnd = consoleSource.indexOf(
+    "void handleLogout()", loginBoundaryStart,
+);
+const loginBoundarySource = consoleSource.slice(loginBoundaryStart, loginBoundaryEnd);
+for (const fragment of [
+    'server.hasArg("python_run_return")',
+    'server.arg("return") == "python"',
+    'server.arg("reconnect_return") == "python"',
+    "<input type='hidden' name='reconnect_return' value='python'>",
+    'loginPage("Too many attempts; wait 30 seconds", reconnectReturn)',
+    'loginPage("Invalid password", reconnectReturn)',
+    'server.sendHeader("Location", reconnectReturn ? "/?return=python" : "/")',
+]) {
+    if (!loginBoundarySource.includes(fragment)) {
+        throw new Error(`Python-return login boundary is missing ${fragment}`);
+    }
+}
+if (loginBoundaryStart < 0 || loginBoundaryEnd < 0 ||
+    loginBoundarySource.includes('server.sendHeader("Location", server.arg(') ||
+    loginBoundarySource.includes('name="return_url"')) {
+    throw new Error("Python-return login boundary accepts an arbitrary destination");
+}
+
+const renderStatusStart = page.indexOf("function renderStatusState(s)");
+const renderStatusEnd = page.indexOf(
+    "\nfunction renderIntentControls", renderStatusStart,
+);
+const renderStatusSource = page.slice(renderStatusStart, renderStatusEnd);
+if (renderStatusStart < 0 || renderStatusEnd < 0 ||
+    !renderStatusSource.includes("showServerStatus(s.status)")) {
+    throw new Error("Server status can replace a stable reconnect failure");
+}
+const showServerStatusStart = page.indexOf("function showServerStatus(message)");
+const showServerStatusEnd = page.indexOf(
+    "\nwindow.addEventListener('unhandledrejection'", showServerStatusStart,
+);
+const serverStatusElement = {dataset: {reconnectState: "error"}};
+const observedServerStatuses = [];
+const showServerStatus = new Function(
+    "q", "showStatus",
+    page.slice(showServerStatusStart, showServerStatusEnd) +
+        ";return showServerStatus;",
+)(() => serverStatusElement, (message) => observedServerStatuses.push(message));
+showServerStatus("Project selected");
+if (observedServerStatuses.length !== 0) {
+    throw new Error("Nonempty server status replaced a stable reconnect failure");
+}
+delete serverStatusElement.dataset.reconnectState;
+showServerStatus("Project selected");
+if (observedServerStatuses.length !== 1 ||
+    observedServerStatuses[0] !== "Project selected") {
+    throw new Error("Ordinary server status was not rendered without reconnect failure");
+}
+const renderSshStart = page.indexOf("function renderSshState(s)");
+const renderSshEnd = page.indexOf("\nfunction renderFilesState", renderSshStart);
+const renderSshSource = page.slice(renderSshStart, renderSshEnd);
+if (renderSshStart < 0 || renderSshEnd < 0 ||
+    !renderSshSource.includes("showServerStatus(s.ssh_error)") ||
+    renderSshSource.includes("showError(s.ssh_error)")) {
+    throw new Error("Automatic SSH status bypasses the sticky reconnect owner");
+}
+const sshRenderElements = new Map();
+const sshRenderQ = (selector) => {
+    if (!sshRenderElements.has(selector)) {
+        sshRenderElements.set(selector, {
+            childNodes: [{nodeValue: ""}],
+            disabled: false,
+            hidden: false,
+            replaceChildren() {},
+            textContent: "",
+            value: "",
+        });
+    }
+    return sshRenderElements.get(selector);
+};
+const renderSshState = new Function(
+    "document", "q", "renderSshCeilings", "showServerStatus", "updateWakeLock",
+    "let sshConnected=false;" + renderSshSource + ";return renderSshState;",
+)(
+    {createDocumentFragment: () => ({})},
+    sshRenderQ,
+    () => {},
+    showServerStatus,
+    () => {},
+);
+const sshStateWithError = {
+    ssh_profiles: [],
+    ssh_selected: 0,
+    ssh_name: "",
+    ssh_host: "",
+    ssh_port: 22,
+    ssh_username: "",
+    ssh_auth_mode: "password",
+    ssh_key_installed: false,
+    ssh_terminal_open: false,
+    ssh_host_changed: false,
+    ssh_stage: "idle",
+    ssh_configured: false,
+    ssh_fingerprint: "",
+    ssh_error: "Retained SSH error",
+};
+serverStatusElement.dataset.reconnectState = "error";
+const stickySshStatusCount = observedServerStatuses.length;
+renderSshState(sshStateWithError);
+if (observedServerStatuses.length !== stickySshStatusCount) {
+    throw new Error("Automatic SSH status replaced a stable reconnect failure");
+}
+delete serverStatusElement.dataset.reconnectState;
+renderSshState(sshStateWithError);
+if (observedServerStatuses.at(-1) !== "Retained SSH error") {
+    throw new Error("Automatic SSH status was hidden without a reconnect failure");
+}
+const renderChatStart = page.indexOf("function renderChatState(s)");
+const renderChatEnd = page.indexOf(
+    "\nfunction renderSettingsState", renderChatStart,
+);
+const renderChatSource = page.slice(renderChatStart, renderChatEnd);
+const reconnectComposerStart = page.indexOf(
+    "function applyReconnectComposerState(draft)",
+);
+const reconnectComposerEnd = page.indexOf(
+    "\nfunction pythonReconnectReturnRequested", reconnectComposerStart,
+);
+const reconnectComposerSource = page.slice(
+    reconnectComposerStart, reconnectComposerEnd,
+);
+for (const fragment of [
+    "const prompt=q('#prompt'),draft=readChatDraft(s.active_chat_id)",
+    "if(!restoreReconnectComposerOnChat(draft)&&!prompt.value)prompt.value=draft",
+]) {
+    if (!renderChatSource.includes(fragment)) {
+        throw new Error(`First reconnect Chat render is missing ${fragment}`);
+    }
+}
+for (const fragment of [
+    "q('#prompt').value=draft",
+    "q('#requestInstructions').value=''",
+    "q('#requestOutputTokens').value=''",
+    "setMessageIntent('auto')",
+    "window.addEventListener('pageshow'",
+]) {
+    if (!reconnectComposerSource.includes(fragment)) {
+        throw new Error(`Reconnect composer reset is missing ${fragment}`);
+    }
+}
+if (renderChatStart < 0 || renderChatEnd < 0 ||
+    reconnectComposerStart < 0 || reconnectComposerEnd < 0 ||
+    renderChatSource.includes(
+        "if(!q('#prompt').value)q('#prompt').value=readChatDraft",
+    )) {
+    throw new Error("Browser-restored composer state can bypass the active Chat draft");
+}
+function createReconnectComposerHarness() {
+    const elements = new Map([
+        ["#prompt", {value: "browser-restored stale draft"}],
+        ["#requestInstructions", {value: "browser-restored one-turn instructions"}],
+        ["#requestOutputTokens", {value: "4096"}],
+    ]);
+    const intents = [];
+    let pageShowHandler = null;
+    const harness = new Function(
+        "q", "setMessageIntent", "window",
+        "let reconnectComposerDraft=null,reconnectComposerRestorePending=true," +
+            "reconnectPageShown=false;" + reconnectComposerSource +
+            ";return {restoreReconnectComposerOnChat," +
+            "restorePending:()=>reconnectComposerRestorePending};",
+    )(
+        (selector) => elements.get(selector),
+        (intent) => intents.push(intent),
+        {
+            addEventListener(name, handler) {
+                if (name !== "pageshow" || pageShowHandler !== null) {
+                    throw new Error("Reconnect composer registered an invalid pageshow owner");
+                }
+                pageShowHandler = handler;
+            },
+        },
+    );
+    if (pageShowHandler === null) {
+        throw new Error("Reconnect composer did not register pageshow restoration");
+    }
+    return {elements, intents, pageShowHandler, harness};
+}
+const renderBeforePageShow = createReconnectComposerHarness();
+if (!renderBeforePageShow.harness.restoreReconnectComposerOnChat("stored active draft") ||
+    renderBeforePageShow.elements.get("#prompt").value !== "stored active draft" ||
+    renderBeforePageShow.elements.get("#requestInstructions").value !== "" ||
+    renderBeforePageShow.elements.get("#requestOutputTokens").value !== "") {
+    throw new Error("First Chat render did not replace browser-restored composer state");
+}
+renderBeforePageShow.elements.get("#prompt").value = "late browser-restored stale draft";
+renderBeforePageShow.elements.get("#requestInstructions").value = "late stale instructions";
+renderBeforePageShow.elements.get("#requestOutputTokens").value = "8192";
+renderBeforePageShow.pageShowHandler();
+if (renderBeforePageShow.elements.get("#prompt").value !== "stored active draft" ||
+    renderBeforePageShow.elements.get("#requestInstructions").value !== "" ||
+    renderBeforePageShow.elements.get("#requestOutputTokens").value !== "" ||
+    renderBeforePageShow.harness.restorePending() ||
+    renderBeforePageShow.intents.join(",") !== "auto,auto") {
+    throw new Error("pageshow restored stale composer state after the active Chat draft");
+}
+renderBeforePageShow.elements.get("#prompt").value = "later user draft";
+renderBeforePageShow.pageShowHandler();
+if (renderBeforePageShow.elements.get("#prompt").value !== "later user draft" ||
+    renderBeforePageShow.harness.restoreReconnectComposerOnChat("other draft")) {
+    throw new Error("Completed reconnect composer restoration overwrote a later user draft");
+}
+const pageShowBeforeRender = createReconnectComposerHarness();
+pageShowBeforeRender.pageShowHandler();
+if (!pageShowBeforeRender.harness.restoreReconnectComposerOnChat("stored active draft") ||
+    pageShowBeforeRender.elements.get("#prompt").value !== "stored active draft" ||
+    pageShowBeforeRender.harness.restorePending() ||
+    pageShowBeforeRender.intents.join(",") !== "auto") {
+    throw new Error("Chat render after pageshow did not apply the active Chat draft");
 }
 
 const renderSettingsStart = page.indexOf("function renderSettingsState(s)");
@@ -1023,10 +1436,89 @@ const webSendStart = page.indexOf("async function sendPrompt()");
 const webSendEnd = page.indexOf("async function retryFailedPrompt()", webSendStart);
 const webSendSource = page.slice(webSendStart, webSendEnd);
 const webPromptAccepted = webSendSource.indexOf("await rawPrompt(");
+const webPromptFinished = webSendSource.indexOf("await consumePromptStream(");
+const webPromptCompleted = webSendSource.indexOf("completed=true", webPromptFinished);
+const webPromptSuccessGate = webSendSource.indexOf("if(!completed)return", webPromptCompleted);
+const webDraftStored = webSendSource.indexOf("storeChatDraft(chatId,prompt)");
+const webDraftGuard = webSendSource.indexOf(
+    "canRemoveSubmittedDraft(readChatDraft(chatId),q('#prompt').value,prompt)",
+);
+const webDraftRemoved = webSendSource.indexOf("removeChatDraft(chatId)");
 const webIntentReset = webSendSource.indexOf("setMessageIntent('auto')", webPromptAccepted);
 if (webSendStart < 0 || webSendEnd < 0 || webPromptAccepted < 0 ||
-    webIntentReset < webPromptAccepted) {
-    throw new Error("Web composer intent does not reset to Auto after prompt acceptance");
+    webIntentReset < webPromptAccepted || webDraftStored < 0 ||
+    webDraftStored > webPromptAccepted || webPromptFinished < webPromptAccepted ||
+    webPromptCompleted < webPromptFinished || webPromptSuccessGate < webPromptCompleted ||
+    webDraftGuard < webPromptSuccessGate || webDraftRemoved < webDraftGuard ||
+    !webSendSource.includes("Response saved, but the draft could not be cleared:")) {
+    throw new Error("Web prompt acceptance or draft cleanup ordering is invalid");
+}
+const promptElements = new Map([
+    ["#prompt", {value: "draft A"}],
+    ["#send", {disabled: false}],
+    ["#messages", {
+        append() {},
+        scrollHeight: 100,
+        scrollTop: 0,
+    }],
+    ["#requestOutputTokens", {value: ""}],
+    ["#requestInstructions", {value: ""}],
+]);
+let responseMarkedIncomplete = false;
+let successfulPromptRefreshes = 0;
+const promptCleanupErrors = [];
+const promptDocument = {
+    createElement() {
+        return {
+            classList: {
+                add(name) {
+                    if (name === "incomplete") responseMarkedIncomplete = true;
+                },
+                remove() {},
+            },
+            className: "",
+            dataset: {},
+            isConnected: true,
+            textContent: "",
+        };
+    },
+};
+class PromptAbortController {
+    constructor() {
+        this.signal = {};
+    }
+}
+const sendPromptWithThrowingStorage = new Function(
+    "q", "state", "storeChatDraft", "captureReconnectState", "activePanel",
+    "showStatus", "AbortController", "document", "rawPrompt", "setMessageIntent",
+    "consumePromptStream", "canRemoveSubmittedDraft", "readChatDraft",
+    "removeChatDraft", "showError", "refreshChat",
+    "let activeRequest=null,messageIntent='auto';" + webSendSource +
+        ";return sendPrompt;",
+)(
+    (selector) => promptElements.get(selector),
+    {active_chat_id: reconnectChatId},
+    () => {},
+    () => {},
+    "chat",
+    () => {},
+    PromptAbortController,
+    promptDocument,
+    async () => ({}),
+    () => {},
+    async () => {},
+    () => true,
+    () => { throw new Error("storage unavailable"); },
+    () => {},
+    (error) => promptCleanupErrors.push(String(error)),
+    async () => { successfulPromptRefreshes += 1; },
+);
+await sendPromptWithThrowingStorage();
+if (responseMarkedIncomplete || successfulPromptRefreshes !== 1 ||
+    promptCleanupErrors.length !== 1 ||
+    promptCleanupErrors[0] !==
+        "Response saved, but the draft could not be cleared: storage unavailable") {
+    throw new Error("Draft cleanup failure reclassified a completed prompt response");
 }
 const webRetryStart = page.indexOf("async function retryFailedPrompt()");
 const webRetryEnd = page.indexOf("q('#send').onclick", webRetryStart);
