@@ -89,9 +89,6 @@ void handleVoiceInput()
     }
     inputBuffer += transcription.text;
     lastDraftEditAt = millis();
-    if (draftDirtySinceAt == 0) {
-        draftDirtySinceAt = lastDraftEditAt;
-    }
     const cardputer::OperationResult cleanup = cardputer::removeVoiceRecording();
     if (cleanup.success) {
         setTransientStatus("Voice text ready; edit or press Enter", 3000);

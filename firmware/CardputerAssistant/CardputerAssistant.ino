@@ -74,7 +74,6 @@ constexpr std::size_t kMaximumWifiPasswordBytes = 63;
 constexpr std::uint8_t kTtsVolumeStep = 64;
 constexpr std::uint32_t kBatteryRefreshIntervalMs = 30000;
 constexpr std::uint32_t kDraftAutosaveIdleMs = 1500;
-constexpr std::uint32_t kDraftAutosaveMaximumDirtyMs = 30000;
 constexpr std::uint32_t kSdStateRefreshIntervalMs = 1000;
 constexpr std::size_t kFileViewerChunkBytes = 2048;
 constexpr std::size_t kFileViewerPageLines = 8;
@@ -159,9 +158,9 @@ cardputer::ProviderAuthorityIdentity availableModelsAuthority = {
     cardputer::ProviderAuthorityKind::None, "", 0};
 std::string inputBuffer;
 std::string persistedDraft;
-std::uint32_t lastDraftAutosaveAt = 0;
+bool currentChatMetadataSavePending = false;
+std::uint32_t lastChatSaveAttemptFinishedAt = 0;
 std::uint32_t lastDraftEditAt = 0;
-std::uint32_t draftDirtySinceAt = 0;
 std::string activeResponse;
 std::string retryPrompt;
 String retryChatId;
@@ -545,19 +544,27 @@ cardputer::OperationResult saveActiveProjectSelection(const String& projectId)
     return cardputer::saveProjectStorageManifest(manifest.manifest);
 }
 
+cardputer::OperationResult finishCurrentChatSaveAttempt(cardputer::OperationResult result)
+{
+    lastChatSaveAttemptFinishedAt = millis();
+    return result;
+}
+
 cardputer::OperationResult saveCurrentChat()
 {
     if (!chatStorageReady || activeChatId.isEmpty()) {
-        return {false, chatStorageError.isEmpty() ? String("Persistent chat storage is unavailable")
-                                                  : chatStorageError};
+        return finishCurrentChatSaveAttempt({
+            false, chatStorageError.isEmpty() ? String("Persistent chat storage is unavailable")
+                                              : chatStorageError});
     }
+    currentChatMetadataSavePending = true;
     const cardputer::OperationResult access = cardputer::requireSdWriteAccess(
         0, cardputer::kStorageOperationalFloorBytes);
-    if (!access.success) return access;
+    if (!access.success) return finishCurrentChatSaveAttempt(access);
     cardputer::ChatDocumentResult loaded = cardputer::loadProjectChatMetadata(
         activeProjectId, activeChatId);
     if (!loaded.success) {
-        return {false, loaded.error};
+        return finishCurrentChatSaveAttempt({false, loaded.error});
     }
     loaded.chat.summary.title = activeChatTitle;
     const std::uint64_t updatedAt = currentChatTimestamp();
@@ -572,10 +579,39 @@ cardputer::OperationResult saveCurrentChat()
     loaded.chat.model = activeChatModel;
     const cardputer::OperationResult result = cardputer::saveProjectChatMetadata(loaded.chat);
     if (result.success) {
+        currentChatMetadataSavePending = false;
         persistedDraft = inputBuffer;
-        draftDirtySinceAt = 0;
     }
-    return result;
+    return finishCurrentChatSaveAttempt(result);
+}
+
+cardputer::OperationResult saveCurrentChatDraft()
+{
+    if (!chatStorageReady || activeChatId.isEmpty()) {
+        return finishCurrentChatSaveAttempt({
+            false, chatStorageError.isEmpty() ? String("Persistent chat storage is unavailable")
+                                              : chatStorageError});
+    }
+    const cardputer::OperationResult access = cardputer::requireSdWriteAccess(
+        0, cardputer::kStorageOperationalFloorBytes);
+    if (!access.success) return finishCurrentChatSaveAttempt(access);
+    const cardputer::OperationResult result = cardputer::saveProjectChatDraft(
+        activeProjectId, activeChatId, inputBuffer);
+    if (result.success) {
+        persistedDraft = inputBuffer;
+    }
+    return finishCurrentChatSaveAttempt(result);
+}
+
+cardputer::OperationResult saveCurrentChatChanges()
+{
+    if (currentChatMetadataSavePending) {
+        return saveCurrentChat();
+    }
+    if (inputBuffer != persistedDraft) {
+        return saveCurrentChatDraft();
+    }
+    return {true, ""};
 }
 
 void clearRetryRequestState()
@@ -935,9 +971,11 @@ cardputer::OperationResult activateChat(const String& id)
     activeResponse.clear();
     inputBuffer = loaded.chat.draft;
     persistedDraft = inputBuffer;
-    lastDraftAutosaveAt = millis();
-    lastDraftEditAt = lastDraftAutosaveAt;
-    draftDirtySinceAt = 0;
+    if (switchingChat) {
+        currentChatMetadataSavePending = false;
+    }
+    lastChatSaveAttemptFinishedAt = millis();
+    lastDraftEditAt = lastChatSaveAttemptFinishedAt;
     scrollOffset = 0;
     return {true, ""};
 }
@@ -966,9 +1004,9 @@ cardputer::OperationResult createAndActivateChat()
     activeResponse.clear();
     inputBuffer.clear();
     persistedDraft.clear();
-    lastDraftAutosaveAt = millis();
-    lastDraftEditAt = lastDraftAutosaveAt;
-    draftDirtySinceAt = 0;
+    currentChatMetadataSavePending = false;
+    lastChatSaveAttemptFinishedAt = millis();
+    lastDraftEditAt = lastChatSaveAttemptFinishedAt;
     scrollOffset = 0;
     cardputer::ProjectDocumentResult project = cardputer::loadProject(activeProjectId);
     if (!project.success) {
@@ -1024,15 +1062,16 @@ cardputer::OperationResult refreshProjectPage(std::uint32_t offset)
 
 cardputer::OperationResult activateProject(const String& projectId)
 {
-    if (!activeChatId.isEmpty() && inputBuffer != persistedDraft) {
+    if (!activeChatId.isEmpty() &&
+        (inputBuffer != persistedDraft || currentChatMetadataSavePending)) {
         const cardputer::SdStorageStatus storage = cardputer::inspectSdStorage();
         if (storage.state == cardputer::SdStorageState::Ready) {
-            const cardputer::OperationResult saved = saveCurrentChat();
+            const cardputer::OperationResult saved = saveCurrentChatChanges();
             if (!saved.success) {
                 return saved;
             }
         } else if (storage.state == cardputer::SdStorageState::Full &&
-                   inputBuffer == persistedDraft) {
+                   inputBuffer == persistedDraft && !currentChatMetadataSavePending) {
             menuStatus = storage.error;
         } else {
             return {false, storage.error};
@@ -1051,6 +1090,7 @@ cardputer::OperationResult activateProject(const String& projectId)
     activeProjectTitle = project.project.summary.title;
     activeProjectDocument = project.project;
     activeChatId.clear();
+    currentChatMetadataSavePending = false;
     activeChatSshProfile.clear();
     result = refreshChatList();
     if (!result.success) {
@@ -1401,8 +1441,9 @@ void renderChatInstructions()
 
 void openChatList(Screen returnScreen)
 {
-    if (chatStorageReady && !activeChatId.isEmpty() && inputBuffer != persistedDraft) {
-        const cardputer::OperationResult saved = saveCurrentChat();
+    if (!activeChatId.isEmpty() &&
+        (inputBuffer != persistedDraft || currentChatMetadataSavePending)) {
+        const cardputer::OperationResult saved = saveCurrentChatChanges();
         if (!saved.success) {
             statusMessage = saved.error;
             render();
@@ -3758,13 +3799,10 @@ void loop()
     const std::uint32_t now = millis();
     const bool draftIdle = now - lastDraftEditAt >= kDraftAutosaveIdleMs;
     const bool draftSaveRetryReady =
-        now - lastDraftAutosaveAt >= kDraftAutosaveIdleMs;
-    const bool draftMaximumAgeReached = draftDirtySinceAt != 0 &&
-        now - draftDirtySinceAt >= kDraftAutosaveMaximumDirtyMs;
-    if (currentScreen == Screen::Chat && inputBuffer != persistedDraft &&
-        draftSaveRetryReady && (draftIdle || draftMaximumAgeReached)) {
-        lastDraftAutosaveAt = now;
-        const cardputer::OperationResult saved = saveCurrentChat();
+        now - lastChatSaveAttemptFinishedAt >= kDraftAutosaveIdleMs;
+    const bool draftSaveNeeded = inputBuffer != persistedDraft || currentChatMetadataSavePending;
+    if (currentScreen == Screen::Chat && draftSaveNeeded && draftIdle && draftSaveRetryReady) {
+        const cardputer::OperationResult saved = saveCurrentChatChanges();
         if (!saved.success) {
             statusMessage = "Draft autosave failed: " + saved.error;
             render();

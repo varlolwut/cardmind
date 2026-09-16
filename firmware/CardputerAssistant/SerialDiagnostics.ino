@@ -3297,6 +3297,31 @@ void runP2SharedProjectIsolationTest(const String& nonce)
 void runProjectChatIsolationTest()
 {
     cardputer::OperationResult result = {true, ""};
+    std::uint32_t generalSaveMs = 0;
+    std::uint32_t draftSaveMs = 0;
+    bool draftOnlyPassed = false;
+    const auto sameChatSummary =
+        [](const cardputer::ChatSummary& left,
+           const cardputer::ChatSummary& right) {
+        return left.id == right.id && left.title == right.title &&
+            left.updatedAt == right.updatedAt &&
+            left.messageCount == right.messageCount &&
+            left.pinned == right.pinned && left.archived == right.archived &&
+            left.archivedMessageCount == right.archivedMessageCount &&
+            left.revision == right.revision;
+    };
+    const auto sameChatMetadataExceptDraft =
+        [&sameChatSummary](const cardputer::ChatDocument& left,
+                           const cardputer::ChatDocument& right) {
+        return sameChatSummary(left.summary, right.summary) &&
+            left.instructions == right.instructions &&
+            left.toolPolicy == right.toolPolicy &&
+            left.sshProfile == right.sshProfile &&
+            left.projectId == right.projectId &&
+            left.contextSummary == right.contextSummary &&
+            left.summarizedMessageCount == right.summarizedMessageCount &&
+            left.model == right.model;
+    };
     const cardputer::ProjectDocumentResult project = cardputer::createProject(
         "Chat isolation");
     if (!project.success) {
@@ -3356,6 +3381,139 @@ void runProjectChatIsolationTest()
                 : page.error};
         }
     }
+    if (result.success && !expected.empty()) {
+        const String ownedProjectId = project.project.summary.id;
+        const String ownedChatId = expected.front().summary.id;
+        const String chatIndexPath =
+            cardputer::projectChatsDirectoryPath(ownedProjectId) + "/index.jsonl";
+        const String projectIndexPath =
+            cardputer::projectStorageRoot() + "/projects/index.jsonl";
+
+        cardputer::ChatDocumentResult legacy = cardputer::loadProjectChatMetadata(
+            ownedProjectId, ownedChatId);
+        if (!legacy.success) {
+            result = {false, legacy.error};
+        }
+        if (result.success) {
+            legacy.chat.draft = "draft-one";
+            const std::uint32_t startedAt = millis();
+            result = cardputer::saveProjectChatMetadata(legacy.chat);
+            generalSaveMs = millis() - startedAt;
+        }
+
+        cardputer::ChatDocumentResult chatBefore = {};
+        cardputer::ProjectDocumentResult projectBefore = {};
+        cardputer::StorageIndexLookupResult chatIndexBefore = {false, false, "", ""};
+        cardputer::StorageIndexLookupResult projectIndexBefore = {false, false, "", ""};
+        if (result.success) {
+            chatBefore = cardputer::loadProjectChatMetadata(
+                ownedProjectId, ownedChatId);
+            if (!chatBefore.success) result = {false, chatBefore.error};
+        }
+        if (result.success && chatBefore.chat.draft != "draft-one") {
+            result = {false, "General metadata save did not reload its changed draft"};
+        }
+        if (result.success) {
+            projectBefore = cardputer::loadProject(ownedProjectId);
+            if (!projectBefore.success) result = {false, projectBefore.error};
+        }
+        if (result.success) {
+            chatIndexBefore = cardputer::findJsonlSdIndexEntry(
+                chatIndexPath, "id", ownedChatId);
+            if (!chatIndexBefore.success || !chatIndexBefore.found) {
+                result = {
+                    false,
+                    chatIndexBefore.success
+                        ? String("Owned chat is missing from its chat index")
+                        : chatIndexBefore.error,
+                };
+            }
+        }
+        if (result.success) {
+            projectIndexBefore = cardputer::findJsonlSdIndexEntry(
+                projectIndexPath, "id", ownedProjectId);
+            if (!projectIndexBefore.success || !projectIndexBefore.found) {
+                result = {
+                    false,
+                    projectIndexBefore.success
+                        ? String("Owned project is missing from the project index")
+                        : projectIndexBefore.error,
+                };
+            }
+        }
+        if (result.success) {
+            const std::uint32_t startedAt = millis();
+            result = cardputer::saveProjectChatDraft(
+                ownedProjectId, ownedChatId, "draft-two");
+            draftSaveMs = millis() - startedAt;
+        }
+
+        cardputer::ChatDocumentResult chatAfter = {};
+        cardputer::ProjectDocumentResult projectAfter = {};
+        cardputer::StorageIndexLookupResult chatIndexAfter = {false, false, "", ""};
+        cardputer::StorageIndexLookupResult projectIndexAfter = {false, false, "", ""};
+        if (result.success) {
+            chatAfter = cardputer::loadProjectChatMetadata(
+                ownedProjectId, ownedChatId);
+            if (!chatAfter.success) result = {false, chatAfter.error};
+        }
+        if (result.success) {
+            projectAfter = cardputer::loadProject(ownedProjectId);
+            if (!projectAfter.success) result = {false, projectAfter.error};
+        }
+        if (result.success) {
+            chatIndexAfter = cardputer::findJsonlSdIndexEntry(
+                chatIndexPath, "id", ownedChatId);
+            if (!chatIndexAfter.success || !chatIndexAfter.found) {
+                result = {
+                    false,
+                    chatIndexAfter.success
+                        ? String("Owned chat disappeared from its chat index")
+                        : chatIndexAfter.error,
+                };
+            }
+        }
+        if (result.success) {
+            projectIndexAfter = cardputer::findJsonlSdIndexEntry(
+                projectIndexPath, "id", ownedProjectId);
+            if (!projectIndexAfter.success || !projectIndexAfter.found) {
+                result = {
+                    false,
+                    projectIndexAfter.success
+                        ? String("Owned project disappeared from the project index")
+                        : projectIndexAfter.error,
+                };
+            }
+        }
+        if (result.success && chatAfter.chat.draft != "draft-two") {
+            result = {false, "Draft-only save did not reload the changed draft"};
+        }
+        if (result.success && !sameChatMetadataExceptDraft(
+                chatBefore.chat, chatAfter.chat)) {
+            result = {false, "Draft-only save changed non-draft chat metadata"};
+        }
+        if (result.success && chatIndexBefore.line != chatIndexAfter.line) {
+            result = {false, "Draft-only save changed the chat index entry"};
+        }
+        if (result.success &&
+            (projectBefore.project.summary.updatedAt !=
+                 projectAfter.project.summary.updatedAt ||
+             projectBefore.project.summary.chatCount !=
+                 projectAfter.project.summary.chatCount ||
+             projectBefore.project.summary.revision !=
+                 projectAfter.project.summary.revision ||
+             projectBefore.project.chatIndexRevision !=
+                 projectAfter.project.chatIndexRevision)) {
+            result = {false, "Draft-only save changed project counters or revisions"};
+        }
+        if (result.success && projectIndexBefore.line != projectIndexAfter.line) {
+            result = {false, "Draft-only save changed the project index entry"};
+        }
+        if (result.success && draftSaveMs >= generalSaveMs) {
+            result = {false, "Draft-only save was not faster than the general metadata save"};
+        }
+        draftOnlyPassed = result.success;
+    }
     if (project.success) {
         const cardputer::OperationResult cleanup = cardputer::deleteProject(
             project.project.summary.id);
@@ -3363,9 +3521,12 @@ void runProjectChatIsolationTest()
             result = cleanup;
         }
     }
-    Serial.printf("PROJECTCHATTEST result=%s chats=%u error=%s\n",
+    Serial.printf("PROJECTCHATTEST result=%s chats=%u draft_only=%s general_ms=%u draft_ms=%u error=%s\n",
                   result.success ? "pass" : "failed",
                   static_cast<unsigned int>(expected.size()),
+                  draftOnlyPassed ? "pass" : "failed",
+                  static_cast<unsigned int>(generalSaveMs),
+                  static_cast<unsigned int>(draftSaveMs),
                   result.success ? "none" : result.error.c_str());
 }
 

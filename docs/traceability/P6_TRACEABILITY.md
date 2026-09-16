@@ -4663,3 +4663,83 @@ P6-04, without concurrent P6 or Chat-performance production changes. The existin
 phase-row checker accepts only Pn-n row IDs and therefore does not apply to this
 parallel FIX row; its relevant exact-parent, path, identity, filename-only secret
 and artifact checks are performed directly without changing the checker.
+
+## FIX-PERF-04 corrective-task completion GO — 2026-09-16
+
+FIX-PERF-04 is a bounded corrective publication outside the Phase 6 product
+matrix. The current canonical working trace keeps P6-05 as the sole in_progress
+product row; this record changes no P6 row status and closes none of
+FIX-PERF-01 through FIX-PERF-03.
+
+The accepted contract removes blocking full metadata/index/project rewrites from
+ordinary composer autosave. saveProjectChatDraft validates the bounded UTF-8
+draft, loads only reconciled chat metadata, changes only draft and uses the
+existing atomic metadata writer. saveCurrentChatChanges gives a pending full
+metadata save precedence over draft-only persistence, clears dirty/pending state
+only after success and timestamps every completed attempt. Automatic persistence
+requires 1,500 ms of input idle and 1,500 ms after the preceding attempt;
+the former 30-second maximum-dirty write is removed. Project switching, Chat list
+opening and Fn+F2/Fn+F4/Fn+F7 save first and abort their transition on failure.
+
+Architect accepted parent ca5068af86177485851948bb7629ea4acda19531 and
+exactly eight publication paths. The seven non-trace staged blobs are main
+e4c3c8c441620048ff4df7d9124b4e71f2c4fc63, Keyboard
+3fbce757f2bed98809a594d3d85f12d644bc147d, SerialDiagnostics
+5508ab0cd0f82e2bbb80ca99742a3fe997155266, Voice
+39034e1ea88905b40361b9a35eb2248dc219cadb, storage implementation
+b9c8c5fceca60c06cc87ee3e827c4214377e607d, storage header
+51c23b71c1810a1b6e47c36aa67e6c8459346563 and runner
+183302fcec51870bd69cdf31a90952e14d7c1b37. The storage, Voice and
+runner diffs are whole-owned; Main and Keyboard contain only the save-state,
+clock, scheduler and transition hunks; SerialDiagnostics contains only the
+PROJECTCHATTEST extension. ROADMAP.md remains canonical local evidence outside
+this commit at blob 09cf2016d56160745098367ddac05ef6eabd018e.
+
+The pinned coordinated image compiled and uploaded with exact FQBN and the unique
+M5Stack ESP32 core 3.2.1. Application SHA-256 was
+56191AA19E520A546ED55450CDEB083B9B3B4A0B920D5725FF73338FDA2DEE8B
+(3,665,200 bytes; sketch 3,665,006; globals 65,956), ELF SHA-256 was
+4ACAE01E91EF5A9D545A18AB4D6B626F8C7F16CCF4D51BE0A2BA4E2373D3701C
+and build-options SHA-256 was
+20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998.
+
+At 2026-09-16 22:12 UTC one exclusive serial holder obtained PONG and normal
+readiness, then HOTFIXINPUTTEST passed at full_average_us=60967 and
+input_average_us=2732. PROJECTCHATTEST passed with chats=3,
+draft_only=pass, general_ms=1678 and draft_ms=619. It reloaded the changed
+draft while preserving the enumerated non-draft chat metadata, both index lines
+and project counters/revisions; exact-owned cleanup passed. Initial/final heap
+was 118,364/118,336 bytes, largest block 54,260/53,236, historical minimum
+106,444/101,948 and stack margin 7,816/3,304. Firmware configuration, SD,
+Wi-Fi, TLS time, history, chat count, settings and reset reason remained
+unchanged. The holder exited normally and closed/disposed COM8. Safe artifact:
+artifacts/fix-perf-04-device-20260916T221227Z.log.
+
+The earlier 21:47 holder attempt remains separate failed evidence: it failed
+before serial Open/startup delay, sent no command, created no fixture and disposed
+its handle. Its session identifiers are not durations. At 22:29 UTC Architect
+personally reconciled the exact producer/consumer diff, design/code reviews,
+current source, real final artifact, assertions, resources and cleanup and
+returned explicit FIX-PERF-04 closure GO.
+
+The final runtime image also contained unrelated P6 working changes; it was not a
+rebuild of this selective publication tree. The user accepted synthetic evidence:
+HOTFIXINPUTTEST measures the incremental renderer rather than physical
+key-to-pixel, keyboard dispatch or scheduler timing, and PROJECTCHATTEST calls
+the draft primitive rather than Fn dispatch or the idle scheduler. The relevant
+ordering is source-reviewed. Removing the maximum-dirty write intentionally means
+sudden power loss during uninterrupted input can lose every change since the last
+successful idle or boundary save. FIX-PERF-01 through FIX-PERF-03 and the P6-08
+text-budget failure remain open and separate.
+
+### FIX-PERF-04 remote-parent integration note — 2026-09-16 22:52 UTC
+
+This publication uses remote parent d54b4657fb282fb31d2a5d25bfc981ae514b8ce1;
+the original accepted corrective boundary was reviewed against
+ca5068af86177485851948bb7629ea4acda19531. Intervening commits
+d3e1d84a7d3620f687805a4bac886b8c16a4e7be,
+916ac7a2a2957ba321176038e1e2b1205d7f28ee and d54b4657 change the
+retained trace and separate P6/Device-menu/Web ownership, but none changes the
+seven FIX-PERF-04 production/test paths. The remote trace above remains the
+exact prefix, and those seven staged blobs are byte-identical to preserved
+source commit a8601d53a0a66b7740e8ebfddfe711e9ab4fcca8.

@@ -2839,6 +2839,12 @@ void handleKeyboard()
         openChatList(Screen::Chat);
         return;
     } else if (keys.fn && keys.f2) {
+        const cardputer::OperationResult saved = saveCurrentChatChanges();
+        if (!saved.success) {
+            statusMessage = saved.error;
+            render();
+            return;
+        }
         menuStatus = "";
         composerCapabilitiesIndex = 0;
         composerCapabilitiesReturnScreen = Screen::Chat;
@@ -2853,10 +2859,19 @@ void handleKeyboard()
                                ? String("English layout") : String("Russian layout"),
                            1800);
     } else if (keys.fn && keys.f4) {
+        const cardputer::OperationResult saved = saveCurrentChatChanges();
+        if (!saved.success) {
+            statusMessage = saved.error;
+            render();
+            return;
+        }
         openCarousel();
         return;
     } else if (keys.fn && keys.f7) {
-        const cardputer::OperationResult result = createAndActivateChat();
+        cardputer::OperationResult result = saveCurrentChatChanges();
+        if (result.success) {
+            result = createAndActivateChat();
+        }
         if (result.success) {
             setTransientStatus("New chat created", 2000);
         } else {
@@ -2884,14 +2899,10 @@ void handleKeyboard()
     } else if (!keys.fn && !keys.ctrl && !keys.alt && !keys.opt) {
         appendKeyboardWord(printableNewKeys(newPresses));
     }
+    if (inputBuffer != previousChatInput) {
+        lastDraftEditAt = millis();
+    }
     if (inputBuffer != previousChatInput && statusMessage == previousChatStatus) {
-        const std::uint32_t now = millis();
-        lastDraftEditAt = now;
-        if (inputBuffer == persistedDraft) {
-            draftDirtySinceAt = 0;
-        } else if (draftDirtySinceAt == 0) {
-            draftDirtySinceAt = now;
-        }
         cardputer::updateChatInput(inputBuffer);
     } else {
         render();

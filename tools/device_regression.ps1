@@ -753,7 +753,7 @@ $p2ProjectCases = @(
 )
 
 $p2ChatCases = @(
-    (New-RegressionCase -Name "project chat isolation" -Command "PROJECTCHATTEST" -CompletionPattern "^PROJECTCHATTEST result=" -PassPattern "^PROJECTCHATTEST result=pass chats=3 error=none$" -TimeoutSeconds 120),
+    (New-RegressionCase -Name "project chat isolation" -Command "PROJECTCHATTEST" -CompletionPattern "^PROJECTCHATTEST result=" -PassPattern "^PROJECTCHATTEST result=pass chats=3 draft_only=pass general_ms=[0-9]+ draft_ms=[0-9]+ error=none$" -TimeoutSeconds 120),
     (New-RegressionCase -Name "instruction precedence" -Command "INSTRUCTIONTEST" -CompletionPattern "^INSTRUCTIONTEST result=" -PassPattern "^INSTRUCTIONTEST result=pass order=pass error=none$" -TimeoutSeconds 20),
     (New-RegressionCase -Name "retry persistence" -Command "RETRYPERSISTENCETEST" -CompletionPattern "^RETRYPERSISTENCETEST result=" -PassPattern "^RETRYPERSISTENCETEST result=pass messages=2 user_copies=1 error=none$" -TimeoutSeconds 60),
     (New-RegressionCase -Name "context compaction persistence" -Command "COMPACTIONTEST" -CompletionPattern "^COMPACTIONTEST result=" -PassPattern "^COMPACTIONTEST result=pass raw=12 manual_tail=8 auto_tail=4 error=none$" -TimeoutSeconds 60),
