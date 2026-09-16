@@ -4743,3 +4743,57 @@ retained trace and separate P6/Device-menu/Web ownership, but none changes the
 seven FIX-PERF-04 production/test paths. The remote trace above remains the
 exact prefix, and those seven staged blobs are byte-identical to preserved
 source commit a8601d53a0a66b7740e8ebfddfe711e9ab4fcca8.
+
+
+### Standalone Windows uploader pin and observed reset/upload — 2026-09-16 22:36 UTC
+
+Architect's bounded pre-edit reviewer returned GO for an upload-only vendor-tool
+correction. `toolchain/esptool.lock.json` pins official Windows esptool 4.9.0,
+archive SHA256
+8e66e686341eddf8c56f4df77288098680c6251e6d98750992798a5f4e87354b.
+The installed executable reports 4.9.0. AGENTS.md records the version and
+upload-only override; the existing cardmind-build skill owns installation,
+archive verification and the exact upload command. Core3.2.1, bundled compile
+tools and the compiled 5619 image remain unchanged.
+
+The installed prerelease uploader package 4.9.dev3 reports version4.8.1 and
+selects RTC-WDT for hardware USB-JTAG. Espressif commit
+d37c38a683fae93fda5e6c9302a2e561490d95ba removes USB-JTAG from that automatic
+watchdog branch; stable4.9.0 uses vendor RTS reset. The earlier descriptor
+failure preceded Power's first COM-open attempt. No matching primary S3 rev0.2
+erratum proves that this branch caused the historical persistent Windows Code43.
+The pin corrects the observed old path; it is not proof that every USB failure
+has been eliminated.
+
+At22:30:24–22:30:27UTC one native4.9.0 chip_id operation wrote no flash, used
+RTS and exited0. Parent/COM8 PnP were OK after10seconds. The disposable observer
+prematurely required connected Wi-Fi, while setup starts Wi-Fi asynchronously;
+that observation did not pass. No reset or recovery followed it. A separate
+22:32:39UTC observation obtained PONG and normal STATUS with Wi-Fi connected,
+SD/chats/files ready, history17, chats3, CPU160MHz and reset11. Artifacts:
+artifacts/usb-uploader-490-chip-id-20260916T2231Z.log and
+artifacts/usb-uploader-490-post-network-observation.log.
+
+At22:33:58–22:34:34UTC the normal Arduino upload command, with the standalone
+path override, uploaded the unchanged5619 application and existing boot images.
+Its verbose command selected esptool4.9.0, all four flash hashes verified, final
+reset used RTS, COM8 returned and the command exited0. No NVS/SD/settings erase
+or write was requested. At22:36:01UTC the retained device_regression status
+selector passed: configured/SD/chats/files/crash ready, Wi-Fi connected, TLS
+valid, history17, chats3, heap118260, largest55284, minimum106096, stack7816,
+Balanced profile1, CPU160MHz and reset11. Artifacts:
+artifacts/usb-uploader-490-same-image-upload.log and
+artifacts/usb-uploader-490-same-image-readiness.log. Serial closed; exclusive
+COM8/HTTP ownership returned to Phase6 for the remaining P6-05 proof.
+
+A raw-JSON options parser and a malformed disposable PowerShell observer each
+failed before opening COM; neither is runtime evidence. The options check was
+corrected to inspect parsed hardwareFolders, and the observer was replaced with
+the retained status selector. No production code or acceptance threshold was
+changed to obtain these results. Historical USB causality remains unconfirmed;
+the earlier failed run remains failed.
+
+Architect personally reviewed the installed version, pinned archive identity,
+upload command, four verified flash writes and final normal STATUS and returns
+closure GO for this upload-only pin. Its publication contains only the lock file
+and this observed-evidence section; historical USB causality remains open.
