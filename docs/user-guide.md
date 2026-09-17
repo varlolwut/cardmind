@@ -131,6 +131,12 @@ Device contains display and power preferences, API setup, firmware update, and
 diagnostics. Network and Python controls have dedicated carousel
 cards. Help lists the global shortcuts; feature screens show their local controls.
 
+On a configured device, press Esc to leave **Local setup** without saving. CardMind
+closes its temporary access point, reconnects the existing Wi-Fi connection, and
+returns to the menu. Initial setup must be completed before leaving. After a save
+has committed or its result is uncertain, follow the displayed restart instruction
+instead of returning with partially applied settings.
+
 Export needed project bundles and copy other workspace data off the card before
 replacing a microSD card. A normal firmware update preserves NVS and microSD. A clean
 flash erases NVS, including Wi-Fi, service keys, and the installation password.

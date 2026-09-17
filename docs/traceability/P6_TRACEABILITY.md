@@ -7291,3 +7291,49 @@ may now become completed and publish one official atomic commit. Exact-head gree
 feature CI, reviewed develop merge with green CI, existing-main merge, new v1.13.0
 release/assets/checksums and verified-merged branch cleanup remain mandatory and
 are not claimed complete. Main and the retained stash are unchanged.
+
+## FIX-SETUP-EXIT — post-release correction, 2026-09-17
+
+Started 09:54 UTC; bounded implementation ownership moved from Phase 6 to Architect
+at 10:06 UTC. The user could not leave Local setup: the existing noreturn portal
+never sampled keyboard cancellation. This is a release defect, not a new phase.
+
+The portal now uses the existing Escape/backtick semantics and a shared explicit
+exit path, returning an OperationResult after stopping HTTP/AP and restoring the
+previous STA-enabled state. All four menu entries and normal serial SETUP use the
+same Device owner; they redraw, propagate cleanup failure and refresh the activity
+clock. Portal EXIT exercises that same cleanup path. Initial incomplete setup is
+non-cancellable. A sticky committed/outcome-unknown save latch prevents returning
+with stale provider authority; existing successful save/restart is preserved.
+Routes register once because pinned WebServer stop does not delete its handlers.
+No cancellation path saves provider settings or Wi-Fi credentials.
+
+Independent pre-edit review found the partial-save authority window; the corrected
+sticky latch received GO. Fresh actual-code review returned GO after checking every
+caller, pinned M5Cardputer keyboard and ESP32 3.2.1 server/Wi-Fi semantics. Architect
+personally reviewed the production diff, error propagation and these raw results.
+
+Pinned combined 1.13.1 candidate: app 3,669,984 bytes, free partition 524,320,
+text 2,247,852, rodata 1,320,600, static DRAM 65,980, IRAM 77,567. Existing resource
+limits pass unchanged; duplicated return handling and status literals were removed
+after the initial reserve failure. Application SHA-256:
+`346bd39b18ebe961ec2548ecdbe346b83499884c60d0dc832c8f5534a1b309a6`.
+Strict host suite passed unchanged; exact FQBN and unique 3.2.1 hardware path were
+checked before the successful pinned esptool 4.9.0 upload.
+
+Real COM8 observations at 10:36:25-10:36:55 UTC completed two SETUP/portal STATUS/EXIT
+cycles. Both returned `PROVISIONING result=stopped error=none`, then normal 1.13.1
+STATUS with connected Wi-Fi, ready SD/chats/files, unchanged four chats/history 3,
+configured API/voice/search/TTS and reset reason 11. No save, restart, fixture or
+credential mutation was requested. Initial normal heap/largest/stack were
+102,440/39,924/7,776 bytes; after cycles 100,996/33,780/7,776 and
+100,816/32,756/7,776. The general-mode heap floor is preserved. Physical key actuation
+is not claimed: native input is source-reviewed; the actual portal exit, radio
+cleanup and normal-mode return are runtime-proven through its serial mode control.
+
+Evidence: `artifacts/architect-post-release-1131-runtime.log` SETUP_CYCLE records,
+`architect-post-release-1131-build-final.log`, `architect-post-release-1131-metrics-final.json`
+and `architect-post-release-1131-upload.log`. The subsequent Web observation is a
+separate correction and does not claim success here. No retained test was modified.
+Architect returns **FIX-SETUP-EXIT CLOSURE GO** at 10:38 UTC; correction completed.
+Publication, combined Web acceptance and the new patch release remain pending.

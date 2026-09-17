@@ -5,7 +5,7 @@
 
 namespace cardputer {
 
-[[noreturn]] void runProvisioningPortal(const Settings& existingSettings,
-                                        ProviderProfileStore& providerStore);
+OperationResult runProvisioningPortal(const Settings& existingSettings,
+                                     ProviderProfileStore& providerStore);
 
 }  // namespace cardputer

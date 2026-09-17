@@ -78,7 +78,8 @@ using ChatCapabilityStates = std::array<ChatCapabilityState, 4>;
 
 OperationResult beginUi();
 void showFatalError(const String& error);
-void showProvisioning(const String& accessPointName, const String& accessPointPassword);
+void showProvisioning(const String& accessPointName, const String& accessPointPassword,
+                      const String& footer);
 void showFilesPortal(const String& accessPointName, const String& accessPointPassword);
 void showWebConsoleAccess(const String& address,
                           const String& accessPassword,

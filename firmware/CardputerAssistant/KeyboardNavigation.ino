@@ -1753,12 +1753,9 @@ void processKeyboardInput(
             if (aiMenuIndex == 0) {
                 openModelPicker(Screen::AiMenu);
             } else if (aiMenuIndex == 1) {
-                cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings, providerProfileStore);
-                cachedSshToolProfileId = sshStorageReady
-                    ? cardputer::sshToolAvailableProfileId() : 0;
-                cardputer::markOperation("idle");
-                menuStatus = "Configuration portal closed";
+                const cardputer::OperationResult portalResult = openLocalSetup();
+                menuStatus = portalResult.success
+                    ? String("Local setup closed") : portalResult.error;
                 renderAiMenu();
             } else if (aiMenuIndex == 2) {
                 globalInstructionsInput = settings.globalInstructions.c_str();
@@ -2015,11 +2012,10 @@ void processKeyboardInput(
                 }
                 renderVoiceMenu();
             } else if (voiceMenuIndex == 2) {
-                cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings, providerProfileStore);
-                cachedSshToolProfileId = sshStorageReady
-                    ? cardputer::sshToolAvailableProfileId() : 0;
-                cardputer::markOperation("idle");
+                const cardputer::OperationResult portalResult = openLocalSetup();
+                menuStatus = portalResult.success
+                    ? String("Local setup closed") : portalResult.error;
+                renderVoiceMenu();
             } else {
                 currentScreen = Screen::MainCarousel;
                 menuStatus = "";
@@ -2170,12 +2166,9 @@ void processKeyboardInput(
                 delay(800);
                 ESP.restart();
             } else if (webConsoleMenuIndex == 5) {
-                cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings, providerProfileStore);
-                cachedSshToolProfileId = sshStorageReady
-                    ? cardputer::sshToolAvailableProfileId() : 0;
-                cardputer::markOperation("idle");
-                menuStatus = "Configuration portal closed";
+                const cardputer::OperationResult portalResult = openLocalSetup();
+                menuStatus = portalResult.success
+                    ? String("Local setup closed") : portalResult.error;
                 renderWebConsoleMenu();
             } else {
                 currentScreen = Screen::MainCarousel;
@@ -2374,13 +2367,12 @@ void processKeyboardInput(
                     : result.error;
                 renderDeviceMenu();
             } else if (deviceMenuIndex == 5) {
-                cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings, providerProfileStore);
-                cachedSshToolProfileId = sshStorageReady
-                    ? cardputer::sshToolAvailableProfileId() : 0;
-                cardputer::markOperation("idle");
+                const cardputer::OperationResult portalResult = openLocalSetup();
                 const cardputer::OperationResult result = applyDisplayAndCpuSettings(settings);
-                menuStatus = result.success ? String("Settings portal closed") : result.error;
+                menuStatus = result.success ? String("Local setup closed") : result.error;
+                if (!portalResult.success) {
+                    menuStatus = portalResult.error;
+                }
                 renderDeviceMenu();
             } else if (deviceMenuIndex == 6) {
                 ensureNetworkReady();

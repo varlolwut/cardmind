@@ -68,7 +68,7 @@ cardputer::OperationResult cleanupSshCommandOutputRemoteTest(
     bool& removed);
 cardputer::OperationResult runModelSftpRemoteTest(bool& cleanupComplete);
 
-constexpr const char* kFirmwareVersion = "1.13.0";
+constexpr const char* kFirmwareVersion = "1.13.1";
 constexpr std::size_t kMaximumInputBytes = 16384;
 constexpr std::size_t kMaximumWifiPasswordBytes = 63;
 constexpr std::uint8_t kTtsVolumeStep = 64;
@@ -444,6 +444,7 @@ cardputer::OperationResult captureDevicePendingContext(
     std::string scopedInstructions,
     const cardputer::ToolMessageIntent& intent);
 void openWebConsole(Screen returnScreen);
+cardputer::OperationResult openLocalSetup();
 cardputer::OperationResult runSshTerminal();
 cardputer::OperationResult runSshTool();
 cardputer::OperationResult runSshCommandOptionsTest();
