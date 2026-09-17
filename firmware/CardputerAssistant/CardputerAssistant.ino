@@ -3208,60 +3208,103 @@ void runUiSearchEndToEndTest()
     const String originalProjectId = activeProjectId;
     const String originalChatId = activeChatId;
     const Screen originalScreen = currentScreen;
-    const cardputer::ChatDocumentResult created = cardputer::createProjectChat(
-        activeProjectId, "E2E search " + String(millis()),
-        settings.newChatToolPolicy);
-    if (!created.success) {
-        Serial.println("E2ETEST result=failed stage=create_chat");
-        return;
+    String testChatId;
+    {
+        const cardputer::ChatDocumentResult duplicated =
+            cardputer::duplicateProjectChat(originalProjectId, originalChatId);
+        if (!duplicated.success) {
+            Serial.println("E2ETEST result=failed stage=duplicate_chat");
+            return;
+        }
+        testChatId = duplicated.chat.summary.id;
     }
 
-    activeChatId = created.chat.summary.id;
-    activeChatTitle = created.chat.summary.title;
-    activeChatToolPolicy = created.chat.toolPolicy;
-    activeChatSshProfile = created.chat.sshProfile;
-    history.clear();
-    activeResponse.clear();
-    inputBuffer = "/search cardputer zero";
-    scrollOffset = 0;
-    currentScreen = Screen::Chat;
-    Serial.printf("E2ETEST stage=submit heap=%u largest_heap=%u stack_free=%u\n",
-                  static_cast<unsigned int>(ESP.getFreeHeap()),
-                  static_cast<unsigned int>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)),
-                  static_cast<unsigned int>(uxTaskGetStackHighWaterMark(nullptr)));
-    submitPrompt();
+    std::uint32_t seedMessages = 0;
+    std::size_t seedBytes = 0;
+    std::uint32_t storedMessagesBefore = 0;
+    bool responseReceived = false;
+    bool durableGrowth = false;
+    String submissionStatus;
+    String testError;
+    const cardputer::OperationResult activated = activateChat(testChatId);
+    if (!activated.success) {
+        testError = "Duplicate activation failed: " + activated.error;
+    }
+    if (testError.isEmpty()) {
+        seedMessages = static_cast<std::uint32_t>(history.size());
+        for (const cardputer::Message& message : history) {
+            seedBytes += message.content.size();
+        }
+        if (seedMessages == 0) {
+            testError = "Duplicated chat has no unsummarized history";
+        }
+    }
+    if (testError.isEmpty()) {
+        const cardputer::ChatDocumentResult storedBefore =
+            cardputer::loadProjectChatMetadata(originalProjectId, testChatId);
+        if (!storedBefore.success) {
+            testError = "Duplicated chat metadata failed: " + storedBefore.error;
+        } else {
+            storedMessagesBefore = storedBefore.chat.summary.messageCount;
+        }
+    }
+    if (testError.isEmpty()) {
+        inputBuffer = "/search cardputer zero";
+        scrollOffset = 0;
+        currentScreen = Screen::Chat;
+        Serial.printf(
+            "E2ETEST stage=submit seed_messages=%u seed_bytes=%u heap=%u largest_heap=%u stack_free=%u\n",
+            static_cast<unsigned int>(seedMessages),
+            static_cast<unsigned int>(seedBytes),
+            static_cast<unsigned int>(ESP.getFreeHeap()),
+            static_cast<unsigned int>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)),
+            static_cast<unsigned int>(uxTaskGetStackHighWaterMark(nullptr)));
+        submitPrompt();
 
-    const bool responseReceived = history.size() >= 2 && history.back().role == "assistant" &&
-        !history.back().content.empty();
-    const String submissionStatus = statusMessage;
-    const String testChatId = activeChatId;
+        responseReceived = !history.empty() && history.back().role == "assistant" &&
+            !history.back().content.empty();
+        submissionStatus = statusMessage;
+        const cardputer::ChatDocumentResult storedAfter =
+            cardputer::loadProjectChatMetadata(originalProjectId, testChatId);
+        if (!storedAfter.success) {
+            testError = "Completed chat metadata failed: " + storedAfter.error;
+        } else {
+            const std::uint32_t storedMessagesAfter =
+                storedAfter.chat.summary.messageCount;
+            durableGrowth = storedMessagesAfter >= storedMessagesBefore &&
+                storedMessagesAfter - storedMessagesBefore >= 2;
+            if (!durableGrowth) {
+                testError = "Durable chat history did not grow by two messages";
+            }
+        }
+        if (!responseReceived && testError.isEmpty()) {
+            testError = submissionStatus.isEmpty()
+                ? String("Chat response was empty") : submissionStatus;
+        }
+    }
+
+    const cardputer::OperationResult restored = activateChat(originalChatId);
+    const bool originalChatActive = restored.success &&
+        activeProjectId == originalProjectId && activeChatId == originalChatId;
     const cardputer::OperationResult cleanup = cardputer::deleteProjectChat(
-        activeProjectId, testChatId);
-    const cardputer::ChatDocumentResult restored = cardputer::loadProjectChat(
-        originalProjectId, originalChatId, 64, 65536);
-    if (!restored.success) {
-        Serial.println("E2ETEST result=failed stage=restore_chat");
-        statusMessage = restored.error;
-        render();
-        return;
-    }
-    activeProjectId = originalProjectId;
-    activeChatId = restored.chat.summary.id;
-    activeChatTitle = restored.chat.summary.title;
-    activeChatToolPolicy = restored.chat.toolPolicy;
-    activeChatSshProfile = restored.chat.sshProfile;
-    history = restored.chat.messages;
-    activeResponse.clear();
-    inputBuffer.clear();
-    scrollOffset = 0;
-    currentScreen = originalScreen;
+        originalProjectId, testChatId);
     const cardputer::OperationResult listResult = refreshChatList();
-    const bool passed = responseReceived && cleanup.success && listResult.success;
-    statusMessage = passed ? String() : String("E2E cleanup or response verification failed");
-    String safeError = passed ? String("none")
-        : (!responseReceived && !submissionStatus.isEmpty()
-            ? submissionStatus
-            : statusMessage);
+    currentScreen = originalScreen;
+    if (!originalChatActive && testError.isEmpty()) {
+        testError = restored.success
+            ? String("Original chat was not reactivated")
+            : String("Original chat activation failed: ") + restored.error;
+    }
+    if (!cleanup.success && testError.isEmpty()) {
+        testError = "Duplicate cleanup failed: " + cleanup.error;
+    }
+    if (!listResult.success && testError.isEmpty()) {
+        testError = "Chat list refresh failed: " + listResult.error;
+    }
+    const bool passed = testError.isEmpty() && responseReceived && durableGrowth &&
+        originalChatActive && cleanup.success && listResult.success;
+    statusMessage = passed ? String() : String("E2E search proof failed");
+    String safeError = passed ? String("none") : testError;
     safeError.replace("\r", " ");
     safeError.replace("\n", " ");
     if (safeError.length() > 180) {

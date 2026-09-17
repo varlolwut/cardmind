@@ -1386,6 +1386,20 @@ void testWrapping()
     const std::vector<std::string> russianWrapped = {"Ты: Это", "пример", "строки"};
     require(cardputer::wrapUtf8Text("Ты: Это пример строки", 14) == russianWrapped,
             "Cyrillic word-aware wrapping failed");
+
+    const auto segmentedWindow =
+        cardputer::wrapUtf8TextWindow("ab", "яcd", 2, 0, 7);
+    require(cardputer::countWrappedUtf8Lines("ab", "яcd", 2) == expected.size() &&
+                segmentedWindow.totalLines == expected.size() &&
+                segmentedWindow.lines == expected,
+            "Segmented UTF-8 wrapping changed prefix/body continuity");
+    const std::vector<std::string> whitespaceExpected = {"You: alpha", "", ""};
+    const auto whitespaceWindow =
+        cardputer::wrapUtf8TextWindow("You: ", "\talpha\n\n", 38, 0, 7);
+    require(whitespaceWindow.totalLines == whitespaceExpected.size() &&
+                whitespaceWindow.lines == whitespaceExpected,
+            "Segmented wrapping changed whitespace or trailing-line behavior");
+
     const std::string largeUnbrokenText(65536, 'x');
     const auto largeWrapped = cardputer::wrapUtf8Text(largeUnbrokenText, 38);
     require(largeWrapped.size() == 1725, "Large text line count is incorrect");
@@ -1395,6 +1409,35 @@ void testWrapping()
         wrappedBytes += line.size();
     }
     require(wrappedBytes == largeUnbrokenText.size(), "Large text wrapping lost data");
+
+    const std::size_t largeLineCount =
+        cardputer::countWrappedUtf8Lines("", largeUnbrokenText, 38);
+    require(largeLineCount == largeWrapped.size(),
+            "Bounded large-text line count differs from existing wrapping");
+    const std::array<std::size_t, 3> visibleLineCounts = {5U, 6U, 7U};
+    for (const std::size_t maximumLines : visibleLineCounts) {
+        const std::size_t firstLine = largeLineCount - maximumLines;
+        const auto tailWindow = cardputer::wrapUtf8TextWindow(
+            "", largeUnbrokenText, 38, firstLine, maximumLines);
+        const std::vector<std::string> expectedTail(
+            largeWrapped.begin() + firstLine, largeWrapped.end());
+        require(tailWindow.totalLines == largeLineCount &&
+                    tailWindow.lines == expectedTail &&
+                    tailWindow.lines.size() == maximumLines,
+                "Large-text tail window is not bounded to visible rows");
+    }
+    const auto topWindow =
+        cardputer::wrapUtf8TextWindow("", largeUnbrokenText, 38, 0, 7);
+    const std::vector<std::string> expectedTop(
+        largeWrapped.begin(), largeWrapped.begin() + 7);
+    require(topWindow.totalLines == largeLineCount &&
+                topWindow.lines == expectedTop,
+            "Large-text top window differs from existing wrapping");
+    const auto overscrolledWindow = cardputer::wrapUtf8TextWindow(
+        "", largeUnbrokenText, 38, largeLineCount + 1U, 7);
+    require(overscrolledWindow.totalLines == largeLineCount &&
+                overscrolledWindow.lines.empty(),
+            "Large-text overscroll result is incorrect");
 }
 
 void testSse()

@@ -5758,3 +5758,60 @@ resource nor CI gate is closed. Publication must stage only the listed hunks and
 this selective documentation after P6-05A's verified publication. FIX-PERF-01
 must publish before FIX-PERF-03; no commit, stage or remote publication has yet
 occurred under this GO.
+
+### FIX-PERF-03 Architect closure GO - 2026-09-17 00:25 UTC
+
+Architect personally re-read the bounded wrapping/window implementation, focused
+host cases, E2E fixture, raw A67F45 runtime, cleanup and final status and returned
+closure GO. The retained source boundary is `src/text_utils.cpp` blob
+`47c3a6ecf760e9b82b756adcd1cb9521c7f02f70`, `src/text_utils.h` blob
+`984f15c6f0997c261916682272fed90632219ff4`, the
+`TranscriptLineCounts`/reverse `transcriptLineWindow()` and bounded `showChat()`
+section of `src/ui.cpp` blob `fbefd1e089a3a544bcca2e63e26333da5f6bfa6c`,
+and only the segmented-continuity, whitespace, 5/6/7-row, top and overscroll
+cases in `tests/host_tests.cpp` blob
+`7f26455bee10187b663765ae6899c6375fedc2fb`. The final proof adds only the existing
+`runUiSearchEndToEndTest()` function delta in `CardputerAssistant.ino`, from
+pre-proof blob `3c9cc12114ad2bac355aafc8fe95f1d10f4e82f9` to
+`0663b579b80d7a9b58fa2c8b7eb87d5cdaa84875`; the existing E2ETEST matcher was
+already tolerant and did not change.
+
+The retained failure chain remains explicit: the 1AFC89337 image panicked during
+streamed rendering; the valid core dump symbolized `operator new` through
+`std::vector<TranscriptLine>` reallocation, `transcriptLines()`, `showChat()` and
+the streaming `onText` callback. Its post-reboot control was 71,225/2,638 us.
+The first bounded 32C7D64B candidate regressed full rendering to 94,459 us and
+remains failed evidence; the recorded runtime STOP pivot produced the reverse
+visible-window implementation. The corrected 9E1385 image measured 60,986/2,694
+us but did not prove populated-history TLS. The final A67F45 image measured
+61,028/2,698 us and 61,679-us bounded scrolling, a +42/+4-us comparison with that
+corrected control rather than a claimed new speedup.
+
+The existing `hotfix-message` selector passed from 00:17:07.397 through
+00:18:41.230 UTC with 17 seed messages and 3,482 content bytes. Before TLS it
+reported heap 117,704, largest block 47,092 and stack 6,696 bytes. The unchanged
+`submitPrompt()`/TLS/`onText` path completed with a nonempty assistant response;
+durable metadata grew by at least two, the original chat was reactivated and only
+the known duplicate was deleted. The result marker reported heap 115,164, largest
+37,876 and stack 2,200 bytes. Final normal status reported heap 115,684, largest
+37,876, lifetime minimum 22,564 and stack 2,200 bytes, reset reason 11 unchanged,
+history 17/chats 3, ready SD/chats/files, connected Wi-Fi and valid TLS. The
+lifetime minimum is an observed TLS low-water, not a Web current-free-floor
+failure. Artifacts are `artifacts/architect-perf-20260917-populated-tls.log` and
+`artifacts/architect-perf-20260917-final-status.log`.
+
+Two WebSearch tool executions reported failure before the successful assistant
+completion. They do not block this renderer/allocation row and do not prove search
+service acceptance; they remain a separate P6-08 search-service gap. General send
+durability also remains synchronous: network 55 ms, access 61 ms, load 447 ms,
+context 4 ms, append 2,821 ms, metadata 1,928 ms and total 5,316 ms. Do not claim
+all Chat latency was removed or open another fix here. Physical key-to-pixel remains
+unmeasured under the accepted synthetic-input decision. The same current metrics
+`flash_text` failure remains P6-08-owned and does not close the green resource/CI
+gate.
+
+FIX-PERF-03 publishes only after FIX-PERF-01. Its `showChat()` implementation must
+land on FIX-PERF-01's already-published return/clamp interface; input preparation
+remains FIX-PERF-01-owned. No cache, worker, storage, API, request, history-limit,
+fallback or additional diagnostic is included. No commit, stage or remote
+publication has yet occurred under this GO.

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace cardputer {
@@ -48,24 +49,84 @@ struct TranscriptLine {
     std::uint16_t color;
 };
 
-std::vector<TranscriptLine> transcriptLines(const std::vector<Message>& history,
-                                            const std::string& activeResponse)
+struct TranscriptLineCounts {
+    std::size_t totalLines;
+    std::size_t lastMessageLines;
+};
+
+TranscriptLineCounts transcriptLineCounts(const std::vector<Message>& history,
+                                          const std::string& activeResponse)
 {
-    std::vector<TranscriptLine> lines;
+    TranscriptLineCounts counts{0, 0};
     for (const auto& message : history) {
-        const std::string prefix = message.role == "user" ? "You: " : "AI: ";
-        const auto wrapped = wrapUtf8Text(prefix + message.content, kTranscriptCells);
-        const std::uint16_t color = message.role == "user" ? TFT_CYAN : TFT_LIGHTGREY;
-        for (const auto& line : wrapped) {
-            lines.push_back({line, color});
-        }
+        counts.lastMessageLines = countWrappedUtf8Lines(
+            message.role == "user" ? "You: " : "AI: ",
+            message.content,
+            kTranscriptCells);
+        counts.totalLines += counts.lastMessageLines;
     }
     if (!activeResponse.empty()) {
-        const auto wrapped = wrapUtf8Text("AI: " + activeResponse, kTranscriptCells);
-        for (const auto& line : wrapped) {
-            lines.push_back({line, TFT_GREENYELLOW});
-        }
+        counts.lastMessageLines = countWrappedUtf8Lines(
+            "AI: ", activeResponse, kTranscriptCells);
+        counts.totalLines += counts.lastMessageLines;
     }
+    return counts;
+}
+
+std::vector<TranscriptLine> transcriptLineWindow(
+    const std::vector<Message>& history,
+    const std::string& activeResponse,
+    std::size_t scrollOffset,
+    std::size_t maximumLines,
+    std::size_t lastMessageLines)
+{
+    std::vector<TranscriptLine> lines;
+    lines.reserve(maximumLines);
+    std::size_t remainingSkip = scrollOffset;
+    const auto appendReversedWindow = [&](const std::string& body,
+                                          const char* prefix,
+                                          std::uint16_t color,
+                                          std::size_t lineCount) {
+        if (remainingSkip >= lineCount) {
+            remainingSkip -= lineCount;
+            return;
+        }
+        const std::size_t endLine = lineCount - remainingSkip;
+        remainingSkip = 0;
+        const std::size_t selectedLines =
+            std::min(endLine, maximumLines - lines.size());
+        const std::size_t firstLine = endLine - selectedLines;
+        WrappedTextWindow window = wrapUtf8TextWindow(
+            prefix, body, kTranscriptCells, firstLine, selectedLines);
+        for (auto line = window.lines.rbegin();
+             line != window.lines.rend();
+             ++line) {
+            lines.push_back({std::move(*line), color});
+        }
+    };
+    if (!activeResponse.empty() && lines.size() < maximumLines) {
+        appendReversedWindow(
+            activeResponse, "AI: ", TFT_GREENYELLOW, lastMessageLines);
+    }
+    bool useLastMessageLines = activeResponse.empty();
+    for (auto message = history.rbegin(); message != history.rend(); ++message) {
+        if (lines.size() >= maximumLines) {
+            break;
+        }
+        const std::size_t lineCount = useLastMessageLines
+            ? lastMessageLines
+            : countWrappedUtf8Lines(
+                  message->role == "user" ? "You: " : "AI: ",
+                  message->content,
+                  kTranscriptCells);
+        useLastMessageLines = false;
+        appendReversedWindow(
+            message->content,
+            message->role == "user" ? "You: " : "AI: ",
+            message->role == "user" ? TFT_CYAN : TFT_LIGHTGREY,
+            lineCount);
+    }
+    std::reverse(lines.begin(), lines.end());
     return lines;
 }
 
@@ -560,19 +621,21 @@ std::size_t showChat(const std::vector<Message>& history,
     canvas->setCursor(206, 2);
     canvas->print(layout == KeyboardLayout::English ? "EN" : "RU");
 
-    const auto lines = transcriptLines(history, activeResponse);
     const std::size_t visibleTranscriptLines = visibleTranscriptLineCount(status);
-    const std::size_t availableStart = lines.size() > visibleTranscriptLines
-        ? lines.size() - visibleTranscriptLines
+    const TranscriptLineCounts transcript =
+        transcriptLineCounts(history, activeResponse);
+    const std::size_t availableStart = transcript.totalLines > visibleTranscriptLines
+        ? transcript.totalLines - visibleTranscriptLines
         : 0;
     const std::size_t effectiveScrollOffset = std::min(scrollOffset, availableStart);
-    const std::size_t start = availableStart - effectiveScrollOffset;
-    const std::size_t end = std::min(lines.size(), start + visibleTranscriptLines);
+    const auto lines = transcriptLineWindow(
+        history, activeResponse, effectiveScrollOffset,
+        visibleTranscriptLines, transcript.lastMessageLines);
     int y = 17;
-    for (std::size_t index = start; index < end; ++index) {
-        canvas->setTextColor(lines[index].color, TFT_BLACK);
+    for (const auto& line : lines) {
+        canvas->setTextColor(line.color, TFT_BLACK);
         canvas->setCursor(3, y);
-        canvas->print(lines[index].text.c_str());
+        canvas->print(line.text.c_str());
         y += 12;
     }
     if (availableStart > 0) {
