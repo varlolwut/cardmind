@@ -1,4 +1,4 @@
-import { open, readFile, rename } from 'node:fs/promises';
+import { open, readFile, rename, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 const credentialPath = new URL('../.secrets/ui-test-credentials.json', import.meta.url);
@@ -13,6 +13,34 @@ const p2LargeStreamMinimumHeapFloorBytes = 28 * 1024;
 const p2LargeStreamListingMinimumHeapLossBytes = 8192;
 const p2LargeStreamDownloadMinimumHeapLossBytes = 4 * 4096;
 const p2LargeStreamJsonWindowMinimumHeapLossBytes = 3 * 12_288;
+const httpTransportFailureCode = 'CARDMIND_HTTP_TRANSPORT_FAILURE';
+const p6SessionTransportExitCode = 20;
+let firstHttpTransportFailure = null;
+const httpTransportMachineAllowlist = Object.freeze([
+  'ABORT_ERR',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ETIMEDOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+  'AbortError',
+  'BodyTimeoutError',
+  'ConnectTimeoutError',
+  'HeadersTimeoutError',
+  'SocketError',
+  'TimeoutError',
+]);
+const p6SessionOwnedSource = 'tools/hardware_web_e2e.mjs';
+const p6SessionLifetimeSeconds = Object.freeze({
+  '15m': 900,
+  '1h': 3600,
+  '8h': 28_800,
+  until_reboot: null,
+});
 const contextHistoryOrphanTitlePattern = /^P2 context history ([0-9]{13})$/;
 const historyHeapMessageBytes = 16_384;
 const historyHeapSmallMessages = 2;
@@ -24,6 +52,7 @@ const statePaths = {
   files: '/api/files',
   ssh: '/api/ssh/state',
   settings: '/api/settings',
+  session: '/api/session',
 };
 
 function requireString(value, field) {
@@ -52,6 +81,17 @@ function projectSettingsRequest(values) {
     'X-CardMind-Output-Tokens': values.maximum_output_tokens,
     'X-CardMind-Auto-Compact': values.automatic_compaction,
   });
+}
+
+function projectProviderSettingsRequest(values, apiProfileId) {
+  const options = projectSettingsRequest(values);
+  return {
+    ...options,
+    headers: {
+      ...options.headers,
+      'X-CardMind-Api-Profile': apiProfileId,
+    },
+  };
 }
 
 function chatInstructionsRequest(instructions) {
@@ -86,18 +126,198 @@ function framedPromptRequest(promptValue, requestInstructions, maximumOutputToke
 }
 
 async function fetchWithin(url, options, timeoutMs) {
+  if (firstHttpTransportFailure !== null) throw firstHttpTransportFailure;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  let body;
   try {
-    const response = await fetch(url, {...options, signal: controller.signal});
-    const body = await response.arrayBuffer();
-    return new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
+    response = await fetch(url, {...options, signal: controller.signal});
+    body = await response.arrayBuffer();
+  } catch (error) {
+    const failure = createHttpTransportFailure(url, options, error);
+    if (firstHttpTransportFailure === null) firstHttpTransportFailure = failure;
+    throw failure;
   } finally {
     clearTimeout(timer);
+  }
+  return new Response(response.status === 204 ? null : body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+function createHttpTransportFailure(url, options, cause) {
+  const method = typeof options.method === 'string' ? options.method : 'GET';
+  const failure = new Error(`HTTP ${method} ${url.pathname} transport failed`);
+  failure.code = httpTransportFailureCode;
+  failure.transportMachine = httpTransportMachine(cause);
+  return failure;
+}
+
+function isHttpTransportFailure(error) {
+  return error instanceof Error && error.code === httpTransportFailureCode;
+}
+
+function allowedHttpTransportMachine(value) {
+  return typeof value === 'string' &&
+    httpTransportMachineAllowlist.includes(value) ? value : 'UNCLASSIFIED';
+}
+
+function httpTransportMachine(error) {
+  const candidates = [error];
+  if (error !== null && typeof error === 'object') {
+    candidates.push(error.cause);
+  }
+  for (const candidate of candidates) {
+    if (candidate === null || typeof candidate !== 'object') continue;
+    const code = allowedHttpTransportMachine(candidate.code);
+    if (code !== 'UNCLASSIFIED') return code;
+    const name = allowedHttpTransportMachine(candidate.name);
+    if (name !== 'UNCLASSIFIED') return name;
+  }
+  return 'UNCLASSIFIED';
+}
+
+function p6SessionOwnedSourceLocations(error) {
+  if (!(error instanceof Error) || typeof error.stack !== 'string') return [];
+  const locations = [];
+  const framePattern = new RegExp(
+    '^\\s*at (?:(?:[^()]*) \\()?[^()\\r\\n]*[\\\\/]tools[\\\\/]' +
+      'hardware_web_e2e\\.mjs:([0-9]+):([0-9]+)\\)?\\s*$',
+  );
+  for (const frame of error.stack.split(/\r?\n/).slice(1)) {
+    const match = framePattern.exec(frame);
+    if (match === null) continue;
+    const line = Number.parseInt(match[1], 10);
+    const column = Number.parseInt(match[2], 10);
+    if (!Number.isSafeInteger(line) || line < 1 || line > 100_000 ||
+        !Number.isSafeInteger(column) || column < 1 || column > 9999) {
+      continue;
+    }
+    const location = `${p6SessionOwnedSource}:${line}:${column}`;
+    if (!locations.includes(location)) locations.push(location);
+    if (locations.length === 2) break;
+  }
+  return locations;
+}
+
+function contextualizeP6SessionTransportFailure(
+  transportError, stage, primaryError) {
+  if (!isHttpTransportFailure(transportError) ||
+      !['primary', 'restoration'].includes(stage)) {
+    throw new TypeError('P6-03 transport context is invalid');
+  }
+  const failure = new Error('P6-03 session transport failed');
+  failure.code = httpTransportFailureCode;
+  failure.transportMachine = allowedHttpTransportMachine(
+    transportError.transportMachine,
+  );
+  failure.transportStage = stage;
+  failure.primaryLocations = stage === 'restoration' ?
+    p6SessionOwnedSourceLocations(primaryError) : [];
+  return failure;
+}
+
+function p6SessionTransportReport(error) {
+  const stage = error.transportStage === 'restoration' ?
+    'restoration' : 'primary';
+  const machine = allowedHttpTransportMachine(error.transportMachine);
+  const locations = Array.isArray(error.primaryLocations) ?
+    error.primaryLocations.filter(
+      (value) => typeof value === 'string' &&
+        /^tools\/hardware_web_e2e\.mjs:[1-9][0-9]{0,5}:[1-9][0-9]{0,3}$/.test(value),
+    ).slice(0, 2) : [];
+  const primary = stage === 'restoration' ?
+    (locations.length > 0 ? locations.join(',') : 'unclassified') : 'none';
+  return `type=${httpTransportFailureCode} stage=${stage} ` +
+    `machine=${machine} primary=${primary}`;
+}
+
+function p6SessionLifetimeMaxAge(lifetime, label) {
+  if (!Object.prototype.hasOwnProperty.call(p6SessionLifetimeSeconds, lifetime)) {
+    throw new Error(`P6-03 ${label} has invalid session lifetime state`);
+  }
+  return p6SessionLifetimeSeconds[lifetime];
+}
+
+function parseP6SessionCookie(response, label) {
+  const values = response.headers.getSetCookie();
+  if (values.length !== 1) {
+    throw new Error(
+      `P6-03 ${label} returned ${values.length} Set-Cookie headers; expected exactly one`,
+    );
+  }
+  const parts = values[0].split(';').map((part) => part.trim());
+  const nameValue = parts.shift();
+  if (nameValue === undefined || !nameValue.startsWith('cm_session=')) {
+    throw new Error(`P6-03 ${label} did not return the CardMind session cookie`);
+  }
+  const token = nameValue.slice('cm_session='.length);
+  const attributes = new Map();
+  for (const part of parts) {
+    const separator = part.indexOf('=');
+    const name = (separator < 0 ? part : part.slice(0, separator)).toLowerCase();
+    const value = separator < 0 ? null : part.slice(separator + 1);
+    if (attributes.has(name)) {
+      throw new Error(`P6-03 ${label} returned a duplicate cookie attribute`);
+    }
+    attributes.set(name, value);
+  }
+  const allowed = new Set(['httponly', 'samesite', 'path', 'max-age']);
+  if ([...attributes.keys()].some((name) => !allowed.has(name)) ||
+      attributes.get('httponly') !== null ||
+      attributes.get('samesite')?.toLowerCase() !== 'strict' ||
+      attributes.get('path') !== '/') {
+    throw new Error(`P6-03 ${label} returned an invalid session cookie policy`);
+  }
+  let maxAgeSeconds = null;
+  if (attributes.has('max-age')) {
+    const value = attributes.get('max-age');
+    if (value === null || !/^(?:0|[1-9][0-9]*)$/.test(value)) {
+      throw new Error(`P6-03 ${label} returned an invalid cookie Max-Age`);
+    }
+    maxAgeSeconds = Number(value);
+    if (!Number.isSafeInteger(maxAgeSeconds)) {
+      throw new Error(`P6-03 ${label} cookie Max-Age exceeds the safe integer range`);
+    }
+  }
+  return {
+    cookie: `cm_session=${token}`,
+    token_empty: token.length === 0,
+    policy: {
+      count: 1,
+      http_only: true,
+      same_site: 'Strict',
+      path: '/',
+      max_age_seconds: maxAgeSeconds,
+    },
+  };
+}
+
+function requireP6SessionCookie(response, auth, lifetime, label) {
+  const parsed = parseP6SessionCookie(response, label);
+  const expectedMaxAge = p6SessionLifetimeMaxAge(lifetime, label);
+  if (parsed.token_empty || parsed.cookie !== auth.cookie ||
+      parsed.policy.max_age_seconds !== expectedMaxAge) {
+    throw new Error(`P6-03 ${label} returned the wrong session token or lifetime policy`);
+  }
+  return {...parsed.policy, token_unchanged: true};
+}
+
+function requireP6LogoutCookie(response, label) {
+  const parsed = parseP6SessionCookie(response, label);
+  if (!parsed.token_empty || parsed.policy.max_age_seconds !== 0) {
+    throw new Error(`P6-03 ${label} did not expire the session cookie`);
+  }
+  return {...parsed.policy, token_cleared: true};
+}
+
+function requireNoP6SessionCookie(response, label) {
+  const count = response.headers.getSetCookie().length;
+  if (count !== 0) {
+    throw new Error(`P6-03 ${label} returned ${count} unexpected Set-Cookie headers`);
   }
 }
 
@@ -122,6 +342,61 @@ async function login(baseUrl, password) {
   }
   const document = await session.json();
   return {cookie, csrf: requireString(document.csrf, 'csrf')};
+}
+
+async function loginFromCredentialFile() {
+  let raw = null;
+  let password = '';
+  try {
+    raw = JSON.parse(await readFile(credentialPath, 'utf8'));
+    const baseUrl = new URL(requireString(raw.web_ui?.url, 'web_ui.url'));
+    password = requireString(
+      raw.web_ui?.installation_password,
+      'web_ui.installation_password',
+    );
+    return {baseUrl, auth: await login(baseUrl, password)};
+  } finally {
+    if (raw !== null && typeof raw === 'object' &&
+        raw.web_ui !== null && typeof raw.web_ui === 'object') {
+      raw.web_ui.installation_password = '';
+    }
+    password = '';
+    raw = null;
+  }
+}
+
+async function loginP6SessionFromCredentialFile() {
+  let raw = null;
+  let password = '';
+  try {
+    raw = JSON.parse(await readFile(credentialPath, 'utf8'));
+    const baseUrl = new URL(requireString(raw.web_ui?.url, 'web_ui.url'));
+    password = requireString(
+      raw.web_ui?.installation_password,
+      'web_ui.installation_password',
+    );
+    const protectedResponse = await fetchWithin(
+      new URL(statePaths.session, baseUrl),
+      {method: 'GET'},
+      maximumRequestMs,
+    );
+    requireP6SessionHttpStatus(
+      protectedResponse, 401, 'protected request before first login');
+    requireNoP6SessionCookie(
+      protectedResponse, 'protected request before first login');
+    return {
+      baseUrl,
+      auth: await login(baseUrl, password),
+      protected_request_before_login: 'pass',
+    };
+  } finally {
+    if (raw !== null && typeof raw === 'object' &&
+        raw.web_ui !== null && typeof raw.web_ui === 'object') {
+      raw.web_ui.installation_password = '';
+    }
+    password = '';
+    raw = null;
+  }
 }
 
 async function requestWithin(baseUrl, auth, path, options, timeoutMs) {
@@ -450,21 +725,14 @@ function recordSnapshot(measurements, label, document) {
 async function startSsh(baseUrl, auth) {
   await request(baseUrl, auth, '/api/ssh/start', {method: 'POST'});
   const deadline = performance.now() + maximumRequestMs;
-  let trustSubmitted = false;
   while (performance.now() < deadline) {
     const response = await request(baseUrl, auth, statePaths.ssh, {method: 'GET'});
     const document = await response.json();
     if (document.ssh_stage === 'connected' && document.ssh_terminal_open === true) {
       return document;
     }
-    if (document.ssh_stage === 'awaiting_trust' && !trustSubmitted) {
-      await request(baseUrl, auth, '/api/ssh/trust', {
-        method: 'POST',
-        body: form({
-          fingerprint: requireString(document.ssh_fingerprint, 'ssh_fingerprint'),
-        }),
-      });
-      trustSubmitted = true;
+    if (document.ssh_stage === 'awaiting_trust') {
+      throw new Error('SSH host is not already trusted; refusing automatic trust');
     }
     if (document.ssh_stage === 'failed') {
       throw new Error(`SSH background connection failed: ${document.ssh_error}`);
@@ -590,6 +858,7 @@ function settingsUpdateForm(settings, globalInstructions) {
     model: settings.model,
     global_instructions: globalInstructions,
     project_chat_history_quota_mib: String(historyQuotaBytes / 1_048_576),
+    web_session_lifetime: settings.web_session_lifetime,
     stt_base_url: settings.stt_base_url,
     stt_model: settings.stt_model,
     stt_api_key: '',
@@ -1192,11 +1461,15 @@ function parseSse(text) {
 
 async function prompt(baseUrl, auth, marker) {
   const startedAt = performance.now();
+  const options = promptRequest(`Reply with exactly: ${marker}`, '0');
   const response = await request(
     baseUrl,
     auth,
     '/api/prompt/raw',
-    promptRequest(`Reply with exactly: ${marker}`, '0'),
+    {
+      ...options,
+      headers: {...options.headers, 'X-CardMind-Tool-Intent': 'none'},
+    },
   );
   const body = await response.text();
   const events = parseSse(body);
@@ -4347,6 +4620,13 @@ function binaryTextNames(nonce) {
   ];
 }
 
+const p2BinaryTextFixtureSha256 =
+  'e57eec3c40ea8c6ce033eeb848f00dd2e8d86eeebe90777d9267620a96b574ae';
+
+function binaryTextFixtureBytes() {
+  return Buffer.from([0xff, 0xfe, 0x00, 0x80, 0x50, 0x32, 0x32, 0x39]);
+}
+
 function validateBinaryTextLedger(document, expectedNonce) {
   if (document === null || typeof document !== 'object' || Array.isArray(document) ||
       document.version !== 1 || !/^[0-9]{8,20}$/.test(document.nonce) ||
@@ -4434,6 +4714,7 @@ async function cleanupBinaryTextOwnership(baseUrl, auth, ledgerPath, inputLedger
       }
     }
   } catch (error) {
+    if (isHttpTransportFailure(error)) throw error;
     errors.push(`link/selection cleanup: ${error.message}`);
   }
   try {
@@ -4446,6 +4727,7 @@ async function cleanupBinaryTextOwnership(baseUrl, auth, ledgerPath, inputLedger
       throw new Error('owned files remain after cleanup');
     }
   } catch (error) {
+    if (isHttpTransportFailure(error)) throw error;
     errors.push(`file cleanup: ${error.message}`);
   }
   if (errors.length > 0) throw new Error(`P2-29 cleanup failed; ${errors.join('; ')}`);
@@ -4472,7 +4754,7 @@ async function verifyBinaryTextPolicy(baseUrl, auth, nonce, ledgerPath) {
     names, cleanup_complete: false,
   }, nonce);
   ledger = await writeBinaryTextLedger(ledgerPath, ledger, {});
-  const binary = Buffer.from([0xff, 0xfe, 0x00, 0x80, 0x50, 0x32, 0x32, 0x39]);
+  const binary = binaryTextFixtureBytes();
   let evidence = null;
   let testError = null;
   try {
@@ -5158,6 +5440,1530 @@ async function verifyHistoryHeapAndUtf8Identity(baseUrl, auth, nonce) {
   return {...evidence, cleanup: 'pass'};
 }
 
+const p6ProviderIdPattern = /^[0-9a-f]{16}$/;
+
+function p6ProfileName(nonce) {
+  return `P6 provider ${nonce}`;
+}
+
+function p6PresetName(nonce) {
+  return `P6 preset ${nonce}`;
+}
+
+function p6ProjectTitle(nonce) {
+  return `P6 provider project ${nonce}`;
+}
+
+function requireP6ProviderId(value, field) {
+  if (typeof value !== 'string' || !p6ProviderIdPattern.test(value)) {
+    throw new Error(`P6-02 ${field} is not a canonical stable ID`);
+  }
+  return value;
+}
+
+function p6ProviderSnapshot(document) {
+  if (document === null || typeof document !== 'object' ||
+      document.provider_state !== 'ready' ||
+      document.api_profile_limit !== 3 || document.model_preset_limit !== 6 ||
+      !Array.isArray(document.api_profiles) ||
+      document.api_profiles.length > document.api_profile_limit ||
+      !Array.isArray(document.model_presets) ||
+      document.model_presets.length > document.model_preset_limit) {
+    throw new Error('P6-02 settings returned invalid provider collection state');
+  }
+  const profiles = document.api_profiles.map((profile) => {
+    const id = requireP6ProviderId(profile?.id, 'profile ID');
+    if (typeof profile.name !== 'string' || typeof profile.api_base_url !== 'string' ||
+        typeof profile.api_key_configured !== 'boolean' ||
+        typeof profile.is_default !== 'boolean' ||
+        !Number.isSafeInteger(profile.authority_revision) ||
+        profile.authority_revision < 1 ||
+        Object.prototype.hasOwnProperty.call(profile, 'api_key')) {
+      throw new Error('P6-02 settings returned an invalid profile summary');
+    }
+    return {
+      id,
+      name: profile.name,
+      api_base_url: profile.api_base_url,
+      api_key_configured: profile.api_key_configured,
+      is_default: profile.is_default,
+      authority_revision: profile.authority_revision,
+    };
+  }).sort((left, right) => left.id.localeCompare(right.id));
+  const presets = document.model_presets.map((preset) => {
+    const id = requireP6ProviderId(preset?.id, 'preset ID');
+    if (typeof preset.name !== 'string' || typeof preset.model !== 'string' ||
+        !Number.isSafeInteger(preset.maximum_output_tokens)) {
+      throw new Error('P6-02 settings returned an invalid preset summary');
+    }
+    return {
+      id,
+      name: preset.name,
+      model: preset.model,
+      maximum_output_tokens: preset.maximum_output_tokens,
+    };
+  }).sort((left, right) => left.id.localeCompare(right.id));
+  const defaultProfileId = requireP6ProviderId(
+    document.default_api_profile_id, 'default profile ID');
+  if (!profiles.some((profile) =>
+    profile.id === defaultProfileId && profile.is_default) ||
+      profiles.some((profile) =>
+        profile.is_default !== (profile.id === defaultProfileId))) {
+    throw new Error('P6-02 default profile identity is inconsistent');
+  }
+  return {
+    state: document.provider_state,
+    default_profile_id: defaultProfileId,
+    profiles,
+    presets,
+  };
+}
+
+function requireP6ProviderSnapshotEqual(actual, expected, label) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`P6-02 ${label} changed provider authority or collection state`);
+  }
+}
+
+function objectContainsExactKey(value, key) {
+  if (Array.isArray(value)) {
+    return value.some((item) => objectContainsExactKey(item, key));
+  }
+  if (value === null || typeof value !== 'object') return false;
+  if (Object.prototype.hasOwnProperty.call(value, key)) return true;
+  return Object.values(value).some((item) => objectContainsExactKey(item, key));
+}
+
+function requireP6SecretAbsent(value, secret, label) {
+  if (JSON.stringify(value).includes(secret) || objectContainsExactKey(value, 'api_key')) {
+    throw new Error(`P6-02 secret disclosure detected in ${label}`);
+  }
+}
+
+function authenticatedOptions(auth, options, csrf) {
+  const headers = new Headers(options.headers);
+  headers.set('Cookie', auth.cookie);
+  headers.set('X-CardMind-CSRF', csrf);
+  return {...options, headers};
+}
+
+async function expectP6HttpStatus(baseUrl, path, options, status, secret) {
+  const response = await fetchWithin(
+    new URL(path, baseUrl), options, maximumRequestMs);
+  const body = await response.text();
+  if (secret !== '' && body.includes(secret)) {
+    throw new Error('P6-02 secret disclosure detected in an HTTP failure');
+  }
+  if (response.status !== status) {
+    throw new Error(
+      `P6-02 ${path} returned HTTP ${response.status}; expected ${status}`,
+    );
+  }
+}
+
+async function p6SecretMutationJson(baseUrl, auth, path, options, secret) {
+  const response = await fetchWithin(
+    new URL(path, baseUrl),
+    authenticatedOptions(auth, options, auth.csrf),
+    maximumRequestMs,
+  );
+  const body = await response.text();
+  if (body.includes(secret)) {
+    throw new Error('P6-02 secret disclosure detected in a mutation response');
+  }
+  if (!response.ok) {
+    throw new Error(`P6-02 ${path} failed with HTTP ${response.status}`);
+  }
+  let document;
+  try {
+    document = JSON.parse(body);
+  } catch {
+    throw new Error(`P6-02 ${path} returned invalid JSON`);
+  }
+  requireP6SecretAbsent(document, secret, `${path} response`);
+  return document;
+}
+
+async function expectP6AuthenticatedFailure(
+  baseUrl, auth, path, options, status, secret) {
+  await expectP6HttpStatus(
+    baseUrl,
+    path,
+    authenticatedOptions(auth, options, auth.csrf),
+    status,
+    secret,
+  );
+}
+
+function validateP6ProviderLedger(document, expectedNonce) {
+  if (document === null || typeof document !== 'object' || Array.isArray(document) ||
+      document.version !== 1 || !/^[0-9]{8,20}$/.test(document.nonce) ||
+      document.nonce !== expectedNonce ||
+      document.profile_name !== p6ProfileName(document.nonce) ||
+      document.preset_name !== p6PresetName(document.nonce) ||
+      document.project_title !== p6ProjectTitle(document.nonce) ||
+      typeof document.baseline_ready !== 'boolean' ||
+      !Array.isArray(document.baseline_profile_ids) ||
+      !Array.isArray(document.baseline_preset_ids) ||
+      !Array.isArray(document.baseline_project_ids) ||
+      typeof document.original_default_profile_id !== 'string' ||
+      typeof document.original_project_id !== 'string' ||
+      typeof document.profile_create_pending !== 'boolean' ||
+      typeof document.preset_create_pending !== 'boolean' ||
+      typeof document.project_create_pending !== 'boolean' ||
+      typeof document.owned_profile_id !== 'string' ||
+      typeof document.owned_preset_id !== 'string' ||
+      typeof document.owned_project_id !== 'string' ||
+      typeof document.cleanup_complete !== 'boolean') {
+    throw new Error('P6-02 fixture ledger has an invalid typed shape');
+  }
+  const providerIds = [
+    ...document.baseline_profile_ids,
+    ...document.baseline_preset_ids,
+    document.original_default_profile_id,
+    document.owned_profile_id,
+    document.owned_preset_id,
+  ].filter((value) => value !== '');
+  if (providerIds.some((value) =>
+    typeof value !== 'string' || !p6ProviderIdPattern.test(value))) {
+    throw new Error('P6-02 fixture ledger contains an unsafe provider ID');
+  }
+  const projectIds = [
+    ...document.baseline_project_ids,
+    document.original_project_id,
+    document.owned_project_id,
+  ].filter((value) => value !== '');
+  if (projectIds.some((value) =>
+    typeof value !== 'string' || value.length > 180 ||
+    !/^[A-Za-z0-9._-]+$/.test(value))) {
+    throw new Error('P6-02 fixture ledger contains an unsafe project ID');
+  }
+  if (new Set(document.baseline_profile_ids).size !==
+        document.baseline_profile_ids.length ||
+      new Set(document.baseline_preset_ids).size !==
+        document.baseline_preset_ids.length ||
+      new Set(document.baseline_project_ids).size !==
+        document.baseline_project_ids.length ||
+      document.baseline_profile_ids.includes(document.owned_profile_id) ||
+      document.baseline_preset_ids.includes(document.owned_preset_id) ||
+      document.baseline_project_ids.includes(document.owned_project_id)) {
+    throw new Error('P6-02 fixture ledger ownership collides with its baseline');
+  }
+  if (document.baseline_ready &&
+      (!document.baseline_profile_ids.includes(
+        document.original_default_profile_id) ||
+       !document.baseline_project_ids.includes(document.original_project_id))) {
+    throw new Error('P6-02 fixture ledger baseline identities are inconsistent');
+  }
+  if (document.cleanup_complete &&
+      (document.profile_create_pending || document.preset_create_pending ||
+       document.project_create_pending || document.owned_profile_id !== '' ||
+       document.owned_preset_id !== '' || document.owned_project_id !== '')) {
+    throw new Error('P6-02 fixture ledger cleanup state is inconsistent');
+  }
+  return {
+    ...document,
+    baseline_profile_ids: [...document.baseline_profile_ids],
+    baseline_preset_ids: [...document.baseline_preset_ids],
+    baseline_project_ids: [...document.baseline_project_ids],
+  };
+}
+
+async function writeP6ProviderLedger(path, current, fields) {
+  if (!/[\\/]artifacts[\\/]p6-02-provider-ledger\.json$/.test(path)) {
+    throw new Error('P6-02 fixture ledger path is outside the exact artifacts target');
+  }
+  const next = validateP6ProviderLedger(
+    {...current, ...fields}, current.nonce);
+  const temporaryPath = `${path}.node.tmp`;
+  let handle;
+  let temporaryOwned = false;
+  try {
+    handle = await open(temporaryPath, 'wx');
+    temporaryOwned = true;
+    await handle.writeFile(`${JSON.stringify(next)}\n`, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporaryPath, path);
+    temporaryOwned = false;
+    return next;
+  } catch (error) {
+    const cleanupErrors = [];
+    if (handle !== undefined) {
+      try {
+        await handle.close();
+      } catch (closeError) {
+        cleanupErrors.push(`close: ${closeError.message}`);
+      }
+    }
+    if (temporaryOwned) {
+      try {
+        await rm(temporaryPath);
+      } catch (removeError) {
+        cleanupErrors.push(`remove: ${removeError.message}`);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new Error(
+        `P6-02 provider ledger write failed and temporary cleanup failed: ${cleanupErrors.join('; ')}`,
+        {cause: error});
+    }
+    throw error;
+  }
+}
+
+function p6ProviderResourceSnapshot(document, label) {
+  const snapshot = {};
+  for (const field of ['free_heap', 'largest_heap', 'stack_free']) {
+    if (!Number.isSafeInteger(document[field]) || document[field] <= 0) {
+      throw new Error(`P6-02 ${label} status has invalid ${field}`);
+    }
+    snapshot[field] = document[field];
+  }
+  return snapshot;
+}
+
+function requireP6ProviderResources(before, after) {
+  const freeLoss = before.free_heap - after.free_heap;
+  const largestLoss = before.largest_heap - after.largest_heap;
+  if (after.free_heap < 70 * 1024 || after.largest_heap < 28 * 1024 ||
+      after.stack_free <= 0 || freeLoss > maximumSteadyHeapLossBytes ||
+      largestLoss > maximumSteadyHeapLossBytes) {
+    throw new Error(
+      'P6-02 Web lifecycle did not return to its resource floor: ' +
+      `free_loss=${freeLoss}, largest_loss=${largestLoss}, ` +
+      `free=${after.free_heap}, largest=${after.largest_heap}, ` +
+      `stack=${after.stack_free}`,
+    );
+  }
+}
+
+async function cleanupP6ProviderOwnership(
+  baseUrl, auth, ledgerPath, inputLedger, secret) {
+  let ledger = validateP6ProviderLedger(inputLedger, inputLedger.nonce);
+  const errors = [];
+  let providerDocument = null;
+  try {
+    providerDocument = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(providerDocument, secret, 'cleanup settings state');
+    const snapshot = p6ProviderSnapshot(providerDocument);
+    if (snapshot.default_profile_id !== ledger.original_default_profile_id &&
+        snapshot.profiles.some((profile) =>
+          profile.id === ledger.original_default_profile_id)) {
+      await request(baseUrl, auth, '/api/profile/default', {
+        method: 'POST',
+        body: form({id: ledger.original_default_profile_id}),
+      });
+      providerDocument = await settingsState(baseUrl, auth);
+      requireP6SecretAbsent(
+        providerDocument, secret, 'restored-default settings state');
+    }
+  } catch (error) {
+    errors.push(`default restoration: ${error.message}`);
+  }
+
+  try {
+    const projects = await listAllProjects(baseUrl, auth);
+    const baselineIds = new Set(ledger.baseline_project_ids);
+    const titleMatches = projects.filter((project) =>
+      project.title === ledger.project_title && !baselineIds.has(project.id));
+    const ownedIds = new Set(titleMatches.map((project) => project.id));
+    if (ledger.owned_project_id !== '') ownedIds.add(ledger.owned_project_id);
+    if (titleMatches.length > 1 || ownedIds.size > 1) {
+      throw new Error('owned Project identity is ambiguous');
+    }
+    for (const projectId of ownedIds) {
+      if (projects.some((project) => project.id === projectId)) {
+        await deleteProjectById(baseUrl, auth, projectId);
+      }
+    }
+  } catch (error) {
+    errors.push(`project cleanup: ${error.message}`);
+  }
+
+  try {
+    const current = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(current, secret, 'preset cleanup settings state');
+    const snapshot = p6ProviderSnapshot(current);
+    const baselineIds = new Set(ledger.baseline_preset_ids);
+    const nameMatches = snapshot.presets.filter((preset) =>
+      preset.name === ledger.preset_name && !baselineIds.has(preset.id));
+    const ownedIds = new Set(nameMatches.map((preset) => preset.id));
+    if (ledger.owned_preset_id !== '') ownedIds.add(ledger.owned_preset_id);
+    if (nameMatches.length > 1 || ownedIds.size > 1) {
+      throw new Error('owned model-preset identity is ambiguous');
+    }
+    for (const presetId of ownedIds) {
+      if (snapshot.presets.some((preset) => preset.id === presetId)) {
+        await request(baseUrl, auth, '/api/preset/delete', {
+          method: 'POST', body: form({id: presetId, confirm_id: presetId}),
+        });
+      }
+    }
+  } catch (error) {
+    errors.push(`preset cleanup: ${error.message}`);
+  }
+
+  try {
+    const current = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(current, secret, 'profile cleanup settings state');
+    const snapshot = p6ProviderSnapshot(current);
+    const baselineIds = new Set(ledger.baseline_profile_ids);
+    const nameMatches = snapshot.profiles.filter((profile) =>
+      (profile.name === ledger.profile_name ||
+       profile.name === `${ledger.profile_name} updated`) &&
+      !baselineIds.has(profile.id));
+    const ownedIds = new Set(nameMatches.map((profile) => profile.id));
+    if (ledger.owned_profile_id !== '') ownedIds.add(ledger.owned_profile_id);
+    if (nameMatches.length > 1 || ownedIds.size > 1) {
+      throw new Error('owned API-profile identity is ambiguous');
+    }
+    for (const profileId of ownedIds) {
+      if (snapshot.profiles.some((profile) => profile.id === profileId)) {
+        await request(baseUrl, auth, '/api/profile/delete', {
+          method: 'POST', body: form({id: profileId, confirm_id: profileId}),
+        });
+      }
+    }
+  } catch (error) {
+    errors.push(`profile cleanup: ${error.message}`);
+  }
+
+  try {
+    await request(baseUrl, auth, '/api/project/select', {
+      method: 'POST', body: form({id: ledger.original_project_id}),
+    });
+    const restored = await activeChatState(baseUrl, auth);
+    if (restored.project_id !== ledger.original_project_id) {
+      throw new Error('original Project selection did not restore');
+    }
+  } catch (error) {
+    errors.push(`Project restoration: ${error.message}`);
+  }
+
+  try {
+    const finalDocument = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(finalDocument, secret, 'final settings state');
+    const finalSnapshot = p6ProviderSnapshot(finalDocument);
+    const finalProfileIds = finalSnapshot.profiles.map((profile) => profile.id);
+    const finalPresetIds = finalSnapshot.presets.map((preset) => preset.id);
+    if (JSON.stringify(finalProfileIds) !==
+          JSON.stringify([...ledger.baseline_profile_ids].sort()) ||
+        JSON.stringify(finalPresetIds) !==
+          JSON.stringify([...ledger.baseline_preset_ids].sort()) ||
+        finalSnapshot.default_profile_id !==
+          ledger.original_default_profile_id) {
+      throw new Error('provider collection/default did not return to baseline');
+    }
+    const projects = await listAllProjects(baseUrl, auth);
+    if (projects.some((project) =>
+      project.title === ledger.project_title &&
+      !ledger.baseline_project_ids.includes(project.id))) {
+      throw new Error('owned Project remained after cleanup');
+    }
+  } catch (error) {
+    errors.push(`cleanup verification: ${error.message}`);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`P6-02 exact-owned cleanup failed (${errors.join('; ')})`);
+  }
+  ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+    profile_create_pending: false,
+    preset_create_pending: false,
+    project_create_pending: false,
+    owned_profile_id: '',
+    owned_preset_id: '',
+    owned_project_id: '',
+    cleanup_complete: true,
+  });
+  return ledger;
+}
+
+async function verifyP6Providers(baseUrl, auth, nonce, ledgerPath) {
+  if (!/^[0-9]{8,20}$/.test(nonce)) {
+    throw new Error('P6-02 nonce must contain 8 to 20 decimal digits');
+  }
+  let providerSecret = `p6-${createHash('sha256')
+    .update(`provider-${nonce}`).digest('hex')}`;
+  const profileName = p6ProfileName(nonce);
+  const presetName = p6PresetName(nonce);
+  const projectTitle = p6ProjectTitle(nonce);
+  const baselineSettings = await settingsState(baseUrl, auth);
+  requireP6SecretAbsent(baselineSettings, providerSecret, 'baseline settings state');
+  const baselineProvider = p6ProviderSnapshot(baselineSettings);
+  const baselineProjects = await listAllProjects(baseUrl, auth);
+  const baselineChat = await activeChatState(baseUrl, auth);
+  const originalProjectId = requireString(
+    baselineChat.project_id, 'P6-02 original Project ID');
+  if (baselineProvider.profiles.length >= baselineSettings.api_profile_limit ||
+      baselineProvider.presets.length >= baselineSettings.model_preset_limit) {
+    throw new Error('P6-02 Web fixtures require one free profile and preset slot');
+  }
+  if (baselineProvider.profiles.some((profile) =>
+        profile.name === profileName ||
+        profile.name === `${profileName} updated`) ||
+      baselineProvider.presets.some((preset) => preset.name === presetName) ||
+      baselineProjects.some((project) => project.title === projectTitle)) {
+    throw new Error('P6-02 nonce-owned fixture identity collides with baseline state');
+  }
+  let ledger = validateP6ProviderLedger({
+    version: 1,
+    nonce,
+    profile_name: profileName,
+    preset_name: presetName,
+    project_title: projectTitle,
+    baseline_ready: true,
+    baseline_profile_ids: baselineProvider.profiles.map((profile) => profile.id),
+    baseline_preset_ids: baselineProvider.presets.map((preset) => preset.id),
+    baseline_project_ids: baselineProjects.map((project) => project.id).sort(),
+    original_default_profile_id: baselineProvider.default_profile_id,
+    original_project_id: originalProjectId,
+    profile_create_pending: false,
+    preset_create_pending: false,
+    project_create_pending: false,
+    owned_profile_id: '',
+    owned_preset_id: '',
+    owned_project_id: '',
+    cleanup_complete: false,
+  }, nonce);
+  ledger = await writeP6ProviderLedger(ledgerPath, ledger, {});
+  const beforeResources = p6ProviderResourceSnapshot(
+    await statusState(baseUrl, auth), 'initial');
+  let evidence = null;
+  let testError = null;
+  try {
+    const authProfile = () => form({
+      name: `${profileName} auth`,
+      api_base_url: 'https://127.0.0.1:9/v1',
+      api_key: 'p6-auth-probe-key',
+    });
+    const authPreset = () => form({
+      name: `${presetName} auth`,
+      model: `p6-auth-model-${nonce}`,
+      maximum_output_tokens: '1024',
+    });
+    await expectP6HttpStatus(baseUrl, '/api/profile/create', {
+      method: 'POST', body: authProfile(),
+    }, 401, providerSecret);
+    await expectP6HttpStatus(baseUrl, '/api/preset/create', {
+      method: 'POST', body: authPreset(),
+    }, 401, providerSecret);
+    await expectP6HttpStatus(
+      baseUrl,
+      '/api/profile/create',
+      authenticatedOptions(auth, {
+        method: 'POST', body: authProfile(),
+      }, 'invalid-p6-csrf'),
+      401,
+      providerSecret,
+    );
+    await expectP6HttpStatus(
+      baseUrl,
+      '/api/preset/create',
+      authenticatedOptions(auth, {
+        method: 'POST', body: authPreset(),
+      }, 'invalid-p6-csrf'),
+      401,
+      providerSecret,
+    );
+    const afterAuth = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(afterAuth, providerSecret, 'post-auth settings state');
+    requireP6ProviderSnapshotEqual(
+      p6ProviderSnapshot(afterAuth), baselineProvider, 'rejected auth attempts');
+
+    await expectP6AuthenticatedFailure(
+      baseUrl,
+      auth,
+      '/api/profile/create',
+      {
+        method: 'POST',
+        body: form({
+          name: profileName,
+          api_base_url: 'https://127.0.0.1:9/v1',
+          api_key: '',
+        }),
+      },
+      400,
+      providerSecret,
+    );
+    const afterMissingKey = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(
+      afterMissingKey, providerSecret, 'missing-key settings state');
+    requireP6ProviderSnapshotEqual(
+      p6ProviderSnapshot(afterMissingKey), baselineProvider,
+      'missing-key rejection');
+
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      profile_create_pending: true,
+    });
+    const profileStartedAt = performance.now();
+    const createdProfile = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/profile/create',
+      {
+        method: 'POST',
+        body: form({
+          name: profileName,
+          api_base_url: 'https://127.0.0.1:9/v1',
+          api_key: providerSecret,
+        }),
+      },
+      providerSecret,
+    );
+    const profileCreateMs = Math.round(performance.now() - profileStartedAt);
+    const profileId = requireP6ProviderId(
+      createdProfile.profile?.id, 'created profile ID');
+    if (createdProfile.ok !== true || createdProfile.committed !== true ||
+        createdProfile.profile.api_key_configured !== true ||
+        createdProfile.profile.name !== profileName) {
+      throw new Error('P6-02 profile create response is incomplete');
+    }
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      owned_profile_id: profileId,
+    });
+    const afterCreate = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(afterCreate, providerSecret, 'profile-create settings state');
+    if (!p6ProviderSnapshot(afterCreate).profiles.some((profile) =>
+      profile.id === profileId && profile.api_key_configured)) {
+      throw new Error('P6-02 created profile is absent or unconfigured');
+    }
+
+    const updatedProfile = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/profile/update',
+      {
+        method: 'POST',
+        body: form({
+          id: profileId,
+          name: `${profileName} updated`,
+          api_base_url: 'https://127.0.0.1:9/v1',
+          api_key: '',
+        }),
+      },
+      providerSecret,
+    );
+    if (updatedProfile.profile?.id !== profileId ||
+        updatedProfile.profile.api_key_configured !== true ||
+        updatedProfile.profile.name !== `${profileName} updated`) {
+      throw new Error('P6-02 blank-key update lost its public configured state');
+    }
+    await expectP6AuthenticatedFailure(
+      baseUrl,
+      auth,
+      `/api/models?profile_id=${encodeURIComponent(profileId)}`,
+      {method: 'GET'},
+      502,
+      providerSecret,
+    );
+
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      preset_create_pending: true,
+    });
+    const createdPreset = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/preset/create',
+      {
+        method: 'POST',
+        body: form({
+          name: presetName,
+          model: `p6-model-${nonce}`,
+          maximum_output_tokens: '1024',
+        }),
+      },
+      providerSecret,
+    );
+    const presetId = requireP6ProviderId(
+      createdPreset.preset?.id, 'created preset ID');
+    if (createdPreset.ok !== true || createdPreset.preset.name !== presetName) {
+      throw new Error('P6-02 preset create response is incomplete');
+    }
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      owned_preset_id: presetId,
+    });
+
+    await p6SecretMutationJson(baseUrl, auth, '/api/profile/default', {
+      method: 'POST', body: form({id: profileId}),
+    }, providerSecret);
+    const ownedDefault = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(ownedDefault, providerSecret, 'owned-default settings state');
+    if (p6ProviderSnapshot(ownedDefault).default_profile_id !== profileId) {
+      throw new Error('P6-02 explicit default selection did not persist');
+    }
+    await expectP6AuthenticatedFailure(
+      baseUrl, auth, '/api/models?scope=global', {method: 'GET'}, 502,
+      providerSecret);
+
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      project_create_pending: true,
+    });
+    const createdProject = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/project/new',
+      {method: 'POST', body: form({title: projectTitle})},
+      providerSecret,
+    );
+    const projectId = requireString(
+      createdProject.project_id, 'P6-02 created Project ID');
+    if (ledger.baseline_project_ids.includes(projectId)) {
+      throw new Error('P6-02 created Project reused a baseline identity');
+    }
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      owned_project_id: projectId,
+    });
+    const inheritedProject = await activeChatState(baseUrl, auth);
+    requireP6SecretAbsent(
+      inheritedProject, providerSecret, 'inherited Project state');
+    if (inheritedProject.project_api_profile_id !== '' ||
+        inheritedProject.effective_api_profile_id !== profileId ||
+        inheritedProject.api_profile_available !== true) {
+      throw new Error('P6-02 inherited Project did not resolve the selected default');
+    }
+    await expectP6AuthenticatedFailure(
+      baseUrl, auth, '/api/models?scope=project', {method: 'GET'}, 502,
+      providerSecret);
+
+    await p6SecretMutationJson(baseUrl, auth, '/api/profile/default', {
+      method: 'POST',
+      body: form({id: baselineProvider.default_profile_id}),
+    }, providerSecret);
+    const projectSettings = {
+      instructions: `P6 provider instructions ${nonce}`,
+      model: `p6-before-${nonce}`,
+      context_byte_budget: '16384',
+      maximum_output_tokens: '256',
+      automatic_compaction: '1',
+    };
+    await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/project/settings/raw',
+      projectProviderSettingsRequest(projectSettings, profileId),
+      providerSecret,
+    );
+    const assignedProject = await activeChatState(baseUrl, auth);
+    requireP6SecretAbsent(
+      assignedProject, providerSecret, 'assigned Project state');
+    if (assignedProject.project_api_profile_id !== profileId ||
+        assignedProject.effective_api_profile_id !== profileId ||
+        assignedProject.api_profile_available !== true ||
+        assignedProject.project_model !== projectSettings.model ||
+        assignedProject.context_byte_budget !== 16384 ||
+        assignedProject.maximum_output_tokens !== 256 ||
+        assignedProject.automatic_compaction !== true ||
+        assignedProject.project_instructions !== projectSettings.instructions) {
+      throw new Error('P6-02 explicit Project profile/settings did not persist exactly');
+    }
+    await expectP6AuthenticatedFailure(
+      baseUrl, auth, '/api/models?scope=project', {method: 'GET'}, 502,
+      providerSecret);
+
+    await expectP6HttpStatus(
+      baseUrl,
+      '/api/project/settings/raw',
+      projectProviderSettingsRequest(
+        {...projectSettings, model: `p6-unauthorized-${nonce}`}, profileId),
+      401,
+      providerSecret,
+    );
+    const afterRawAuth = await activeChatState(baseUrl, auth);
+    if (afterRawAuth.project_model !== assignedProject.project_model ||
+        afterRawAuth.project_api_profile_id !== profileId) {
+      throw new Error('P6-02 unauthenticated raw Project mutation changed state');
+    }
+
+    const beforeIsolation = p6ProviderSnapshot(await settingsState(baseUrl, auth));
+    const staleSettings = settingsUpdateForm(
+      baselineSettings, baselineSettings.global_instructions);
+    staleSettings.set('api_base_url', 'http://stale-p6.invalid/v1');
+    staleSettings.set('api_key', 'p6-stale-scalar-key');
+    await p6SecretMutationJson(baseUrl, auth, '/api/settings', {
+      method: 'POST', body: staleSettings,
+    }, providerSecret);
+    const afterIsolationDocument = await settingsState(baseUrl, auth);
+    requireP6SecretAbsent(
+      afterIsolationDocument, providerSecret, 'ordinary settings-save state');
+    requireP6ProviderSnapshotEqual(
+      p6ProviderSnapshot(afterIsolationDocument), beforeIsolation,
+      'ordinary settings save');
+
+    const applyStartedAt = performance.now();
+    const applied = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/preset/apply',
+      {method: 'POST', body: form({id: presetId})},
+      providerSecret,
+    );
+    const presetApplyMs = Math.round(performance.now() - applyStartedAt);
+    if (applied.ok !== true || applied.project_id !== projectId ||
+        applied.model !== `p6-model-${nonce}` ||
+        applied.maximum_output_tokens !== 1024) {
+      throw new Error('P6-02 preset Apply response is incomplete');
+    }
+    const afterApply = await activeChatState(baseUrl, auth);
+    requireP6SecretAbsent(afterApply, providerSecret, 'post-Apply Project state');
+    if (afterApply.project_model !== `p6-model-${nonce}` ||
+        afterApply.maximum_output_tokens !== 1024 ||
+        afterApply.project_api_profile_id !== profileId ||
+        afterApply.context_byte_budget !== assignedProject.context_byte_budget ||
+        afterApply.automatic_compaction !== assignedProject.automatic_compaction ||
+        afterApply.project_instructions !== assignedProject.project_instructions) {
+      throw new Error('P6-02 preset Apply changed fields outside model and output');
+    }
+
+    const deletedProfile = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/profile/delete',
+      {
+        method: 'POST',
+        body: form({id: profileId, confirm_id: profileId}),
+      },
+      providerSecret,
+    );
+    if (deletedProfile.ok !== true ||
+        deletedProfile.deleted_profile_id !== profileId) {
+      throw new Error('P6-02 profile delete response is incomplete');
+    }
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      profile_create_pending: false,
+      owned_profile_id: '',
+    });
+    const unavailable = await activeChatState(baseUrl, auth);
+    requireP6SecretAbsent(unavailable, providerSecret, 'unavailable-profile state');
+    if (unavailable.project_api_profile_id !== profileId ||
+        unavailable.api_profile_available !== false) {
+      throw new Error('P6-02 deleted Project reference did not remain fail-closed');
+    }
+    await expectP6AuthenticatedFailure(
+      baseUrl, auth, '/api/models?scope=project', {method: 'GET'}, 409,
+      providerSecret);
+
+    const deletedPreset = await p6SecretMutationJson(
+      baseUrl,
+      auth,
+      '/api/preset/delete',
+      {
+        method: 'POST',
+        body: form({id: presetId, confirm_id: presetId}),
+      },
+      providerSecret,
+    );
+    if (deletedPreset.ok !== true ||
+        deletedPreset.deleted_preset_id !== presetId) {
+      throw new Error('P6-02 preset delete response is incomplete');
+    }
+    ledger = await writeP6ProviderLedger(ledgerPath, ledger, {
+      preset_create_pending: false,
+      owned_preset_id: '',
+    });
+    evidence = {
+      authentication_and_csrf: 'pass',
+      missing_key_nonmutation: 'pass',
+      profile_crud_public_state: 'pass',
+      default_and_project_state: 'pass',
+      connector_failure_outcomes: 'pass',
+      settings_provider_isolation: 'pass',
+      preset_crud_and_apply: 'pass',
+      unavailable_reference: 'pass',
+      secret_non_disclosure: 'pass',
+      profile_create_ms: profileCreateMs,
+      preset_apply_ms: presetApplyMs,
+    };
+  } catch (error) {
+    testError = error;
+  }
+
+  let cleanupError = null;
+  try {
+    ledger = await cleanupP6ProviderOwnership(
+      baseUrl, auth, ledgerPath, ledger, providerSecret);
+    const restoredProvider = p6ProviderSnapshot(
+      await settingsState(baseUrl, auth));
+    requireP6ProviderSnapshotEqual(
+      restoredProvider, baselineProvider, 'exact-owned cleanup');
+  } catch (error) {
+    cleanupError = error;
+  }
+  let resourceError = null;
+  let afterResources = null;
+  try {
+    afterResources = p6ProviderResourceSnapshot(
+      await statusState(baseUrl, auth), 'final');
+    requireP6ProviderResources(beforeResources, afterResources);
+  } catch (error) {
+    resourceError = error;
+  }
+  providerSecret = '';
+  if (testError !== null || cleanupError !== null || resourceError !== null) {
+    throw new Error(
+      `P6-02 Web provider suite failed; test=${testError?.message ?? 'none'}; ` +
+      `cleanup=${cleanupError?.message ?? 'none'}; ` +
+      `resources=${resourceError?.message ?? 'none'}`,
+    );
+  }
+  if (ledger.cleanup_complete !== true || evidence === null) {
+    throw new Error('P6-02 Web provider suite did not finish its evidence lifecycle');
+  }
+  return {
+    ...evidence,
+    resources: {before: beforeResources, after: afterResources},
+    cleanup: 'pass',
+  };
+}
+
+function requireP6SessionHttpStatus(response, expectedStatus, label) {
+  if (response.status !== expectedStatus) {
+    throw new Error(
+      `P6-03 ${label} returned HTTP ${response.status}; expected ${expectedStatus}`,
+    );
+  }
+}
+
+function requireP6SessionDocument(document, auth, label) {
+  if (document === null || typeof document !== 'object' || Array.isArray(document) ||
+      document.ok !== true || document.authenticated !== true ||
+      document.csrf !== auth.csrf ||
+      !Object.prototype.hasOwnProperty.call(
+        p6SessionLifetimeSeconds, document.session_lifetime) ||
+      !['waiting', 'connected', 'busy'].includes(document.browser_presence)) {
+    throw new Error(`P6-03 ${label} returned invalid typed session state`);
+  }
+  return {
+    authenticated: true,
+    session_lifetime: document.session_lifetime,
+    browser_presence: document.browser_presence,
+  };
+}
+
+async function fetchP6Authenticated(
+  baseUrl, auth, path, options, timeoutMs) {
+  return fetchWithin(
+    new URL(path, baseUrl),
+    authenticatedOptions(auth, options, auth.csrf),
+    timeoutMs,
+  );
+}
+
+async function readP6SessionState(baseUrl, auth, label) {
+  const response = await fetchP6Authenticated(
+    baseUrl, auth, statePaths.session, {method: 'GET'}, maximumRequestMs);
+  requireP6SessionHttpStatus(response, 200, label);
+  const document = requireP6SessionDocument(await response.json(), auth, label);
+  const cookie = requireP6SessionCookie(
+    response, auth, document.session_lifetime, label);
+  return {document, cookie};
+}
+
+async function readP6SettingsState(baseUrl, auth, label) {
+  const response = await fetchP6Authenticated(
+    baseUrl, auth, statePaths.settings, {method: 'GET'}, maximumRequestMs);
+  requireP6SessionHttpStatus(response, 200, label);
+  let document;
+  try {
+    document = await response.json();
+  } catch {
+    throw new Error(`P6-03 ${label} returned invalid Settings JSON`);
+  }
+  if (document === null || typeof document !== 'object' || Array.isArray(document) ||
+      document.ok !== true ||
+      !Object.prototype.hasOwnProperty.call(
+        p6SessionLifetimeSeconds, document.web_session_lifetime)) {
+    throw new Error(`P6-03 ${label} returned invalid session-lifetime Settings state`);
+  }
+  const cookie = requireP6SessionCookie(
+    response, auth, document.web_session_lifetime, label);
+  return {document, cookie};
+}
+
+function p6SessionSettingsRevision(document, label) {
+  if (!Number.isSafeInteger(document.settings_revision) ||
+      document.settings_revision < 0 || document.settings_revision > 0xFFFF_FFFF) {
+    throw new Error(`P6-03 ${label} returned an invalid Settings revision`);
+  }
+  return document.settings_revision;
+}
+
+function p6SessionSettingsRevisionDelta(initial, current) {
+  return (current - initial) >>> 0;
+}
+
+function p6SessionStableSettingsSnapshot(document, label) {
+  const stringFields = [
+    'wifi_ssid',
+    'model',
+    'global_instructions',
+    'master_tool_policy',
+    'new_chat_tool_policy',
+    'api_base_url',
+    'stt_base_url',
+    'stt_model',
+    'search_base_url',
+    'tts_base_url',
+    'tts_model',
+    'tts_voice',
+  ];
+  const integerFields = [
+    'project_chat_history_quota_bytes',
+    'api_profile_limit',
+    'model_preset_limit',
+    'tts_volume',
+    'display_brightness',
+    'screen_sleep_minutes',
+    'keyboard_repeat_ms',
+    'power_profile',
+  ];
+  const booleanFields = [
+    'api_key_configured',
+    'stt_key_configured',
+    'search_key_configured',
+    'tts_key_configured',
+    'tts_auto_play',
+  ];
+  if (stringFields.some((field) => typeof document[field] !== 'string') ||
+      integerFields.some((field) =>
+        !Number.isSafeInteger(document[field]) || document[field] < 0) ||
+      booleanFields.some((field) => typeof document[field] !== 'boolean')) {
+    throw new Error(`P6-03 ${label} returned invalid stable Settings fields`);
+  }
+  const secretFields = [
+    'wifi_password', 'api_key', 'stt_api_key', 'search_api_key', 'tts_api_key',
+  ];
+  if (secretFields.some((field) => objectContainsExactKey(document, field))) {
+    throw new Error(`P6-03 ${label} exposed a write-only secret field`);
+  }
+  const provider = p6ProviderSnapshot(document);
+  return {
+    wifi_ssid: document.wifi_ssid,
+    model: document.model,
+    global_instructions: document.global_instructions,
+    master_tool_policy: document.master_tool_policy,
+    new_chat_tool_policy: document.new_chat_tool_policy,
+    project_chat_history_quota_bytes: document.project_chat_history_quota_bytes,
+    api_base_url: document.api_base_url,
+    api_key_configured: document.api_key_configured,
+    api_profile_limit: document.api_profile_limit,
+    model_preset_limit: document.model_preset_limit,
+    default_api_profile_id: provider.default_profile_id,
+    api_profiles: provider.profiles,
+    model_presets: provider.presets,
+    stt_base_url: document.stt_base_url,
+    stt_model: document.stt_model,
+    stt_key_configured: document.stt_key_configured,
+    search_base_url: document.search_base_url,
+    search_key_configured: document.search_key_configured,
+    tts_base_url: document.tts_base_url,
+    tts_model: document.tts_model,
+    tts_voice: document.tts_voice,
+    tts_key_configured: document.tts_key_configured,
+    tts_auto_play: document.tts_auto_play,
+    tts_volume: document.tts_volume,
+    display_brightness: document.display_brightness,
+    screen_sleep_minutes: document.screen_sleep_minutes,
+    keyboard_repeat_ms: document.keyboard_repeat_ms,
+    power_profile: document.power_profile,
+  };
+}
+
+function requireP6SessionStableSettingsEqual(actual, expected, label) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`P6-03 ${label} changed non-lifetime Settings`);
+  }
+}
+
+async function saveP6SessionLifetime(
+  baseUrl, auth, settings, lifetime, label) {
+  p6SessionLifetimeMaxAge(lifetime, label);
+  const candidate = {...settings, web_session_lifetime: lifetime};
+  const startedAt = performance.now();
+  const response = await fetchP6Authenticated(
+    baseUrl,
+    auth,
+    '/api/settings',
+    {
+      method: 'POST',
+      body: settingsUpdateForm(candidate, candidate.global_instructions),
+    },
+    maximumRequestMs,
+  );
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  requireP6SessionHttpStatus(response, 200, label);
+  const cookie = requireP6SessionCookie(response, auth, lifetime, label);
+  let document;
+  try {
+    document = await response.json();
+  } catch {
+    throw new Error(`P6-03 ${label} returned invalid Settings mutation JSON`);
+  }
+  if (document?.ok !== true) {
+    throw new Error(`P6-03 ${label} did not confirm the Settings mutation`);
+  }
+  return {candidate, cookie, elapsed_ms: elapsedMs};
+}
+
+async function rejectMalformedP6SessionLifetime(baseUrl, auth, settings) {
+  const candidate = {...settings, web_session_lifetime: 'invalid'};
+  const body = settingsUpdateForm(candidate, candidate.global_instructions);
+  const response = await fetchP6Authenticated(
+    baseUrl,
+    auth,
+    '/api/settings',
+    {method: 'POST', body},
+    maximumRequestMs,
+  );
+  requireP6SessionHttpStatus(response, 400, 'rejected Settings save');
+  const cookie = requireP6SessionCookie(
+    response, auth, 'until_reboot', 'rejected Settings save');
+  let document;
+  try {
+    document = await response.json();
+  } catch {
+    throw new Error('P6-03 rejected Settings save returned invalid JSON');
+  }
+  if (document?.ok === true || typeof document?.error !== 'string' ||
+      document.error.length === 0) {
+    throw new Error('P6-03 rejected Settings save did not return an explicit error');
+  }
+  return cookie;
+}
+
+async function sendP6SessionHeartbeat(baseUrl, auth, label) {
+  const startedAt = performance.now();
+  const response = await fetchP6Authenticated(
+    baseUrl, auth, statePaths.session, {method: 'POST'}, maximumRequestMs);
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  requireP6SessionHttpStatus(response, 204, label);
+  requireNoP6SessionCookie(response, label);
+  if ((await response.text()) !== '') {
+    throw new Error(`P6-03 ${label} returned a non-empty heartbeat body`);
+  }
+  return elapsedMs;
+}
+
+async function waitUntilP6Session(deadlineMs) {
+  while (performance.now() < deadlineMs) {
+    const remainingMs = deadlineMs - performance.now();
+    await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, remainingMs)));
+  }
+}
+
+async function readP6ManagedJson(
+  baseUrl, auth, path, lifetime, label) {
+  const response = await fetchP6Authenticated(
+    baseUrl, auth, path, {method: 'GET'}, maximumRequestMs);
+  requireP6SessionHttpStatus(response, 200, label);
+  requireP6SessionCookie(response, auth, lifetime, label);
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`P6-03 ${label} returned invalid JSON`);
+  }
+}
+
+async function downloadP6SessionTinyFixture(
+  baseUrl, auth, name, expected, expectedSha256, lifetime) {
+  const startedAt = performance.now();
+  const response = await fetchP6Authenticated(
+    baseUrl,
+    auth,
+    `/api/file/download?name=${encodeURIComponent(name)}`,
+    {method: 'GET'},
+    maximumRequestMs,
+  );
+  requireP6SessionHttpStatus(response, 200, 'tiny raw download');
+  const cookie = requireP6SessionCookie(
+    response, auth, lifetime, 'tiny raw download');
+  const contentLength = response.headers.get('content-length');
+  if (contentLength === null ||
+      parsePositiveSafeInteger(
+        contentLength, 'P6-03 tiny raw download Content-Length') !== expected.length ||
+      response.headers.get('content-type') !== 'application/octet-stream' ||
+      response.headers.get('content-disposition') !== 'attachment' ||
+      response.headers.get('cache-control') !== 'no-store' ||
+      response.headers.get('connection')?.toLowerCase() !== 'close') {
+    throw new Error('P6-03 tiny raw download returned invalid raw headers');
+  }
+  const body = Buffer.from(await response.arrayBuffer());
+  const actualSha256 = sha256(body);
+  if (!body.equals(expected) || actualSha256 !== expectedSha256) {
+    throw new Error('P6-03 tiny raw download changed the exact fixture bytes');
+  }
+  return {
+    bytes: body.length,
+    content_length: expected.length,
+    sha256: actualSha256,
+    headers: 'pass',
+    elapsed_ms: Math.round(performance.now() - startedAt),
+    cookie,
+  };
+}
+
+function p6SessionResourceSnapshot(document, label) {
+  const snapshot = {};
+  for (const field of ['free_heap', 'largest_heap', 'stack_free']) {
+    if (!Number.isSafeInteger(document[field]) || document[field] <= 0) {
+      throw new Error(`P6-03 ${label} status has invalid ${field}`);
+    }
+    snapshot[field] = document[field];
+  }
+  return snapshot;
+}
+
+function requireP6SessionResources(before, after) {
+  const freeLoss = before.free_heap - after.free_heap;
+  const largestLoss = before.largest_heap - after.largest_heap;
+  if (after.free_heap < 70 * 1024 || after.largest_heap < 28 * 1024 ||
+      after.stack_free <= 0 || freeLoss > maximumSteadyHeapLossBytes ||
+      largestLoss > maximumSteadyHeapLossBytes) {
+    throw new Error(
+      'P6-03 Web session lifecycle did not return to its resource floor: ' +
+      `free_loss=${freeLoss}, largest_loss=${largestLoss}, ` +
+      `free=${after.free_heap}, largest=${after.largest_heap}, ` +
+      `stack=${after.stack_free}`,
+    );
+  }
+}
+
+async function freshP6SessionLogin(expectedBaseUrl) {
+  const authenticated = await loginFromCredentialFile();
+  if (authenticated.baseUrl.href !== expectedBaseUrl.href) {
+    throw new Error('P6-03 credential URL changed during the focused suite');
+  }
+  return authenticated.auth;
+}
+
+async function verifyP6Session(
+  baseUrl, initialAuth, binaryTextNonce, binaryTextLedgerPath) {
+  let auth = initialAuth;
+  let baselineSnapshot = null;
+  let baselineRevision = null;
+  let finalBaseline = false;
+  let tinyLedger = null;
+  let tinyCleanupComplete = false;
+  let evidence = null;
+  let testError = null;
+  try {
+    const initialSession = await readP6SessionState(
+      baseUrl, auth, 'initial managed session');
+    const initialSettings = await readP6SettingsState(
+      baseUrl, auth, 'initial Settings state');
+    baselineSnapshot = p6SessionStableSettingsSnapshot(
+      initialSettings.document, 'initial Settings state');
+    baselineRevision = p6SessionSettingsRevision(
+      initialSettings.document, 'initial Settings state');
+    if (initialSession.document.session_lifetime !==
+        initialSettings.document.web_session_lifetime ||
+        initialSession.document.browser_presence !== 'waiting') {
+      throw new Error('P6-03 initial authentication/presence state is inconsistent');
+    }
+
+    let settings = initialSettings.document;
+    const choiceEvidence = [];
+    let expectedRevisionDelta = 0;
+    for (const lifetime of ['15m', '1h', '8h', 'until_reboot']) {
+      const saved = await saveP6SessionLifetime(
+        baseUrl, auth, settings, lifetime, `Settings save ${lifetime}`);
+      const stored = await readP6SettingsState(
+        baseUrl, auth, `Settings state ${lifetime}`);
+      expectedRevisionDelta++;
+      const storedRevision = p6SessionSettingsRevision(
+        stored.document, `Settings state ${lifetime}`);
+      if (stored.document.web_session_lifetime !== lifetime ||
+          p6SessionSettingsRevisionDelta(baselineRevision, storedRevision) !==
+            expectedRevisionDelta) {
+        throw new Error(
+          `P6-03 Settings did not retain exactly one revision for ${lifetime}`);
+      }
+      requireP6SessionStableSettingsEqual(
+        p6SessionStableSettingsSnapshot(
+          stored.document, `Settings state ${lifetime}`),
+        baselineSnapshot,
+        `Settings save ${lifetime}`,
+      );
+      settings = stored.document;
+      choiceEvidence.push({
+        value: lifetime,
+        max_age_seconds: p6SessionLifetimeMaxAge(lifetime, lifetime),
+        save_cookie: saved.cookie,
+        read_cookie: stored.cookie,
+        save_ms: saved.elapsed_ms,
+      });
+    }
+
+    const revisionBeforeRejected = p6SessionSettingsRevision(
+      settings, 'Settings before malformed lifetime');
+    const rejectedCookie = await rejectMalformedP6SessionLifetime(
+      baseUrl, auth, settings);
+    const afterRejectedSave = await readP6SettingsState(
+      baseUrl, auth, 'Settings after malformed lifetime');
+    const revisionAfterRejected = p6SessionSettingsRevision(
+      afterRejectedSave.document, 'Settings after malformed lifetime');
+    if (afterRejectedSave.document.web_session_lifetime !== 'until_reboot' ||
+        revisionAfterRejected !== revisionBeforeRejected ||
+        rejectedCookie.max_age_seconds !== null) {
+      throw new Error('P6-03 malformed lifetime changed Settings or cookie policy');
+    }
+    requireP6SessionStableSettingsEqual(
+      p6SessionStableSettingsSnapshot(
+        afterRejectedSave.document, 'Settings after malformed lifetime'),
+      baselineSnapshot,
+      'malformed lifetime rejection',
+    );
+
+    let staleCookie = auth.cookie;
+    const logout = await fetchP6Authenticated(
+      baseUrl, auth, '/logout', {method: 'POST'}, maximumRequestMs);
+    requireP6SessionHttpStatus(logout, 200, 'explicit logout');
+    const logoutCookie = requireP6LogoutCookie(logout, 'explicit logout');
+    auth = null;
+    const logoutDocument = await logout.json();
+    if (logoutDocument?.ok !== true) {
+      throw new Error('P6-03 explicit logout did not confirm completion');
+    }
+    const staleResponse = await fetchWithin(
+      new URL(statePaths.session, baseUrl),
+      {method: 'GET', headers: {Cookie: staleCookie}},
+      maximumRequestMs,
+    );
+    staleCookie = '';
+    requireP6SessionHttpStatus(staleResponse, 401, 'stale cookie after logout');
+    requireNoP6SessionCookie(staleResponse, 'stale cookie after logout');
+
+    auth = await freshP6SessionLogin(baseUrl);
+    const afterFreshLogin = await readP6SessionState(
+      baseUrl, auth, 'fresh login after stale-cookie rejection');
+    const settingsAfterFreshLogin = await readP6SettingsState(
+      baseUrl, auth, 'Settings after fresh login');
+    if (afterFreshLogin.document.session_lifetime !== 'until_reboot' ||
+        afterFreshLogin.document.browser_presence !== 'waiting' ||
+        settingsAfterFreshLogin.document.web_session_lifetime !== 'until_reboot' ||
+        p6SessionSettingsRevisionDelta(
+          baselineRevision,
+          p6SessionSettingsRevision(
+            settingsAfterFreshLogin.document, 'Settings after fresh login'),
+        ) !== 4) {
+      throw new Error('P6-03 fresh login did not retain the four Settings saves');
+    }
+    requireP6SessionStableSettingsEqual(
+      p6SessionStableSettingsSnapshot(
+        settingsAfterFreshLogin.document, 'Settings after fresh login'),
+      baselineSnapshot,
+      'fresh-login Settings',
+    );
+
+    const finalSaved = await saveP6SessionLifetime(
+      baseUrl,
+      auth,
+      settingsAfterFreshLogin.document,
+      '15m',
+      'final 15-minute Settings save',
+    );
+    const finalSettings = await readP6SettingsState(
+      baseUrl, auth, 'final 15-minute Settings state');
+    const finalSession = await readP6SessionState(
+      baseUrl, auth, 'final 15-minute Session state');
+    if (finalSettings.document.web_session_lifetime !== '15m' ||
+        finalSession.document.session_lifetime !== '15m' ||
+        finalSession.document.browser_presence !== 'waiting' ||
+        p6SessionSettingsRevisionDelta(
+          baselineRevision,
+          p6SessionSettingsRevision(
+            finalSettings.document, 'final 15-minute Settings state'),
+        ) !== 5) {
+      throw new Error('P6-03 final 15-minute baseline is inconsistent');
+    }
+    requireP6SessionStableSettingsEqual(
+      p6SessionStableSettingsSnapshot(
+        finalSettings.document, 'final 15-minute Settings state'),
+      baselineSnapshot,
+      'final 15-minute Settings',
+    );
+    finalBaseline = true;
+
+    const beforeResources = p6SessionResourceSnapshot(
+      await readP6ManagedJson(
+        baseUrl, auth, statePaths.status, '15m', 'pre-fixture resources'),
+      'pre-fixture',
+    );
+    const names = binaryTextNames(binaryTextNonce);
+    const existing = new Set(await listAllWorkspaceNames(baseUrl, auth));
+    const collisionMatches = names.filter((name) => existing.has(name)).length;
+    if (collisionMatches !== 0) {
+      throw new Error('P6-03 exact tiny fixture names already exist');
+    }
+    const initialChat = await activeChatState(baseUrl, auth);
+    tinyLedger = validateBinaryTextLedger({
+      version: 1,
+      nonce: binaryTextNonce,
+      original_project_id: initialChat.project_id,
+      names,
+      cleanup_complete: false,
+    }, binaryTextNonce);
+    tinyLedger = await writeBinaryTextLedger(
+      binaryTextLedgerPath, tinyLedger, {});
+
+    const expected = binaryTextFixtureBytes();
+    if (expected.length !== 8 || sha256(expected) !== p2BinaryTextFixtureSha256) {
+      throw new Error('P6-03 existing P2-29 fixture contract is inconsistent');
+    }
+    await uploadWorkspaceBytes(baseUrl, auth, names[0], expected);
+    const firstHeartbeatMs = await sendP6SessionHeartbeat(
+      baseUrl, auth, 'heartbeat before silent interval');
+    const silentStartedAt = performance.now();
+    await waitUntilP6Session(silentStartedAt + 26_000);
+    const silentElapsedMs = Math.round(performance.now() - silentStartedAt);
+    if (silentElapsedMs < 26_000) {
+      throw new Error('P6-03 local silent interval ended before 26 seconds');
+    }
+
+    const downloaded = await downloadP6SessionTinyFixture(
+      baseUrl,
+      auth,
+      names[0],
+      expected,
+      p2BinaryTextFixtureSha256,
+      '15m',
+    );
+    const waiting = await readP6SessionState(
+      baseUrl, auth, 'Session immediately after tiny download');
+    if (!waiting.document.authenticated ||
+        waiting.document.browser_presence !== 'waiting') {
+      throw new Error('P6-03 tiny download renewed or ended browser presence');
+    }
+    const secondHeartbeatMs = await sendP6SessionHeartbeat(
+      baseUrl, auth, 'heartbeat after tiny download');
+    const connected = await readP6SessionState(
+      baseUrl, auth, 'Session after new heartbeat');
+    if (!connected.document.authenticated ||
+        connected.document.browser_presence !== 'connected') {
+      throw new Error('P6-03 new heartbeat did not restore Connected');
+    }
+
+    tinyLedger = await cleanupBinaryTextOwnership(
+      baseUrl, auth, binaryTextLedgerPath, tinyLedger);
+    if (!tinyLedger.cleanup_complete) {
+      throw new Error('P6-03 tiny fixture cleanup did not complete');
+    }
+    tinyLedger = await cleanupBinaryTextOwnership(
+      baseUrl, auth, binaryTextLedgerPath, tinyLedger);
+    if (!tinyLedger.cleanup_complete) {
+      throw new Error('P6-03 tiny fixture idempotent cleanup did not complete');
+    }
+    tinyCleanupComplete = true;
+
+    const afterResources = p6SessionResourceSnapshot(
+      await readP6ManagedJson(
+        baseUrl, auth, statePaths.status, '15m', 'post-cleanup resources'),
+      'post-cleanup',
+    );
+    requireP6SessionResources(beforeResources, afterResources);
+    evidence = {
+      choices: choiceEvidence,
+      malformed_status: 400,
+      malformed_revision_unchanged: true,
+      malformed_old_policy: rejectedCookie,
+      logout_cookie: logoutCookie,
+      stale_cookie_rejected: 'pass',
+      fresh_login: 'pass',
+      final_save_cookie: finalSaved.cookie,
+      final_settings_cookie: finalSettings.cookie,
+      final_session_cookie: finalSession.cookie,
+      final_settings_15m: true,
+      final_session_15m: true,
+      settings_revision_delta: 5,
+      stable_configuration_unchanged: true,
+      write_only_empty_count: 5,
+      clear_flags_false_count: 3,
+      wifi_identity_unchanged: true,
+      credential_configuration_unchanged: true,
+      raw_secret_fields_absent: true,
+      first_heartbeat_ms: firstHeartbeatMs,
+      second_heartbeat_ms: secondHeartbeatMs,
+      heartbeat_no_cookie: 'pass',
+      silent_interval_ms: silentElapsedMs,
+      tiny_download: downloaded,
+      post_download_waiting: true,
+      post_heartbeat_connected: true,
+      fixture_collision_matches: collisionMatches,
+      fixture_cleanup: {
+        remaining_matches: 0,
+        cleanup_complete: tinyLedger.cleanup_complete,
+        idempotent: true,
+      },
+      resources: {before: beforeResources, after: afterResources},
+      cleanup: 'pass',
+    };
+  } catch (error) {
+    testError = error;
+  }
+
+  if (isHttpTransportFailure(testError)) {
+    auth = null;
+    throw contextualizeP6SessionTransportFailure(testError, 'primary', null);
+  }
+
+  let cleanupError = null;
+  if (testError !== null) {
+    try {
+      if (auth === null) auth = await freshP6SessionLogin(baseUrl);
+      if (!finalBaseline) {
+        const cleanupSettings = await readP6SettingsState(
+          baseUrl, auth, 'failure-path Settings state');
+        await saveP6SessionLifetime(
+          baseUrl,
+          auth,
+          cleanupSettings.document,
+          '15m',
+          'failure-path 15-minute Settings save',
+        );
+        const restoredSettings = await readP6SettingsState(
+          baseUrl, auth, 'failure-path 15-minute Settings state');
+        const restoredSession = await readP6SessionState(
+          baseUrl, auth, 'failure-path 15-minute Session state');
+        if (restoredSettings.document.web_session_lifetime !== '15m' ||
+            restoredSession.document.session_lifetime !== '15m') {
+          throw new Error('P6-03 failure cleanup did not restore 15 minutes');
+        }
+        finalBaseline = true;
+      }
+      if (!tinyCleanupComplete && tinyLedger !== null) {
+        tinyLedger = await cleanupBinaryTextOwnership(
+          baseUrl, auth, binaryTextLedgerPath, tinyLedger);
+        tinyLedger = await cleanupBinaryTextOwnership(
+          baseUrl, auth, binaryTextLedgerPath, tinyLedger);
+        if (!tinyLedger.cleanup_complete) {
+          throw new Error('P6-03 failure cleanup did not remove the tiny fixture');
+        }
+        tinyCleanupComplete = true;
+      }
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
+
+  if (isHttpTransportFailure(cleanupError)) {
+    auth = null;
+    throw contextualizeP6SessionTransportFailure(
+      cleanupError, 'restoration', testError);
+  }
+  auth = null;
+  if (testError !== null || cleanupError !== null || evidence === null) {
+    throw new Error(
+      `P6-03 direct session suite failed; test=${testError?.message ?? 'none'}; ` +
+      `cleanup=${cleanupError?.message ?? 'none'}; final_15m=${finalBaseline}; ` +
+      `tiny_cleanup=${tinyCleanupComplete}`,
+    );
+  }
+  return evidence;
+}
+
+
 async function verifyP4SshOutputDownload(baseUrl, auth, name, expectedBytesValue) {
   if (!/^ssh-command-[0-9a-f]{16}\.log$/.test(name)) {
     throw new Error('P4-05 output filename is not an exact collision-owned log name');
@@ -5190,13 +6996,6 @@ async function verifyP4SshOutputDownload(baseUrl, auth, name, expectedBytesValue
 }
 
 async function main() {
-  const raw = JSON.parse(await readFile(credentialPath, 'utf8'));
-  const baseUrl = new URL(requireString(raw.web_ui?.url, 'web_ui.url'));
-  const password = requireString(
-    raw.web_ui?.installation_password,
-    'web_ui.installation_password',
-  );
-  const auth = await login(baseUrl, password);
   const suiteIndex = process.argv.indexOf('--suite');
   const suite = suiteIndex >= 0 ? process.argv[suiteIndex + 1] : 'full';
   if (![
@@ -5206,7 +7005,8 @@ async function main() {
     'p4-ssh-output', 'workspace-tool',
     'large-stream', 'atomic-failure', 'sd-degraded', 'instructions',
     'version-history',
-    'request-settings', 'summary-regeneration', 'context-history',
+    'request-settings', 'p6-providers', 'p6-session', 'summary-regeneration',
+    'context-history',
     'context-history-recover', 'context-history-orphan-recover',
     'archive-quota', 'archive-quota-recover',
     'binary-text', 'binary-text-recover',
@@ -5214,6 +7014,11 @@ async function main() {
   ].includes(suite)) {
     throw new Error(`Unknown hardware Web E2E suite '${suite}'`);
   }
+  const authenticated = suite === 'p6-session' ?
+    await loginP6SessionFromCredentialFile() :
+    await loginFromCredentialFile();
+  const baseUrl = authenticated.baseUrl;
+  const auth = authenticated.auth;
   if (suite === 'diagnostics') {
     const response = await request(baseUrl, auth, '/api/diagnostics', {method: 'GET'});
     const report = await response.text();
@@ -5361,6 +7166,38 @@ async function main() {
   if (suite === 'request-settings') {
     const requestSettings = await verifyRequestSettingsWeb(baseUrl, auth);
     console.log(JSON.stringify({result: 'pass', suite, request_settings: requestSettings}));
+    return;
+  }
+  if (suite === 'p6-providers') {
+    const providers = await verifyP6Providers(
+      baseUrl,
+      auth,
+      requiredCommandArgument('--p6-provider-nonce'),
+      requiredCommandArgument('--p6-provider-ledger'),
+    );
+    console.log(JSON.stringify({result: 'pass', suite, providers}));
+    return;
+  }
+  if (suite === 'p6-session') {
+    const nonce = requiredCommandArgument('--binary-text-nonce');
+    if (!/^[0-9]{8,20}$/.test(nonce)) {
+      throw new Error('P6-03 tiny-fixture nonce must contain 8 to 20 decimal digits');
+    }
+    const session = await verifyP6Session(
+      baseUrl,
+      auth,
+      nonce,
+      requiredCommandArgument('--binary-text-ledger'),
+    );
+    console.log(JSON.stringify({
+      result: 'pass',
+      suite,
+      session: {
+        protected_request_before_login:
+          authenticated.protected_request_before_login,
+        ...session,
+      },
+    }));
     return;
   }
   if (suite === 'limits') {
@@ -5525,21 +7362,52 @@ async function main() {
   const baseline = await state(baseUrl, auth);
   console.log(JSON.stringify({stage: 'state_views', samples: stateTimings}));
   recordSnapshot(measurements, 'baseline', baseline);
-  let sshStarted = false;
+  if (baseline.ssh_stage !== 'idle' || baseline.ssh_terminal_open === true) {
+    throw new Error('Full integration requires an initially idle SSH terminal');
+  }
+  const originalProjectId = requireString(
+    (await activeChatState(baseUrl, auth)).project_id,
+    'full original project_id',
+  );
+  let sshStartAttempted = false;
   const workspaceProbe = `cardmind_web_e2e_${Date.now()}.txt`;
-  let workspaceProbeCreated = false;
+  let workspaceProbeMutationAttempted = false;
+  let integrationProjectCreationAttempted = false;
+  let integrationProjectId = '';
+  let evidence = null;
+  let testError = null;
+  const cleanupErrors = [];
   try {
     const sshStartedAt = performance.now();
+    sshStartAttempted = true;
     const connected = await startSsh(baseUrl, auth);
     const sshConnectMs = Math.round(performance.now() - sshStartedAt);
-    sshStarted = true;
+    if (!Number.isInteger(connected.ssh_worker_stack_free) ||
+        connected.ssh_worker_stack_free <= 0) {
+      throw new Error('Connected SSH state did not report a positive worker stack margin');
+    }
     recordSnapshot(measurements, 'ssh_open', await state(baseUrl, auth));
     await verifyInteractiveSsh(baseUrl, auth);
     const workspaceMarker = `SD-E2E-OK-${Date.now()}`;
+    if ((await listAllWorkspaceNames(baseUrl, auth)).includes(workspaceProbe)) {
+      throw new Error(`Workspace probe collision for '${workspaceProbe}'`);
+    }
+    workspaceProbeMutationAttempted = true;
     await uploadWorkspaceProbe(baseUrl, auth, workspaceProbe, workspaceMarker);
-    workspaceProbeCreated = true;
     await verifyWorkspaceRoundTrip(baseUrl, auth, workspaceProbe, workspaceMarker);
     await verifyWorkspaceWindowSave(baseUrl, auth, workspaceProbe, workspaceMarker);
+    const baselineProjectIds = await listAllProjectIds(baseUrl, auth);
+    integrationProjectCreationAttempted = true;
+    const createdResponse = await request(baseUrl, auth, '/api/project/new', {
+      method: 'POST',
+      body: form({title: `P6 integration ${Date.now()}`}),
+    });
+    const created = await createdResponse.json();
+    const returnedProjectId = requireString(created.project_id, 'full project_id');
+    if (baselineProjectIds.includes(returnedProjectId)) {
+      throw new Error('Full integration Project reused a baseline project id');
+    }
+    integrationProjectId = returnedProjectId;
     const projectRoundTrip = await verifyProjectRoundTrip(
       baseUrl,
       auth,
@@ -5548,21 +7416,26 @@ async function main() {
     await exerciseStatePolling(baseUrl, auth, 20);
     const activeSshPromptMs = await prompt(baseUrl, auth, 'WEB-E2E-SSH-OK');
     await deleteWorkspaceProbe(baseUrl, auth, workspaceProbe);
-    workspaceProbeCreated = false;
+    if ((await listAllWorkspaceNames(baseUrl, auth)).includes(workspaceProbe)) {
+      throw new Error(`Workspace cleanup left '${workspaceProbe}' present`);
+    }
+    workspaceProbeMutationAttempted = false;
     await stopSsh(baseUrl, auth);
-    sshStarted = false;
+    sshStartAttempted = false;
     recordSnapshot(measurements, 'ssh_closed', await state(baseUrl, auth));
     const closedSshPromptMs = await prompt(baseUrl, auth, 'WEB-E2E-CLOSED-OK');
     const recovered = measurements.at(-1);
     if (recovered.free_heap < 85_000 || recovered.largest_heap < 28_000) {
       throw new Error(`Heap did not recover after SSH: ${JSON.stringify(recovered)}`);
     }
-    console.log(JSON.stringify({
+    evidence = {
       result: 'pass',
+      suite,
       ssh_connect_ms: sshConnectMs,
       ssh_device_connect_ms: connected.ssh_connect_ms,
       ssh_device_authenticate_ms: connected.ssh_authenticate_ms,
       ssh_device_open_ms: connected.ssh_open_ms,
+      ssh_worker_stack_free: connected.ssh_worker_stack_free,
       interactive_ssh: 'pass',
       workspace_sd: 'pass',
       workspace_window_save: 'pass',
@@ -5571,19 +7444,70 @@ async function main() {
       active_ssh_prompt_ms: activeSshPromptMs,
       closed_ssh_prompt_ms: closedSshPromptMs,
       measurements,
-    }));
+    };
+  } catch (error) {
+    testError = error;
   } finally {
-    if (workspaceProbeCreated) {
-      await deleteWorkspaceProbe(baseUrl, auth, workspaceProbe).catch((error) => {
-        console.error(`Workspace cleanup failed: ${error.message}`);
-      });
+    if (integrationProjectCreationAttempted) {
+      try {
+        await cleanupOwnedProjectAndRestore(
+          baseUrl, auth, integrationProjectId, originalProjectId);
+        if (!integrationProjectId) {
+          cleanupErrors.push(
+            'project cleanup: creation was attempted but no owned project id was established',
+          );
+        }
+        integrationProjectCreationAttempted = false;
+        integrationProjectId = '';
+      } catch (error) {
+        cleanupErrors.push(`project cleanup: ${error.message}`);
+      }
     }
-    if (sshStarted) {
-      await stopSsh(baseUrl, auth).catch((error) => {
-        console.error(`SSH cleanup failed: ${error.message}`);
-      });
+    if (workspaceProbeMutationAttempted) {
+      try {
+        if ((await listAllWorkspaceNames(baseUrl, auth)).includes(workspaceProbe)) {
+          await deleteWorkspaceProbe(baseUrl, auth, workspaceProbe);
+        }
+        if ((await listAllWorkspaceNames(baseUrl, auth)).includes(workspaceProbe)) {
+          throw new Error(`workspace probe '${workspaceProbe}' is still present`);
+        }
+        workspaceProbeMutationAttempted = false;
+      } catch (error) {
+        cleanupErrors.push(`workspace cleanup: ${error.message}`);
+      }
+    }
+    if (sshStartAttempted) {
+      try {
+        await stopSsh(baseUrl, auth);
+        sshStartAttempted = false;
+      } catch (error) {
+        cleanupErrors.push(`SSH cleanup: ${error.message}`);
+      }
     }
   }
+  if (testError !== null || cleanupErrors.length > 0 || evidence === null) {
+    throw new Error(
+      `Full integration failed; test=${testError?.message ?? 'none'}; ` +
+      `cleanup=${cleanupErrors.length === 0 ? 'none' : cleanupErrors.join('; ')}`,
+    );
+  }
+  console.log(JSON.stringify({...evidence, cleanup: 'pass'}));
 }
 
-await main();
+try {
+  await main();
+} catch (error) {
+  const suiteIndex = process.argv.indexOf('--suite');
+  const suite = suiteIndex >= 0 ? process.argv[suiteIndex + 1] : 'full';
+  const transportError = firstHttpTransportFailure ??
+    (isHttpTransportFailure(error) ? error : null);
+  if (['p6-session', 'full'].includes(suite) &&
+      isHttpTransportFailure(transportError)) {
+    const label = suite === 'p6-session' ?
+      'P6_SESSION_TRANSPORT_FAILURE' : 'P6_INTEGRATION_TRANSPORT_FAILURE';
+    console.error(`${label} ${p6SessionTransportReport(transportError)}`);
+    process.exitCode = p6SessionTransportExitCode;
+  } else {
+    throw error;
+  }
+}

@@ -9,6 +9,11 @@
 
 namespace cardputer {
 
+struct WrappedTextWindow {
+    std::size_t totalLines;
+    std::vector<std::string> lines;
+};
+
 std::string removeLastUtf8CodePoint(const std::string& value);
 std::size_t previousUtf8Boundary(const std::string& value, std::size_t index);
 std::size_t nextUtf8Boundary(const std::string& value, std::size_t index);
@@ -18,6 +23,14 @@ std::string insertUtf8At(const std::string& value,
 std::string eraseUtf8Before(const std::string& value, std::size_t index);
 std::string mapKeyToRussian(char key);
 std::vector<std::string> wrapUtf8Text(const std::string& value, std::size_t maxCells);
+std::size_t countWrappedUtf8Lines(const std::string& prefix,
+                                  const std::string& body,
+                                  std::size_t maxCells);
+WrappedTextWindow wrapUtf8TextWindow(const std::string& prefix,
+                                     const std::string& body,
+                                     std::size_t maxCells,
+                                     std::size_t firstLine,
+                                     std::size_t maximumLines);
 bool extractSseData(const std::string& line, std::string& data);
 bool isValidUtf8(const char* value, std::size_t size);
 bool isValidUtf8(const std::string& value);

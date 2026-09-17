@@ -89,9 +89,6 @@ void handleVoiceInput()
     }
     inputBuffer += transcription.text;
     lastDraftEditAt = millis();
-    if (draftDirtySinceAt == 0) {
-        draftDirtySinceAt = lastDraftEditAt;
-    }
     const cardputer::OperationResult cleanup = cardputer::removeVoiceRecording();
     if (cleanup.success) {
         setTransientStatus("Voice text ready; edit or press Enter", 3000);
@@ -340,7 +337,7 @@ void retryLastRequest()
     }
     const std::string requestInstructions = retryRequestInstructions;
     history = std::move(retry.messages);
-    activeResponse.clear();
+    std::string().swap(activeResponse);
     currentScreen = Screen::Chat;
     menuStatus = "";
     const std::uint32_t outputTokens = retryOutputTokens == 0

@@ -49,27 +49,13 @@ bool newPressContains(const std::vector<Point2D_t>& newPresses, std::uint8_t exp
     return false;
 }
 
-void handleKeyboard()
+void processKeyboardInput(
+    const std::vector<Point2D_t>& newPresses,
+    const Keyboard_Class::KeysState& keys)
 {
-    const std::vector<Point2D_t> currentKeys = M5Cardputer.Keyboard.keyList();
-    std::vector<Point2D_t> newPresses = newKeyPresses(currentKeys, pressedKeys);
-    const bool sameKeys = currentKeys.size() == pressedKeys.size() &&
-        std::equal(currentKeys.begin(), currentKeys.end(), pressedKeys.begin());
-    const std::uint32_t now = millis();
-    if (!sameKeys || currentKeys.empty()) {
-        keyboardRepeatStartedAt = now;
-        lastKeyboardRepeatAt = now;
-    } else if (newPresses.empty() && settings.keyboardRepeatMs > 0 &&
-               now - keyboardRepeatStartedAt >= 500U &&
-               now - lastKeyboardRepeatAt >= settings.keyboardRepeatMs) {
-        newPresses = currentKeys;
-        lastKeyboardRepeatAt = now;
-    }
-    pressedKeys = currentKeys;
     if (newPresses.empty()) {
         return;
     }
-    auto& keys = M5Cardputer.Keyboard.keysState();
     const bool cancelPressed = keys.esc || (!keys.fn && newPressContains(newPresses, '`'));
     const bool upPressed = keys.f5 || keys.up || (!keys.fn && newPressContains(newPresses, ';'));
     const bool downPressed = keys.f6 || keys.down || (!keys.fn && newPressContains(newPresses, '.'));
@@ -111,8 +97,9 @@ void handleKeyboard()
                 renderProjectActions();
                 return;
             }
-            if (availableModels.empty()) {
-                refreshModels();
+            if (availableModels.empty() ||
+                !availableModelsMatchProfile(project.project.apiProfile)) {
+                refreshModels(project.project.apiProfile);
                 if (availableModels.empty()) {
                     menuStatus = statusMessage;
                     renderProjectActions();
@@ -204,10 +191,17 @@ void handleKeyboard()
             menuStatus = exported.success ? "Exported as " + filename : exported.error;
             renderProjectActions();
         } else if (enterPressed && projectActionsIndex == 10) {
+            menuStatus = assignDeviceProjectApiProfile(selectedProjectId);
+            renderProjectActions();
+        } else if (enterPressed && projectActionsIndex == 11) {
             capabilityPolicyIndex = 0;
             menuStatus = "";
             currentScreen = Screen::ProjectToolPolicy;
             renderProjectToolPolicy();
+        } else if (enterPressed && projectActionsIndex == 12) {
+            currentScreen = Screen::DeleteProjectConfirm;
+            cardputer::showConfirmation("DELETE PROJECT", selectedProjectTitle,
+                                        "ENTER delete  ESC cancel");
         } else if (enterPressed) {
             currentScreen = Screen::ProjectList;
             menuStatus = "";
@@ -608,10 +602,18 @@ void handleKeyboard()
         } else if (upPressed) {
             chatActionsIndex = chatActionsIndex > 0 ? chatActionsIndex - 1 : 0;
             menuStatus = "";
+            if (chatActionsIndex == 3 && !selectedChatContextUsageReady) {
+                const cardputer::OperationResult loaded = loadSelectedChatContextUsage();
+                if (!loaded.success) menuStatus = loaded.error;
+            }
             renderChatActions();
         } else if (downPressed) {
             chatActionsIndex = std::min(chatActionsIndex + 1, itemCount - 1);
             menuStatus = "";
+            if (chatActionsIndex == 3 && !selectedChatContextUsageReady) {
+                const cardputer::OperationResult loaded = loadSelectedChatContextUsage();
+                if (!loaded.success) menuStatus = loaded.error;
+            }
             renderChatActions();
         } else if (enterPressed && chatActionsIndex == 0) {
             const cardputer::OperationResult result = activateChat(selectedChatId);
@@ -643,8 +645,9 @@ void handleKeyboard()
                 renderChatActions();
                 return;
             }
-            if (availableModels.empty()) {
-                refreshModels();
+            if (availableModels.empty() ||
+                !availableModelsMatchProfile(activeProjectDocument.apiProfile)) {
+                refreshModels(activeProjectDocument.apiProfile);
                 if (availableModels.empty()) {
                     menuStatus = statusMessage;
                     renderChatActions();
@@ -727,6 +730,8 @@ void handleKeyboard()
             selectedChatId = duplicated.chat.summary.id;
             selectedChatTitle = duplicated.chat.summary.title;
             selectedChatModel = duplicated.chat.model;
+            selectedChatContextUsage = {0, 0, 0, 0, 0};
+            selectedChatContextUsageReady = false;
             menuStatus = "Chat duplicated";
             renderChatActions();
         } else if (enterPressed && chatActionsIndex == 9) {
@@ -832,12 +837,17 @@ void handleKeyboard()
             currentScreen = Screen::ComposerCapabilities;
             renderComposerCapabilities();
         } else if (enterPressed && chatActionsIndex == 17) {
+            chatRenameInput = selectedChatTitle.c_str();
+            chatRenameStatus = "";
+            currentScreen = Screen::ChatRename;
+            renderChatRename();
+        } else if (enterPressed && chatActionsIndex == 18) {
             clearChatId = selectedChatId;
             clearChatTitle = selectedChatTitle;
             currentScreen = Screen::ClearChatConfirm;
             cardputer::showConfirmation("CLEAR MESSAGES", clearChatTitle,
                                         "ENTER clear  ESC cancel");
-        } else if (enterPressed && chatActionsIndex == 18) {
+        } else if (enterPressed && chatActionsIndex == 19) {
             deleteChatId = selectedChatId;
             deleteChatTitle = selectedChatTitle;
             deleteChatReturnScreen = Screen::ChatActions;
@@ -889,6 +899,253 @@ void handleKeyboard()
                 : String("Chat model saved");
             currentScreen = Screen::ChatActions;
             renderChatActions();
+        }
+        return;
+    }
+
+    if (currentScreen == Screen::ChatRename) {
+        if (cancelPressed) {
+            chatRenameInput.clear();
+            chatRenameStatus = "";
+            currentScreen = Screen::ChatActions;
+            renderChatActions();
+        } else if (keys.fn && keys.f3) {
+            keyboardLayout = keyboardLayout == cardputer::KeyboardLayout::English
+                ? cardputer::KeyboardLayout::Russian
+                : cardputer::KeyboardLayout::English;
+            chatRenameStatus = keyboardLayout == cardputer::KeyboardLayout::English
+                ? String("English layout") : String("Russian layout");
+            renderChatRename();
+        } else if (clearDraftPressed) {
+            chatRenameInput.clear();
+            chatRenameStatus = "Chat name cannot be empty";
+            renderChatRename();
+        } else if (backspacePressed) {
+            if (!chatRenameInput.empty()) {
+                chatRenameInput =
+                    cardputer::removeLastUtf8CodePoint(chatRenameInput);
+            }
+            chatRenameStatus = "";
+            renderChatRename();
+        } else if (enterPressed) {
+            if (chatRenameInput.empty() ||
+                !cardputer::isValidUtf8(chatRenameInput)) {
+                chatRenameStatus =
+                    "Chat name must be valid UTF-8 and cannot be empty";
+                renderChatRename();
+                return;
+            }
+
+            const String requestedTitle = String(cardputer::makeChatTitle(
+                chatRenameInput, cardputer::kMaximumChatTitleCells).c_str());
+            cardputer::ChatDocumentResult current =
+                cardputer::loadProjectChatMetadata(
+                    activeProjectId, selectedChatId);
+            if (!current.success) {
+                chatRenameStatus =
+                    "Chat metadata read failed: " + current.error;
+                renderChatRename();
+                return;
+            }
+            current.chat.summary.title = requestedTitle;
+            current.chat.summary.updatedAt = currentChatTimestamp();
+            const cardputer::OperationResult saved =
+                cardputer::saveProjectChatMetadata(current.chat);
+            if (saved.success) {
+                selectedChatTitle = requestedTitle;
+                if (selectedChatId == activeChatId) {
+                    activeChatTitle = requestedTitle;
+                }
+            }
+            const cardputer::ChatDocumentResult canonical =
+                cardputer::loadProjectChatMetadata(
+                    activeProjectId, selectedChatId);
+
+            if (canonical.success) {
+                selectedChatTitle = canonical.chat.summary.title;
+                if (selectedChatId == activeChatId) {
+                    activeChatTitle = canonical.chat.summary.title;
+                }
+            }
+            if (!saved.success) {
+                if (!canonical.success) {
+                    chatRenameStatus =
+                        "Chat save failed: " + saved.error +
+                        "; metadata verification failed: " + canonical.error;
+                } else if (canonical.chat.summary.title == requestedTitle) {
+                    chatRenameStatus =
+                        "Chat metadata changed; index update failed: " + saved.error;
+                } else {
+                    chatRenameStatus = "Chat rename failed: " + saved.error;
+                }
+                renderChatRename();
+                return;
+            }
+            if (!canonical.success) {
+                chatRenameStatus =
+                    "Chat rename saved, but metadata verification failed: " +
+                        canonical.error;
+                renderChatRename();
+                return;
+            }
+            if (canonical.chat.summary.title != requestedTitle) {
+                chatRenameStatus =
+                    "Chat rename verification did not match the requested title";
+                renderChatRename();
+                return;
+            }
+
+            const cardputer::OperationResult refreshed = refreshChatList();
+            if (!refreshed.success) {
+                chatRenameStatus =
+                    "Chat renamed; list refresh failed: " + refreshed.error;
+                renderChatRename();
+                return;
+            }
+            chatRenameInput.clear();
+            chatRenameStatus = "";
+            menuStatus = "Chat renamed";
+            currentScreen = Screen::ChatActions;
+            renderChatActions();
+        } else if (!keys.fn && !keys.ctrl && !keys.alt && !keys.opt) {
+            for (const char character : printableNewKeys(newPresses)) {
+                const std::string text =
+                    keyboardLayout == cardputer::KeyboardLayout::Russian
+                    ? cardputer::mapKeyToRussian(character)
+                    : std::string(1, character);
+                if (chatRenameInput.size() + text.size() >
+                    kMaximumChatRenameInputBytes) {
+                    chatRenameStatus = "Chat name limit: 256 bytes";
+                    break;
+                }
+                chatRenameInput += text;
+                chatRenameStatus = "";
+            }
+            renderChatRename();
+        }
+        return;
+    }
+
+    if (currentScreen == Screen::DeleteProjectConfirm) {
+        if (cancelPressed) {
+            currentScreen = Screen::ProjectActions;
+            renderProjectActions();
+        } else if (enterPressed) {
+            const String deletedId = selectedProjectId;
+            cardputer::OperationResult result = {true, ""};
+            bool deletionCompleted = false;
+            const cardputer::ProjectStorageManifestResult initialManifest =
+                cardputer::loadProjectStorageManifest();
+            if (!initialManifest.success) {
+                result = {
+                    false,
+                    "Cannot verify the active project before deleting: " +
+                        initialManifest.error,
+                };
+            }
+            const bool deletingActive = initialManifest.success &&
+                (deletedId == activeProjectId ||
+                 initialManifest.manifest.activeProjectId == deletedId);
+
+            if (deletingActive) {
+                const cardputer::ProjectsPageResult candidates =
+                    cardputer::listProjectsPage(
+                        0, cardputer::kMaximumProjectPageEntries);
+                if (!candidates.success) {
+                    result = {
+                        false,
+                        "Cannot choose a replacement project: " + candidates.error,
+                    };
+                }
+
+                String replacementId;
+                if (result.success) {
+                    for (const cardputer::ProjectSummary& candidate : candidates.projects) {
+                        if (candidate.id != deletedId) {
+                            replacementId = candidate.id;
+                            break;
+                        }
+                    }
+                }
+                if (result.success && replacementId.isEmpty()) {
+                    const cardputer::ProjectDocumentResult created =
+                        cardputer::createProject("Default");
+                    if (!created.success) {
+                        result = {
+                            false,
+                            "Cannot create a replacement project: " + created.error,
+                        };
+                    } else {
+                        replacementId = created.project.summary.id;
+                    }
+                }
+                if (result.success) {
+                    const cardputer::OperationResult activated =
+                        activateProject(replacementId);
+                    if (!activated.success) {
+                        result = {
+                            false,
+                            "Cannot switch before deleting the project: " +
+                                activated.error,
+                        };
+                    }
+                }
+                if (result.success) {
+                    const cardputer::ProjectStorageManifestResult manifest =
+                        cardputer::loadProjectStorageManifest();
+                    if (!manifest.success) {
+                        result = {
+                            false,
+                            "Cannot verify the replacement project selection: " +
+                                manifest.error,
+                        };
+                    } else if (manifest.manifest.activeProjectId != replacementId) {
+                        result = {
+                            false,
+                            "Replacement project selection was not stored; project was not deleted",
+                        };
+                    }
+                }
+            }
+
+            if (result.success) {
+                const cardputer::OperationResult deleted =
+                    cardputer::deleteProject(deletedId);
+                if (!deleted.success) {
+                    result = {
+                        false,
+                        "Project deletion failed: " + deleted.error,
+                    };
+                } else {
+                    deletionCompleted = true;
+                }
+            }
+
+            projectPreviousPageOffsets.clear();
+            const cardputer::OperationResult refreshed = refreshProjectPage(0);
+            if (!refreshed.success) {
+                const String refreshError = deletionCompleted
+                    ? "Project deleted; list refresh failed: " + refreshed.error
+                    : "Project list refresh failed: " + refreshed.error;
+                result = result.success
+                    ? cardputer::OperationResult{false, refreshError}
+                    : cardputer::OperationResult{
+                          false, result.error + "; " + refreshError};
+            }
+            if (refreshed.success) {
+                for (std::size_t index = 0; index < projects.size(); ++index) {
+                    if (projects[index].id == activeProjectId) {
+                        projectListIndex = index + 2;
+                        break;
+                    }
+                }
+            }
+            selectedProjectId = "";
+            selectedProjectTitle = "";
+            projectActionsIndex = 0;
+            currentScreen = Screen::ProjectList;
+            menuStatus = result.success ? String("Project deleted") : result.error;
+            renderProjectList();
         }
         return;
     }
@@ -1497,7 +1754,7 @@ void handleKeyboard()
                 openModelPicker(Screen::AiMenu);
             } else if (aiMenuIndex == 1) {
                 cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings);
+                cardputer::runProvisioningPortal(settings, providerProfileStore);
                 cachedSshToolProfileId = sshStorageReady
                     ? cardputer::sshToolAvailableProfileId() : 0;
                 cardputer::markOperation("idle");
@@ -1523,6 +1780,10 @@ void handleKeyboard()
                 openPendingToolPreview();
             } else if (aiMenuIndex == 6) {
                 openToolActivity();
+            } else if (aiMenuIndex == 7) {
+                runProviderProfiles();
+                menuStatus = "";
+                renderAiMenu();
             } else {
                 currentScreen = Screen::MainCarousel;
                 menuStatus = "";
@@ -1755,7 +2016,7 @@ void handleKeyboard()
                 renderVoiceMenu();
             } else if (voiceMenuIndex == 2) {
                 cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings);
+                cardputer::runProvisioningPortal(settings, providerProfileStore);
                 cachedSshToolProfileId = sshStorageReady
                     ? cardputer::sshToolAvailableProfileId() : 0;
                 cardputer::markOperation("idle");
@@ -1839,7 +2100,30 @@ void handleKeyboard()
                     : String("Connect CardMind to 2.4 GHz Wi-Fi first");
                 renderWebConsoleMenu();
             } else if (webConsoleMenuIndex == 2) {
-                menuStatus = "Inactive browser sessions expire after 15 minutes";
+                if (!cardputer::webSessionLifetimeIsValid(
+                        settings.webSessionLifetime)) {
+                    menuStatus = "Stored Web session lifetime is invalid";
+                    renderWebConsoleMenu();
+                    return;
+                }
+                cardputer::Settings updated = settings;
+                const std::uint8_t nextLifetime =
+                    (static_cast<std::uint8_t>(settings.webSessionLifetime) + 1U) %
+                    (static_cast<std::uint8_t>(
+                         cardputer::WebSessionLifetime::UntilReboot) + 1U);
+                updated.webSessionLifetime =
+                    static_cast<cardputer::WebSessionLifetime>(nextLifetime);
+                const cardputer::OperationResult result =
+                    cardputer::saveSettings(updated);
+                if (result.success) {
+                    settings = updated;
+                    const cardputer::WebSessionLifetimePolicy policy =
+                        cardputer::webSessionLifetimePolicy(
+                            settings.webSessionLifetime);
+                    menuStatus = "Session lifetime: " + String(policy.label);
+                } else {
+                    menuStatus = result.error;
+                }
                 renderWebConsoleMenu();
             } else if (webConsoleMenuIndex == 3) {
                 const cardputer::PythonModeStatus status = cardputer::inspectPythonMode();
@@ -1887,7 +2171,7 @@ void handleKeyboard()
                 ESP.restart();
             } else if (webConsoleMenuIndex == 5) {
                 cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings);
+                cardputer::runProvisioningPortal(settings, providerProfileStore);
                 cachedSshToolProfileId = sshStorageReady
                     ? cardputer::sshToolAvailableProfileId() : 0;
                 cardputer::markOperation("idle");
@@ -2091,7 +2375,7 @@ void handleKeyboard()
                 renderDeviceMenu();
             } else if (deviceMenuIndex == 5) {
                 cardputer::markOperation("provisioning");
-                cardputer::runProvisioningPortal(settings);
+                cardputer::runProvisioningPortal(settings, providerProfileStore);
                 cachedSshToolProfileId = sshStorageReady
                     ? cardputer::sshToolAvailableProfileId() : 0;
                 cardputer::markOperation("idle");
@@ -2807,6 +3091,12 @@ void handleKeyboard()
         openChatList(Screen::Chat);
         return;
     } else if (keys.fn && keys.f2) {
+        const cardputer::OperationResult saved = saveCurrentChatChanges();
+        if (!saved.success) {
+            statusMessage = saved.error;
+            render();
+            return;
+        }
         menuStatus = "";
         composerCapabilitiesIndex = 0;
         composerCapabilitiesReturnScreen = Screen::Chat;
@@ -2821,10 +3111,19 @@ void handleKeyboard()
                                ? String("English layout") : String("Russian layout"),
                            1800);
     } else if (keys.fn && keys.f4) {
+        const cardputer::OperationResult saved = saveCurrentChatChanges();
+        if (!saved.success) {
+            statusMessage = saved.error;
+            render();
+            return;
+        }
         openCarousel();
         return;
     } else if (keys.fn && keys.f7) {
-        const cardputer::OperationResult result = createAndActivateChat();
+        cardputer::OperationResult result = saveCurrentChatChanges();
+        if (result.success) {
+            result = createAndActivateChat();
+        }
         if (result.success) {
             setTransientStatus("New chat created", 2000);
         } else {
@@ -2834,9 +3133,7 @@ void handleKeyboard()
         speakLastAssistantResponse();
         return;
     } else if (keys.fn && (keys.f5 || keys.up)) {
-        const std::size_t maximum = cardputer::maximumChatScrollOffset(
-            history, activeResponse, statusMessage);
-        scrollOffset = std::min(scrollOffset + 4, maximum);
+        scrollOffset += 4;
     } else if (keys.fn && (keys.f6 || keys.down)) {
         scrollOffset = scrollOffset > 4 ? scrollOffset - 4 : 0;
     } else if (clearDraftPressed) {
@@ -2850,20 +3147,42 @@ void handleKeyboard()
         submitPrompt();
         return;
     } else if (!keys.fn && !keys.ctrl && !keys.alt && !keys.opt) {
-        appendKeyboardWord(printableNewKeys(newPresses));
+        const std::vector<char> printable = printableNewKeys(newPresses);
+        if (printable.empty()) {
+            return;
+        }
+        appendKeyboardWord(printable);
+    } else {
+        return;
+    }
+    if (inputBuffer != previousChatInput) {
+        lastDraftEditAt = millis();
     }
     if (inputBuffer != previousChatInput && statusMessage == previousChatStatus) {
-        const std::uint32_t now = millis();
-        lastDraftEditAt = now;
-        if (inputBuffer == persistedDraft) {
-            draftDirtySinceAt = 0;
-        } else if (draftDirtySinceAt == 0) {
-            draftDirtySinceAt = now;
-        }
         cardputer::updateChatInput(inputBuffer);
     } else {
         render();
     }
+}
+
+void handleKeyboard()
+{
+    const std::vector<Point2D_t> currentKeys = M5Cardputer.Keyboard.keyList();
+    std::vector<Point2D_t> newPresses = newKeyPresses(currentKeys, pressedKeys);
+    const bool sameKeys = currentKeys.size() == pressedKeys.size() &&
+        std::equal(currentKeys.begin(), currentKeys.end(), pressedKeys.begin());
+    const std::uint32_t now = millis();
+    if (!sameKeys || currentKeys.empty()) {
+        keyboardRepeatStartedAt = now;
+        lastKeyboardRepeatAt = now;
+    } else if (newPresses.empty() && settings.keyboardRepeatMs > 0 &&
+               now - keyboardRepeatStartedAt >= 500U &&
+               now - lastKeyboardRepeatAt >= settings.keyboardRepeatMs) {
+        newPresses = currentKeys;
+        lastKeyboardRepeatAt = now;
+    }
+    pressedKeys = currentKeys;
+    processKeyboardInput(newPresses, M5Cardputer.Keyboard.keysState());
 }
 
 }  // namespace

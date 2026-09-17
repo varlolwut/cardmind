@@ -13,6 +13,7 @@ namespace {
 constexpr const char* kNamespace = "assistant";
 constexpr const char* kSdVolumeIdentityKey = "sd_volume_id";
 constexpr const char* kToolPolicyKey = "tool_policy";
+constexpr const char* kWebSessionLifetimeKey = "session_life";
 constexpr std::size_t kSdVolumeIdentityBytes = 16;
 constexpr std::size_t kGlobalToolPolicyRecordLength =
     1 + (2 * kEncodedToolPolicyLength);
@@ -160,7 +161,7 @@ bool isValidProjectChatHistoryQuota(std::uint32_t quotaBytes)
     return quotaBytes == 0 || quotaBytes >= kMinimumProjectChatHistoryQuotaBytes;
 }
 
-OperationResult loadSettings(Settings& settings)
+OperationResult loadSettings(Settings& settings, ProviderProfileStore& providerStore)
 {
     Preferences preferences;
     if (!preferences.begin(kNamespace, false)) {
@@ -190,6 +191,21 @@ OperationResult loadSettings(Settings& settings)
         preferences.getUChar("power", 1),
         preferences.getUInt("chat_quota", 0),
     };
+    const PreferenceType sessionLifetimeType =
+        preferences.getType(kWebSessionLifetimeKey);
+    if (sessionLifetimeType != PT_INVALID) {
+        if (sessionLifetimeType != PT_U8) {
+            preferences.end();
+            return {false, "Stored Web session lifetime has the wrong NVS type"};
+        }
+        const WebSessionLifetime lifetime = static_cast<WebSessionLifetime>(
+            preferences.getUChar(kWebSessionLifetimeKey, UINT8_MAX));
+        if (!webSessionLifetimeIsValid(lifetime)) {
+            preferences.end();
+            return {false, "Stored Web session lifetime is outside the supported range"};
+        }
+        loaded.webSessionLifetime = lifetime;
+    }
     const PreferenceType policyType = preferences.getType(kToolPolicyKey);
     if (policyType == PT_INVALID) {
         const EncodedGlobalToolPoliciesResult encoded = encodeGlobalToolPolicies(
@@ -226,10 +242,33 @@ OperationResult loadSettings(Settings& settings)
         loaded.newChatToolPolicy = decoded.newChat;
     }
     preferences.end();
-    loaded.apiKey.trim();
     loaded.sttApiKey.trim();
     loaded.webSearchApiKey.trim();
     loaded.ttsApiKey.trim();
+    ProviderStoreResult providerResult = providerStore.state() ==
+            ProviderStoreState::Uninitialized
+        ? providerStore.initialize(loaded)
+        : validProviderStoreResult();
+    if (providerStore.state() == ProviderStoreState::Ready) {
+        if (!providerStoreResultSucceeded(providerResult) &&
+            providerResult.error != ProviderStoreError::CleanupFailed) {
+            return {false, String(providerResult.message.c_str())};
+        }
+        const ProviderStoreResult resolved = providerStore.loadDefaultInto(loaded);
+        if (!providerStoreResultSucceeded(resolved)) {
+            return {false, String(resolved.message.c_str())};
+        }
+        if (providerResult.error == ProviderStoreError::CleanupFailed) {
+            Serial.printf("WARN event=provider_store state=ready error=%s\n",
+                          providerStoreErrorName(providerResult.error));
+        }
+    } else if (providerStore.state() == ProviderStoreState::LegacyRetained) {
+        Serial.printf("WARN event=provider_store state=%s error=%s\n",
+                      providerStoreStateName(providerStore.state()),
+                      providerStoreErrorName(ProviderStoreError::LegacyRetained));
+    } else if (providerStore.state() != ProviderStoreState::Unconfigured) {
+        return {false, String(providerStore.stateMessage().c_str())};
+    }
     settings = loaded;
     return {true, ""};
 }
@@ -238,14 +277,6 @@ OperationResult saveSettings(const Settings& settings)
 {
     if (settings.wifiSsid.isEmpty()) {
         return {false, "Wi-Fi SSID must not be empty"};
-    }
-    if (settings.apiKey.length() < 8) {
-        return {false, "API key must contain at least 8 characters"};
-    }
-    if (!settings.apiBaseUrl.startsWith("https://") || settings.apiBaseUrl.length() < 12 ||
-        settings.apiBaseUrl.length() > 180 || settings.apiBaseUrl.indexOf(' ') >= 0 ||
-        settings.apiBaseUrl.indexOf('?') >= 0 || settings.apiBaseUrl.indexOf('#') >= 0) {
-        return {false, "API base URL must be an https:// URL without spaces, query, or fragment"};
     }
     if (settings.model.isEmpty()) {
         return {false, "Model id must not be empty"};
@@ -311,6 +342,9 @@ OperationResult saveSettings(const Settings& settings)
     if (!isValidProjectChatHistoryQuota(settings.projectChatHistoryQuotaBytes)) {
         return {false, "Chat history quota must be 0 or at least 2 MiB"};
     }
+    if (!webSessionLifetimeIsValid(settings.webSessionLifetime)) {
+        return {false, "Web session lifetime is invalid"};
+    }
     const EncodedGlobalToolPoliciesResult encodedToolPolicies =
         encodeGlobalToolPolicies(
             settings.masterToolPolicy, settings.newChatToolPolicy);
@@ -327,14 +361,6 @@ OperationResult saveSettings(const Settings& settings)
     if (result.success) {
         result = verifyStoredLength(preferences.putString("wifi_pass", settings.wifiPassword),
                                     settings.wifiPassword.length(), "Wi-Fi password");
-    }
-    if (result.success) {
-        result = verifyStoredLength(preferences.putString("api_key", settings.apiKey),
-                                    settings.apiKey.length(), "API key");
-    }
-    if (result.success) {
-        result = verifyStoredLength(preferences.putString("base_url", settings.apiBaseUrl),
-                                    settings.apiBaseUrl.length(), "API base URL");
     }
     if (result.success) {
         result = verifyStoredLength(
@@ -403,6 +429,12 @@ OperationResult saveSettings(const Settings& settings)
         preferences.putUInt("chat_quota", settings.projectChatHistoryQuotaBytes) != 4) {
         result = {false, "Failed to store project chat history quota"};
     }
+    if (result.success &&
+        preferences.putUChar(
+            kWebSessionLifetimeKey,
+            static_cast<std::uint8_t>(settings.webSessionLifetime)) != 1) {
+        result = {false, "Failed to store Web session lifetime"};
+    }
     if (result.success) {
         result = verifyStoredLength(
             preferences.putString(kToolPolicyKey, encodedToolPolicies.value),
@@ -415,13 +447,6 @@ OperationResult saveSettings(const Settings& settings)
     if (result.success) {
         result = verifyStoredValue(
             preferences.getString("wifi_pass", "__missing__"), settings.wifiPassword, "Wi-Fi password");
-    }
-    if (result.success) {
-        result = verifyStoredValue(preferences.getString("api_key", ""), settings.apiKey, "API key");
-    }
-    if (result.success) {
-        result = verifyStoredValue(
-            preferences.getString("base_url", ""), settings.apiBaseUrl, "API base URL");
     }
     if (result.success) {
         result = verifyStoredValue(preferences.getString("model", ""), settings.model, "model id");
@@ -488,6 +513,15 @@ OperationResult saveSettings(const Settings& settings)
         preferences.getUInt("chat_quota", 1) != settings.projectChatHistoryQuotaBytes) {
         result = {false, "Failed to verify project chat history quota after NVS write"};
     }
+    if (result.success &&
+        preferences.getType(kWebSessionLifetimeKey) != PT_U8) {
+        result = {false, "Failed to verify Web session lifetime NVS type after write"};
+    }
+    if (result.success &&
+        preferences.getUChar(kWebSessionLifetimeKey, UINT8_MAX) !=
+            static_cast<std::uint8_t>(settings.webSessionLifetime)) {
+        result = {false, "Failed to verify Web session lifetime after NVS write"};
+    }
     if (result.success) {
         result = verifyStoredValue(
             preferences.getString(kToolPolicyKey, ""),
@@ -496,6 +530,30 @@ OperationResult saveSettings(const Settings& settings)
     }
     preferences.end();
     return result;
+}
+
+ProviderStoreResult saveProvisionedSettings(
+    const Settings& settings,
+    ProviderProfileStore& providerStore)
+{
+    const ProviderStoreResult provider =
+        providerStore.saveProvisionedDefault(settings);
+    if (!providerStoreResultSucceeded(provider) &&
+        (provider.error != ProviderStoreError::CleanupFailed ||
+         !provider.committed)) {
+        return provider;
+    }
+    const OperationResult saved = saveSettings(settings);
+    if (!saved.success) {
+        std::string message(saved.error.c_str());
+        if (provider.committed) {
+            message = "API provider authority was saved, but other settings failed: " +
+                      message;
+        }
+        return {ProviderStoreError::Storage, provider.committed,
+                provider.outcomeUnknown, std::move(message)};
+    }
+    return provider;
 }
 
 OperationResult saveModel(const String& model)

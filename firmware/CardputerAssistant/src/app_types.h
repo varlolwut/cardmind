@@ -19,6 +19,19 @@ enum class KeyboardLayout {
     Russian,
 };
 
+enum class WebSessionLifetime : std::uint8_t {
+    Minutes15,
+    Hour1,
+    Hours8,
+    UntilReboot,
+};
+
+constexpr bool webSessionLifetimeIsValid(WebSessionLifetime lifetime)
+{
+    return static_cast<std::uint8_t>(lifetime) <=
+           static_cast<std::uint8_t>(WebSessionLifetime::UntilReboot);
+}
+
 struct Settings {
     String wifiSsid;
     String wifiPassword;
@@ -42,6 +55,7 @@ struct Settings {
     std::uint16_t keyboardRepeatMs;
     std::uint8_t powerProfile;
     std::uint32_t projectChatHistoryQuotaBytes;
+    WebSessionLifetime webSessionLifetime = WebSessionLifetime::Minutes15;
     ToolPermissionPolicy masterToolPolicy = defaultGlobalToolPermissionPolicy();
     ScopedToolPermissionPolicy newChatToolPolicy = defaultNewChatToolPermissionPolicy();
 };

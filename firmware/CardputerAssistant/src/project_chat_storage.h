@@ -44,6 +44,9 @@ ChatDocumentResult createProjectChat(
     const String& title,
     const ScopedToolPermissionPolicy& toolPolicy);
 OperationResult saveProjectChatMetadata(const ChatDocument& chat);
+OperationResult saveProjectChatDraft(const String& projectId,
+                                     const String& chatId,
+                                     const std::string& draft);
 OperationResult appendProjectChatMessages(const String& projectId,
                                            const String& chatId,
                                            const std::vector<Message>& messages,

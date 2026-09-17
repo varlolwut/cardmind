@@ -7,11 +7,13 @@
 #include "../firmware/CardputerAssistant/src/pending_tool_preview.h"
 #include "../firmware/CardputerAssistant/src/pending_tool_call.h"
 #include "../firmware/CardputerAssistant/src/python_mode.h"
+#include "../firmware/CardputerAssistant/src/provider_profiles.h"
 #include "../firmware/CardputerAssistant/src/ssh_terminal.h"
 #include "../firmware/CardputerAssistant/src/ssh_command_options.h"
 #include "../firmware/CardputerAssistant/src/tool_catalog.h"
 #include "../firmware/CardputerAssistant/src/tool_policy.h"
 #include "../firmware/CardputerAssistant/src/tool_policy_codec.h"
+#include "../firmware/CardputerAssistant/src/web_console.h"
 
 #include <algorithm>
 #include <array>
@@ -1384,6 +1386,20 @@ void testWrapping()
     const std::vector<std::string> russianWrapped = {"Ты: Это", "пример", "строки"};
     require(cardputer::wrapUtf8Text("Ты: Это пример строки", 14) == russianWrapped,
             "Cyrillic word-aware wrapping failed");
+
+    const auto segmentedWindow =
+        cardputer::wrapUtf8TextWindow("ab", "яcd", 2, 0, 7);
+    require(cardputer::countWrappedUtf8Lines("ab", "яcd", 2) == expected.size() &&
+                segmentedWindow.totalLines == expected.size() &&
+                segmentedWindow.lines == expected,
+            "Segmented UTF-8 wrapping changed prefix/body continuity");
+    const std::vector<std::string> whitespaceExpected = {"You: alpha", "", ""};
+    const auto whitespaceWindow =
+        cardputer::wrapUtf8TextWindow("You: ", "\talpha\n\n", 38, 0, 7);
+    require(whitespaceWindow.totalLines == whitespaceExpected.size() &&
+                whitespaceWindow.lines == whitespaceExpected,
+            "Segmented wrapping changed whitespace or trailing-line behavior");
+
     const std::string largeUnbrokenText(65536, 'x');
     const auto largeWrapped = cardputer::wrapUtf8Text(largeUnbrokenText, 38);
     require(largeWrapped.size() == 1725, "Large text line count is incorrect");
@@ -1393,6 +1409,35 @@ void testWrapping()
         wrappedBytes += line.size();
     }
     require(wrappedBytes == largeUnbrokenText.size(), "Large text wrapping lost data");
+
+    const std::size_t largeLineCount =
+        cardputer::countWrappedUtf8Lines("", largeUnbrokenText, 38);
+    require(largeLineCount == largeWrapped.size(),
+            "Bounded large-text line count differs from existing wrapping");
+    const std::array<std::size_t, 3> visibleLineCounts = {5U, 6U, 7U};
+    for (const std::size_t maximumLines : visibleLineCounts) {
+        const std::size_t firstLine = largeLineCount - maximumLines;
+        const auto tailWindow = cardputer::wrapUtf8TextWindow(
+            "", largeUnbrokenText, 38, firstLine, maximumLines);
+        const std::vector<std::string> expectedTail(
+            largeWrapped.begin() + firstLine, largeWrapped.end());
+        require(tailWindow.totalLines == largeLineCount &&
+                    tailWindow.lines == expectedTail &&
+                    tailWindow.lines.size() == maximumLines,
+                "Large-text tail window is not bounded to visible rows");
+    }
+    const auto topWindow =
+        cardputer::wrapUtf8TextWindow("", largeUnbrokenText, 38, 0, 7);
+    const std::vector<std::string> expectedTop(
+        largeWrapped.begin(), largeWrapped.begin() + 7);
+    require(topWindow.totalLines == largeLineCount &&
+                topWindow.lines == expectedTop,
+            "Large-text top window differs from existing wrapping");
+    const auto overscrolledWindow = cardputer::wrapUtf8TextWindow(
+        "", largeUnbrokenText, 38, largeLineCount + 1U, 7);
+    require(overscrolledWindow.totalLines == largeLineCount &&
+                overscrolledWindow.lines.empty(),
+            "Large-text overscroll result is incorrect");
 }
 
 void testSse()
@@ -1922,6 +1967,302 @@ void testWorkspaceRouting()
             "Exact-boundary trailing Russian file command was not scanned");
 }
 
+void testProviderProfileValidationAndIdentity()
+{
+    const std::string firstId = "0123456789abcdef";
+    const std::string secondId = "fedcba9876543210";
+    const std::string missingId = "1111111111111111";
+    const std::string minimumUrl = "https://a.co";
+    const std::string maximumUrl = std::string("https://") +
+        std::string(cardputer::kMaximumApiBaseUrlBytes - 8U, 'a');
+    const std::string invalidUtf8("\xC3\x28", 2);
+
+    require(cardputer::kMaximumApiProfiles == 3 &&
+                cardputer::kMaximumModelPresets == 6,
+            "Provider collection limits changed");
+    require(cardputer::kProviderStableIdBytes == 16 &&
+                cardputer::isValidProviderStableId(firstId) &&
+                !cardputer::isValidProviderStableId("0123456789abcde") &&
+                !cardputer::isValidProviderStableId("0123456789abcdeF") &&
+                !cardputer::isValidProviderStableId("0123456789abcdeg"),
+            "Provider stable ID validation failed");
+
+    require(cardputer::providerStoreResultSucceeded(
+                cardputer::validateApiProfileMetadataInput("n", minimumUrl)) &&
+                cardputer::providerStoreResultSucceeded(
+                    cardputer::validateApiProfileMetadataInput(
+                        std::string(cardputer::kMaximumApiProfileNameBytes, 'n'),
+                        maximumUrl)),
+            "API profile exact validation boundaries were rejected");
+    require(cardputer::validateApiProfileMetadataInput("", minimumUrl).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    std::string(cardputer::kMaximumApiProfileNameBytes + 1U, 'n'),
+                    minimumUrl).error == cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    invalidUtf8, minimumUrl).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    "name", "https://a.c").error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    "name", maximumUrl + "a").error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    "name", "http://a.co").error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    "name", "https://a.co?q=1").error ==
+                    cardputer::ProviderStoreError::InvalidInput,
+            "API profile invalid input was accepted");
+
+    require(cardputer::providerStoreResultSucceeded(
+                cardputer::validateApiKeyInput(
+                    std::string(cardputer::kMinimumApiKeyBytes, 'k'))) &&
+                cardputer::providerStoreResultSucceeded(
+                    cardputer::validateApiKeyInput(
+                        std::string(cardputer::kMaximumApiKeyBytes, 'k'))),
+            "API key exact validation boundaries were rejected");
+    require(cardputer::validateApiKeyInput(
+                std::string(cardputer::kMinimumApiKeyBytes - 1U, 'k')).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiKeyInput(
+                    std::string(cardputer::kMaximumApiKeyBytes + 1U, 'k')).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiKeyInput("abcd\nefgh").error ==
+                    cardputer::ProviderStoreError::InvalidInput,
+            "API key invalid input was accepted");
+
+    const cardputer::ModelPresetInput minimumPreset = {
+        "n", "m", cardputer::kMinimumModelPresetOutputTokens};
+    const cardputer::ModelPresetInput maximumPreset = {
+        std::string(cardputer::kMaximumModelPresetNameBytes, 'n'),
+        std::string(cardputer::kMaximumModelPresetModelBytes, 'm'),
+        cardputer::kMaximumModelPresetOutputTokens};
+    require(cardputer::providerStoreResultSucceeded(
+                cardputer::validateModelPresetInput(minimumPreset)) &&
+                cardputer::providerStoreResultSucceeded(
+                    cardputer::validateModelPresetInput(maximumPreset)),
+            "Model preset exact validation boundaries were rejected");
+    require(cardputer::validateModelPresetInput(
+                {"", "m", cardputer::kMinimumModelPresetOutputTokens}).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateModelPresetInput(
+                    {"n", invalidUtf8,
+                     cardputer::kMinimumModelPresetOutputTokens}).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateModelPresetInput(
+                    {"n", std::string(
+                              cardputer::kMaximumModelPresetModelBytes + 1U, 'm'),
+                     cardputer::kMinimumModelPresetOutputTokens}).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateModelPresetInput(
+                    {"n", "m",
+                     cardputer::kMinimumModelPresetOutputTokens - 1U}).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateModelPresetInput(
+                    {"n", "m",
+                     cardputer::kMaximumModelPresetOutputTokens + 1U}).error ==
+                    cardputer::ProviderStoreError::InvalidInput,
+            "Model preset invalid input was accepted");
+
+    cardputer::ApiProfileIdReferences profileIds = {};
+    profileIds[0] = &firstId;
+    profileIds[2] = &secondId;
+    require(cardputer::providerStoreResultSucceeded(
+                cardputer::validateApiProfileIdentitySet(profileIds)) &&
+                cardputer::providerStoreResultSucceeded(
+                    cardputer::validateDefaultApiProfileReference(
+                        profileIds, secondId)),
+            "Valid API profile identity set was rejected");
+    require(cardputer::validateDefaultApiProfileReference(
+                profileIds, missingId).error ==
+                    cardputer::ProviderStoreError::Corrupt,
+            "Missing default API profile reference was accepted");
+    profileIds[1] = &firstId;
+    require(cardputer::validateApiProfileIdentitySet(profileIds).error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Duplicate API profile identity was accepted");
+
+    cardputer::ModelPresetIdReferences presetIds = {};
+    presetIds[0] = &firstId;
+    presetIds[5] = &secondId;
+    require(cardputer::providerStoreResultSucceeded(
+                cardputer::validateModelPresetIdentitySet(presetIds)),
+            "Valid model preset identity set was rejected");
+    presetIds[3] = &secondId;
+    require(cardputer::validateModelPresetIdentitySet(presetIds).error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Duplicate model preset identity was accepted");
+}
+
+void testProviderProfileCodecs()
+{
+    const std::string id = "0123456789abcdef";
+    const std::string maximumUrl = std::string("https://") +
+        std::string(cardputer::kMaximumApiBaseUrlBytes - 8U, 'a');
+    const cardputer::ApiProfileMetadataRecord metadata = {
+        id,
+        std::string(cardputer::kMaximumApiProfileNameBytes, 'n'),
+        maximumUrl,
+        0x12345678U,
+        static_cast<std::uint16_t>(cardputer::kMaximumApiKeyBytes),
+    };
+    const cardputer::EncodedProviderRecordResult encodedMetadata =
+        cardputer::encodeApiProfileMetadataRecord(metadata);
+    require(cardputer::providerStoreResultSucceeded(encodedMetadata.result) &&
+                encodedMetadata.bytes.size() == 253,
+            "Maximum API profile metadata encoding failed");
+    const cardputer::ApiProfileMetadataDecodeResult decodedMetadata =
+        cardputer::decodeApiProfileMetadataRecord(encodedMetadata.bytes);
+    require(cardputer::providerStoreResultSucceeded(decodedMetadata.result) &&
+                decodedMetadata.record.id == metadata.id &&
+                decodedMetadata.record.name == metadata.name &&
+                decodedMetadata.record.baseUrl == metadata.baseUrl &&
+                decodedMetadata.record.authorityRevision ==
+                    metadata.authorityRevision &&
+                decodedMetadata.record.secretLength == metadata.secretLength,
+            "API profile metadata round trip failed");
+
+    std::vector<std::uint8_t> malformed = encodedMetadata.bytes;
+    malformed[0] = 2;
+    require(cardputer::decodeApiProfileMetadataRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile metadata version corruption was accepted");
+    malformed = encodedMetadata.bytes;
+    malformed.pop_back();
+    require(cardputer::decodeApiProfileMetadataRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile metadata length corruption was accepted");
+    malformed = encodedMetadata.bytes;
+    std::fill(malformed.begin() + 1, malformed.begin() + 5, 0);
+    require(cardputer::decodeApiProfileMetadataRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile metadata revision corruption was accepted");
+    malformed = encodedMetadata.bytes;
+    malformed[7] = 'A';
+    require(cardputer::decodeApiProfileMetadataRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile metadata ID corruption was accepted");
+
+    const cardputer::ApiProfileSecretRecord secret = {
+        metadata.authorityRevision,
+        std::string(cardputer::kMaximumApiKeyBytes, 'k'),
+    };
+    const cardputer::EncodedProviderRecordResult encodedSecret =
+        cardputer::encodeApiProfileSecretRecord(secret);
+    require(cardputer::providerStoreResultSucceeded(encodedSecret.result) &&
+                encodedSecret.bytes.size() == 519,
+            "Maximum API profile secret encoding failed");
+    const cardputer::ApiProfileSecretDecodeResult decodedSecret =
+        cardputer::decodeApiProfileSecretRecord(encodedSecret.bytes);
+    require(cardputer::providerStoreResultSucceeded(decodedSecret.result) &&
+                decodedSecret.record.authorityRevision ==
+                    secret.authorityRevision &&
+                decodedSecret.record.apiKey == secret.apiKey,
+            "API profile secret round trip failed");
+    malformed = encodedSecret.bytes;
+    malformed.pop_back();
+    require(cardputer::decodeApiProfileSecretRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile secret length corruption was accepted");
+    malformed = encodedSecret.bytes;
+    std::fill(malformed.begin() + 1, malformed.begin() + 5, 0);
+    require(cardputer::decodeApiProfileSecretRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile secret revision corruption was accepted");
+
+    const cardputer::ModelPresetRecord preset = {
+        id,
+        std::string(cardputer::kMaximumModelPresetNameBytes, 'n'),
+        std::string(cardputer::kMaximumModelPresetModelBytes, 'm'),
+        cardputer::kMaximumModelPresetOutputTokens,
+    };
+    const cardputer::EncodedProviderRecordResult encodedPreset =
+        cardputer::encodeModelPresetRecord(preset);
+    require(cardputer::providerStoreResultSucceeded(encodedPreset.result) &&
+                encodedPreset.bytes.size() == 191,
+            "Maximum model preset encoding failed");
+    const cardputer::ModelPresetDecodeResult decodedPreset =
+        cardputer::decodeModelPresetRecord(encodedPreset.bytes);
+    require(cardputer::providerStoreResultSucceeded(decodedPreset.result) &&
+                decodedPreset.record.id == preset.id &&
+                decodedPreset.record.name == preset.name &&
+                decodedPreset.record.model == preset.model &&
+                decodedPreset.record.maximumOutputTokens ==
+                    preset.maximumOutputTokens,
+            "Model preset round trip failed");
+    malformed = encodedPreset.bytes;
+    malformed[0] = 2;
+    require(cardputer::decodeModelPresetRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Model preset version corruption was accepted");
+    malformed = encodedPreset.bytes;
+    malformed.pop_back();
+    require(cardputer::decodeModelPresetRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Model preset length corruption was accepted");
+    malformed = encodedPreset.bytes;
+    malformed[1] = 'A';
+    require(cardputer::decodeModelPresetRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Model preset ID corruption was accepted");
+    malformed = encodedPreset.bytes;
+    malformed[19] = 0x7FU;
+    malformed[20] = 0;
+    malformed[21] = 0;
+    malformed[22] = 0;
+    require(cardputer::decodeModelPresetRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Model preset output corruption was accepted");
+}
+
+void testProviderProfileAuthorityOutcomes()
+{
+    const cardputer::ProviderAuthorityIdentity profile = {
+        cardputer::ProviderAuthorityKind::Profile,
+        "0123456789abcdef",
+        7,
+    };
+    require(cardputer::providerAuthorityIdentitiesEqual(profile, profile) &&
+                !cardputer::providerAuthorityIdentitiesEqual(
+                    profile,
+                    {cardputer::ProviderAuthorityKind::Profile,
+                     "0123456789abcdef", 8}) &&
+                !cardputer::providerAuthorityIdentitiesEqual(
+                    profile,
+                    {cardputer::ProviderAuthorityKind::LegacySingleton, "", 7}),
+            "Provider authority identity comparison failed");
+
+    require(cardputer::classifyProviderCandidateSetResult(0) ==
+                cardputer::ProviderWriteDisposition::Stored &&
+                cardputer::classifyProviderCandidateSetResult(
+                    cardputer::kProviderNvsNotEnoughSpaceCode) ==
+                    cardputer::ProviderWriteDisposition::Capacity &&
+                cardputer::classifyProviderCandidateSetResult(
+                    cardputer::kProviderNvsRemoveFailedCode) ==
+                    cardputer::ProviderWriteDisposition::CandidateUncertain &&
+                cardputer::classifyProviderCandidateSetResult(-1) ==
+                    cardputer::ProviderWriteDisposition::DefiniteFailure,
+            "Provider candidate-write classification failed");
+    require(cardputer::classifyProviderAuthoritySetResult(0) ==
+                cardputer::ProviderWriteDisposition::Stored &&
+                cardputer::classifyProviderAuthoritySetResult(
+                    cardputer::kProviderNvsNotEnoughSpaceCode) ==
+                    cardputer::ProviderWriteDisposition::Capacity &&
+                cardputer::classifyProviderAuthoritySetResult(
+                    cardputer::kProviderNvsRemoveFailedCode) ==
+                    cardputer::ProviderWriteDisposition::AuthorityUncertain &&
+                cardputer::classifyProviderAuthoritySetResult(-1) ==
+                    cardputer::ProviderWriteDisposition::DefiniteFailure,
+            "Provider authority-write classification failed");
+    require(cardputer::classifyProviderAuthorityCommitResult(0) ==
+                cardputer::ProviderWriteDisposition::Stored &&
+                cardputer::classifyProviderAuthorityCommitResult(-1) ==
+                    cardputer::ProviderWriteDisposition::AuthorityUncertain,
+            "Provider authority-commit classification failed");
+}
+
 void testWebSearchRouting()
 {
     require(cardputer::requestsWebSearch("Когда появится Cardputer Zero?"),
@@ -2076,6 +2417,74 @@ void testSshCommandOptions()
             "SSH output overflow must clear all partial output");
 }
 
+void testWebSessionTiming()
+{
+    using cardputer::WebSessionLifetime;
+    constexpr std::array<WebSessionLifetime, 3> finiteLifetimes = {
+        WebSessionLifetime::Minutes15,
+        WebSessionLifetime::Hour1,
+        WebSessionLifetime::Hours8,
+    };
+    constexpr std::array<std::uint32_t, 3> expectedSeconds = {
+        900U, 3600U, 28800U,
+    };
+    for (std::size_t index = 0; index < finiteLifetimes.size(); ++index) {
+        const cardputer::WebSessionLifetimePolicy policy =
+            cardputer::webSessionLifetimePolicy(finiteLifetimes[index]);
+        require(policy.valid && policy.expires &&
+                    policy.cookieMaxAgeSeconds == expectedSeconds[index] &&
+                    policy.idleMilliseconds == expectedSeconds[index] * 1000U,
+                "Finite Web session policy is incorrect");
+        require(!cardputer::webSessionAuthenticationExpired(
+                    finiteLifetimes[index], 0U,
+                    policy.idleMilliseconds - 1U) &&
+                    cardputer::webSessionAuthenticationExpired(
+                        finiteLifetimes[index], 0U,
+                        policy.idleMilliseconds) &&
+                    cardputer::webSessionAuthenticationExpired(
+                        finiteLifetimes[index], 0U,
+                        policy.idleMilliseconds + 1U),
+                "Finite Web session expiry boundary is incorrect");
+        constexpr std::uint32_t wrapStart = UINT32_MAX - 100U;
+        require(!cardputer::webSessionAuthenticationExpired(
+                    finiteLifetimes[index], wrapStart,
+                    static_cast<std::uint32_t>(
+                        wrapStart + policy.idleMilliseconds - 1U)) &&
+                    cardputer::webSessionAuthenticationExpired(
+                        finiteLifetimes[index], wrapStart,
+                        static_cast<std::uint32_t>(
+                            wrapStart + policy.idleMilliseconds)),
+                "Web session expiry failed across millis wraparound");
+    }
+    const cardputer::WebSessionLifetimePolicy rebootPolicy =
+        cardputer::webSessionLifetimePolicy(
+            WebSessionLifetime::UntilReboot);
+    require(rebootPolicy.valid && !rebootPolicy.expires &&
+                rebootPolicy.cookieMaxAgeSeconds == 0U &&
+                !cardputer::webSessionAuthenticationExpired(
+                    WebSessionLifetime::UntilReboot, UINT32_MAX, UINT32_MAX - 1U),
+            "Until-reboot Web session policy must not timer-expire");
+    require(!cardputer::webSessionLifetimeIsValid(
+                static_cast<WebSessionLifetime>(4U)) &&
+                !cardputer::webSessionLifetimeIsValid(
+                    static_cast<WebSessionLifetime>(255U)) &&
+                !cardputer::webSessionLifetimePolicy(
+                    static_cast<WebSessionLifetime>(4U)).valid,
+            "Invalid Web session lifetime was accepted");
+    require(!cardputer::webBrowserPresenceConnected(false, 0U, 0U) &&
+                cardputer::webBrowserPresenceConnected(true, 0U, 23999U) &&
+                !cardputer::webBrowserPresenceConnected(true, 0U, 24000U),
+            "Web browser presence boundary is incorrect");
+    constexpr std::uint32_t heartbeatAt = UINT32_MAX - 100U;
+    require(cardputer::webBrowserPresenceConnected(
+                true, heartbeatAt,
+                static_cast<std::uint32_t>(heartbeatAt + 23999U)) &&
+                !cardputer::webBrowserPresenceConnected(
+                    true, heartbeatAt,
+                    static_cast<std::uint32_t>(heartbeatAt + 24000U)),
+            "Web browser presence failed across millis wraparound");
+}
+
 }  // namespace
 
 int main()
@@ -2112,9 +2521,13 @@ int main()
         testSummarizedChatTail();
         testContextSummaryPrompt();
         testWorkspaceRouting();
+        testProviderProfileValidationAndIdentity();
+        testProviderProfileCodecs();
+        testProviderProfileAuthorityOutcomes();
         testWebSearchRouting();
         testSshTerminalFiltering();
         testSshCommandOptions();
+        testWebSessionTiming();
         testDocumentReader();
         testOfflineCalculator();
         std::cout << "host_tests: PASS\n";

@@ -1,0 +1,7 @@
+{
+  "version": "4.9.0",
+  "archive_url": "https://github.com/espressif/esptool/releases/download/v4.9.0/esptool-v4.9.0-windows-amd64.zip",
+  "archive_sha256": "8e66e686341eddf8c56f4df77288098680c6251e6d98750992798a5f4e87354b",
+  "install_directory": "toolchain/data/cardmind-tools/esptool-4.9.0",
+  "executable": "esptool-windows-amd64/esptool.exe"
+}

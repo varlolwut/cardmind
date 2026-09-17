@@ -35,6 +35,12 @@ struct CarouselCard {
     CarouselIcon icon;
 };
 
+struct CarouselDiagnosticResult {
+    OperationResult operation;
+    std::uint32_t nextDurationUs;
+    std::uint32_t previousDurationUs;
+};
+
 struct DeviceDiagnosticsView {
     String firmware;
     String battery;
@@ -54,6 +60,12 @@ struct DeviceDiagnosticsView {
     bool sshStorageReady;
 };
 
+enum class WebConsoleBrowserState {
+    Waiting,
+    Connected,
+    Busy,
+};
+
 enum class ChatCapabilityState {
     Off,
     Inherit,
@@ -70,21 +82,22 @@ void showProvisioning(const String& accessPointName, const String& accessPointPa
 void showFilesPortal(const String& accessPointName, const String& accessPointPassword);
 void showWebConsoleAccess(const String& address,
                           const String& accessPassword,
-                          bool sessionActive,
+                          bool authenticationActive,
+                          WebConsoleBrowserState browserState,
                           bool passwordVisible);
 void showPythonWorkspaceAccess(const String& address, const String& accessPassword);
 void showPythonWorkspaceRunning(const String& address, const String& accessPassword);
-void showChat(const std::vector<Message>& history,
-              const std::string& activeResponse,
-              const std::string& input,
-              KeyboardLayout layout,
-              const String& chatTitle,
-              const String& status,
-              std::size_t scrollOffset,
-              const ChatCapabilityStates& capabilities,
-              bool wifiConnected,
-              int batteryLevel,
-              bool batteryCharging);
+std::size_t showChat(const std::vector<Message>& history,
+                     const std::string& activeResponse,
+                     const std::string& input,
+                     KeyboardLayout layout,
+                     const String& chatTitle,
+                     const String& status,
+                     std::size_t scrollOffset,
+                     const ChatCapabilityStates& capabilities,
+                     bool wifiConnected,
+                     int batteryLevel,
+                     bool batteryCharging);
 void updateChatInput(const std::string& input);
 void showCarousel(const std::vector<CarouselCard>& cards,
                   std::size_t selectedIndex,
@@ -102,9 +115,8 @@ void animateCarousel(const std::vector<CarouselCard>& cards,
                      int batteryLevel,
                      bool batteryCharging,
                      const String& status);
-std::size_t maximumChatScrollOffset(const std::vector<Message>& history,
-                                    const std::string& activeResponse,
-                                    const String& status);
+CarouselDiagnosticResult runCarouselDiagnostic(
+    const std::vector<CarouselCard>& cards);
 void showSelectionList(const String& title,
                        const std::vector<String>& items,
                        std::size_t selectedIndex,

@@ -20,8 +20,8 @@ const previewState = {
     reset_reason: 1,
     sd_used_bytes: 3145728,
     sd_total_bytes: 31914983424,
-    active_project_id: "project-1",
-    project_id: "project-1",
+    active_project_id: "1111111111111111",
+    project_id: "1111111111111111",
     project_title: "CardMind development",
     project_archived: false,
     project_instructions: "Keep project decisions consistent across chats.",
@@ -29,7 +29,7 @@ const previewState = {
     context_byte_budget: 32768,
     maximum_output_tokens: 1024,
     automatic_compaction: true,
-    active_chat_id: "chat-1",
+    active_chat_id: "aaaaaaaaaaaaaaaa",
     active_chat_title: "CardMind UX review",
     total_messages: 18,
     active_context_messages: 18,
@@ -38,11 +38,38 @@ const previewState = {
     maximum_context_bytes: 32768,
     archived_messages: 6,
     instructions: "Answer clearly and keep code examples compact.",
-    history_before_offset: 6,
+    history_before_messages: 6,
     ssh_tools_enabled: false,
     status: "",
     firmware_version: "1.12.0-preview",
     wifi_ssid: "Studio 2.4 GHz",
+    wifi_connected_ssid: "Studio 2.4 GHz",
+    web_session_lifetime: "1h",
+    global_instructions: "Keep device guidance concise and explicit.",
+    project_chat_history_quota_bytes: 268435456,
+    master_tool_policy: "v1;ws=a;wf=a;fr=a;fw=q;sr=q;sm=q;sf=q;py=o",
+    new_chat_tool_policy: "v1;ws=i;wf=i;fr=i;fw=i;sr=i;sm=i;sf=i;py=i",
+    project_tool_policy: "v1;ws=i;wf=i;fr=i;fw=i;sr=i;sm=i;sf=i;py=i",
+    chat_tool_policy: "v1;ws=i;wf=i;fr=i;fw=i;sr=i;sm=i;sf=i;py=i",
+    provider_state: "ready",
+    provider_message: "",
+    api_profile_limit: 3,
+    model_preset_limit: 6,
+    default_api_profile_id: "3333333333333333",
+    api_profiles: [
+        {id: "3333333333333333", name: "Primary provider", api_base_url: "https://api.example.com", authority_revision: 1, is_default: true, api_key_configured: true},
+    ],
+    model_presets: [
+        {id: "5555555555555555", name: "Field notes", model: "claude-sonnet-4-6", maximum_output_tokens: 1024},
+    ],
+    project_api_profile_id: "",
+    effective_api_profile_id: "3333333333333333",
+    api_profile_error: "",
+    api_profile_available: true,
+    project_ssh_profile: "",
+    project_ssh_profile_matches: true,
+    chat_ssh_profile: "",
+    chat_ssh_profile_matches: true,
     model: "claude-sonnet-4-6",
     api_base_url: "https://api.example.com",
     api_key_configured: true,
@@ -67,8 +94,8 @@ const previewState = {
     files_revision: 1,
     settings_revision: 1,
     projects: [
-        {id: "project-1", title: "CardMind development", archived: false, chat_count: 3},
-        {id: "project-2", title: "Language practice", archived: false, chat_count: 2},
+        {id: "1111111111111111", title: "CardMind development", archived: false, chat_count: 3},
+        {id: "2222222222222222", title: "Language practice", archived: false, chat_count: 2},
     ],
     next_offset: 0,
     eof: true,
@@ -77,9 +104,9 @@ const previewState = {
     python_error: "",
     python_runtime_error: "",
     chats: [
-        {id: "chat-1", title: "CardMind UX review", pinned: true, archived: false, total_messages: 18},
-        {id: "chat-2", title: "Travel notes", pinned: false, archived: false, total_messages: 9},
-        {id: "chat-3", title: "SSH troubleshooting", pinned: false, archived: false, total_messages: 14},
+        {id: "aaaaaaaaaaaaaaaa", title: "CardMind UX review", pinned: true, archived: false, total_messages: 18},
+        {id: "bbbbbbbbbbbbbbbb", title: "Travel notes", pinned: false, archived: false, total_messages: 9},
+        {id: "cccccccccccccccc", title: "SSH troubleshooting", pinned: false, archived: false, total_messages: 14},
     ],
     messages: [
         {role: "user", content: "Can you summarize the last device regression?"},
@@ -87,8 +114,18 @@ const previewState = {
         {role: "user", content: "Show me the remaining UX work."},
         {role: "assistant", content: "The next pass focuses on navigation clarity, mobile ergonomics, and reducing heap allocations while the browser console is open."},
     ],
+    capabilities: [
+        {id: "ws", raw_project: "inherit", raw_chat: "inherit", effective: "ask", source: "global"},
+        {id: "wf", raw_project: "inherit", raw_chat: "inherit", effective: "ask", source: "global"},
+        {id: "fr", raw_project: "inherit", raw_chat: "inherit", effective: "allow", source: "global"},
+        {id: "fw", raw_project: "inherit", raw_chat: "inherit", effective: "ask", source: "global"},
+        {id: "sr", raw_project: "inherit", raw_chat: "inherit", effective: "ask", source: "global"},
+        {id: "sm", raw_project: "inherit", raw_chat: "inherit", effective: "ask", source: "global"},
+        {id: "sf", raw_project: "inherit", raw_chat: "inherit", effective: "ask", source: "global"},
+        {id: "py", raw_project: "inherit", raw_chat: "inherit", effective: "deny", source: "global"},
+    ],
     ssh_profiles: [
-        {name: "Home server", username: "cardmind", host: "192.168.1.40", port: 22, auth_mode: "key"},
+        {id: "4444444444444444", name: "Home server", username: "cardmind", host: "192.168.1.40", port: 22, auth_mode: "key"},
     ],
     ssh_selected: 0,
     ssh_name: "Home server",
@@ -102,10 +139,12 @@ const previewState = {
     ssh_key_installed: true,
     ssh_configured: true,
     files: [
-        {name: "notes.md", size: 18422},
-        {name: "report.txt", size: 92480},
-        {name: "settings.json", size: 1482},
+        {name: "notes.md", size: 18422, editable: true},
+        {name: "report.txt", size: 92480, editable: true},
+        {name: "capture.bin", size: 1482, editable: false},
     ],
+    diagnostic_metrics_enabled: false,
+    activities: [],
 };
 
 const apiStates = {
@@ -116,6 +155,30 @@ const apiStates = {
     "/api/files": previewState,
     "/api/ssh/state": previewState,
     "/api/settings": previewState,
+    "/api/activity": {activities: []},
+    "/api/pending": {present: false},
+    "/api/session": {
+        ok: true,
+        csrf: "preview",
+        authenticated: true,
+        session_lifetime: "1h",
+        browser_presence: "connected",
+    },
+    "/api/search/sources": {
+        ok: true,
+        source_kind: "latest_device_cache",
+        query: "Cardputer interface design",
+        sources: [
+            {title: "M5Stack Cardputer documentation", url: "https://docs.m5stack.com/", snippet: "Official hardware reference retained by the latest device search."},
+            {title: "Local field note", url: "device-cache:field-note", snippet: "Non-HTTP references remain plain text."},
+        ],
+    },
+    "/api/models": {
+        ok: true,
+        profile_id: "3333333333333333",
+        authority_revision: 1,
+        models: ["claude-sonnet-4-6", "gpt-5-mini"],
+    },
     "/api/project/links": {links: ["notes.md"], next_offset: 0, eof: true},
     "/api/file": {
         name: "notes.md",
@@ -130,10 +193,10 @@ const apiStates = {
 const stateScript = `const previewState=${JSON.stringify(previewState)};\n`;
 const page = source
     .replace("let csrf=''", "let csrf='preview'")
-    .replace("</script>", `${stateScript}render(previewState);</script>`)
+    .replace("initializeWebConsole().catch(showError);", "")
     .replace(
-        "loadSession().then(()=>showPanel(location.hash.slice(1)||'chat')).catch(showError);",
-        "showPanel(location.hash.slice(1)||'chat');",
+        "</script>",
+        `${stateScript}setReconnectIdentity(previewState.active_project_id,previewState.active_chat_id);showPanel(location.hash.slice(1)||'chat').catch(showError);</script>`,
     );
 const server = createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1:8765");
@@ -152,7 +215,14 @@ const server = createServer((request, response) => {
         request.resume();
         request.on("end", () => {
             response.writeHead(200, {"Content-Type": "application/json; charset=utf-8"});
-            response.end(JSON.stringify({success: true}));
+            const payload = url.pathname === "/api/wifi/scan"
+                ? {ok: true, networks: [
+                    {ssid: "Studio 2.4 GHz", rssi: -53, secured: true},
+                    {ssid: "Workshop", rssi: -67, secured: true},
+                    {ssid: "Guest", rssi: -72, secured: false},
+                ]}
+                : {ok: true};
+            response.end(JSON.stringify(payload));
         });
         return;
     }

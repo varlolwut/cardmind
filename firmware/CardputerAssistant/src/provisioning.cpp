@@ -23,12 +23,57 @@ constexpr const char* kDefaultTtsBaseUrl = "https://api.elevenlabs.io";
 constexpr const char* kDefaultTtsModel = "eleven_multilingual_v2";
 constexpr const char* kDefaultTtsVoice = "JBFqnCBsd6RMkjVDRZzb";
 constexpr std::uint32_t kRestartDelayMs = 5000;
+constexpr const char* kSetupPageStyle =
+    ":root{color-scheme:light;--canvas:#aaa49a;--paper:#ded8ce;--ink:#242622;"
+    "--muted:#59564f;--line:#746f66;--accent:#a85f12;--signal:#c77d24;"
+    "--select:#e6c89c;--warning:#f5dfaa;--danger:#f0d2ca;--graphite:#242724;"
+    "--raised:#30332f;--instrument:#f3eee4;--instrument-muted:#c9c1b4}"
+    "*{box-sizing:border-box}html{background:var(--canvas)}"
+    "body{margin:0;min-width:280px;background:var(--canvas);color:var(--ink);"
+    "font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}"
+    ".instrument{background:var(--graphite);color:var(--instrument);"
+    "border-bottom:4px solid var(--signal)}"
+    ".instrument-inner,.shell{max-width:680px;margin:0 auto}"
+    ".instrument-inner{padding:22px 18px 20px}.shell{padding:20px 18px 36px}"
+    ".eyebrow{margin:0 0 4px;color:var(--signal);font-size:14px;font-weight:800;"
+    "letter-spacing:.08em;text-transform:uppercase}"
+    "h1,.instrument-title{margin:0;font-size:20px;line-height:1.25;font-weight:800}"
+    ".instrument-note{margin:7px 0 0;color:var(--instrument-muted);font-size:14px}"
+    ".setup-card,.result-card{background:var(--paper);border:1px solid var(--line);"
+    "border-radius:2px;padding:20px}"
+    ".section{padding:0 0 20px}.section+.section{border-top:1px solid var(--line);"
+    "padding-top:20px}.section:last-of-type{padding-bottom:0}"
+    ".section h2{margin:0 0 12px;font-size:18px;line-height:1.3}"
+    ".section-kicker{margin:0 0 3px;color:var(--accent);font-size:14px;"
+    "font-weight:800;text-transform:uppercase}"
+    "label{display:block;margin:13px 0 5px;font-size:14px;font-weight:700}"
+    "input,select,button{font:inherit}input,select{display:block;width:100%;"
+    "min-height:44px;padding:10px 11px;border:1px solid var(--line);border-radius:2px;"
+    "background:var(--instrument);color:var(--ink)}select{background:var(--select)}"
+    "input::placeholder{color:#69645c;opacity:1}"
+    "input:focus-visible,select:focus-visible,button:focus-visible{outline:3px solid var(--signal);"
+    "outline-offset:2px;border-color:var(--ink)}"
+    ".note{margin:7px 0 0;color:var(--muted);font-size:14px}"
+    ".check-row{display:flex;align-items:center;gap:10px;min-height:44px;margin-top:13px}"
+    ".check-row input{flex:0 0 auto;min-height:18px;height:18px;margin:0;accent-color:var(--accent)}"
+    ".actions{border-top:1px solid var(--line);margin-top:20px;padding-top:20px}"
+    "button{width:100%;min-height:44px;padding:10px 18px;border:1px solid #6f3d09;"
+    "border-radius:2px;background:var(--signal);color:#1f211f;font-weight:800;cursor:pointer}"
+    ".notice{margin:0 0 16px;padding:12px 14px;border:1px solid;border-left-width:4px;"
+    "border-radius:2px}.notice p{margin:7px 0 0}.notice h1{margin:0}"
+    ".notice.error{background:var(--danger);border-color:#922f27;color:#5f211c}"
+    ".notice.warning{background:var(--warning);border-color:#765014;color:#59400f}"
+    ".notice.success{background:var(--select);border-color:var(--accent);color:var(--ink)}"
+    ".result-card{margin-top:4px}.result-copy{margin:16px 0 0;color:var(--muted)}"
+    "@media(max-width:480px){.instrument-inner{padding:20px 16px 18px}"
+    ".shell{padding:16px 12px 28px}.setup-card,.result-card{padding:16px 14px}}";
 WebServer webServer(80);
 Settings currentSettings;
 WifiScanResult nearbyNetworkScan = {true, {}, ""};
 bool restartPending = false;
 std::uint32_t restartAt = 0;
 String serialCommand;
+ProviderProfileStore* currentProviderStore = nullptr;
 
 String htmlEscape(const String& value)
 {
@@ -97,27 +142,32 @@ String setupPage(const String& error)
     String page =
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Cardputer Assistant Setup</title><style>"
-        "body{font:16px system-ui;background:#101522;color:#eef;max-width:560px;margin:32px auto;padding:16px}"
-        "form{background:#1b2436;padding:20px;border-radius:14px}label{display:block;margin:14px 0 5px}"
-        "input,select{box-sizing:border-box;width:100%;padding:12px;border:1px solid #52617d;border-radius:8px;background:#0c1220;color:#fff}"
-        "button{margin-top:20px;padding:12px 18px;border:0;border-radius:8px;background:#55d6be;color:#08131a;font-weight:700}"
-        ".error{background:#642a35;padding:10px;border-radius:8px}.note{color:#aebbd1;font-size:14px}</style></head><body>"
-        "<h1>Cardputer Assistant</h1><p class='note'>Open 192.168.4.1 in a browser on the connected device.</p>";
+        "<title>Cardputer Assistant Setup</title><style>";
+    page += kSetupPageStyle;
+    page +=
+        "</style></head><body><header class='instrument'><div class='instrument-inner'>"
+        "<p class='eyebrow'>CardMind / setup</p><h1>Cardputer Assistant</h1>"
+        "<p class='instrument-note'>Open 192.168.4.1 in a browser on the connected device.</p>"
+        "</div></header><main class='shell'>";
     if (!error.isEmpty()) {
-        page += "<p class='error'>" + htmlEscape(error) + "</p>";
+        page += "<div class='notice error' role='alert'>" + htmlEscape(error) + "</div>";
     }
     if (!nearbyNetworkScan.success) {
-        page += "<p class='error'>" + htmlEscape(nearbyNetworkScan.error) + "</p>";
+        page += "<div class='notice error' role='alert'>" +
+                htmlEscape(nearbyNetworkScan.error) + "</div>";
     }
     const bool manualSsid = currentSettings.wifiSsid.isEmpty() ||
         !containsNetwork(nearbyNetworkScan.networks, currentSettings.wifiSsid);
-    page += "<form method='post' action='/save'>"
+    page += "<form class='setup-card' method='post' action='/save'>"
+            "<section class='section' aria-labelledby='network-model-heading'>"
+            "<p class='section-kicker'>Core</p>"
+            "<h2 id='network-model-heading'>Network &amp; model</h2>"
             "<label for='ssid'>Wi-Fi network (2.4 GHz)</label><select id='ssid' name='ssid'>" +
             networkOptions(nearbyNetworkScan.networks, currentSettings.wifiSsid) +
-            "</select><input id='ssid_manual' name='ssid_manual' maxlength='32' placeholder='Hidden SSID' value='" +
+            "</select><div id='ssid-manual-field'><label for='ssid_manual'>Hidden network name (SSID)</label>"
+            "<input id='ssid_manual' name='ssid_manual' maxlength='32' placeholder='Hidden SSID' value='" +
             (manualSsid ? htmlEscape(currentSettings.wifiSsid) : String("")) +
-            "' style='margin-top:8px'><label for='wifi_password'>Wi-Fi password</label>"
+            "'></div><label for='wifi_password'>Wi-Fi password</label>"
             "<input id='wifi_password' name='wifi_password' type='password' maxlength='63' autocomplete='new-password'>"
             "<p class='note'>Leave blank to keep the saved password. Open networks may use an empty password.</p>"
             "<label for='api_key'>API key</label>"
@@ -127,8 +177,10 @@ String setupPage(const String& error)
             "<input id='api_base_url' name='api_base_url' type='url' required maxlength='180' placeholder='https://api.example.com' value='" +
             htmlEscape(apiBaseUrl) + "'>"
             "<label for='model'>Model id</label><input id='model' name='model' required maxlength='80' value='" +
-            htmlEscape(model) + "'>"
-            "<h2>Voice input (optional)</h2>"
+            htmlEscape(model) + "'></section>"
+            "<section class='section' aria-labelledby='voice-input-heading'>"
+            "<p class='section-kicker'>Audio</p>"
+            "<h2 id='voice-input-heading'>Voice input (optional)</h2>"
             "<p class='note'>Use a separate Groq API key. It is stored only in device NVS and is never displayed or logged.</p>"
             "<label for='stt_api_key'>STT API key</label>"
             "<input id='stt_api_key' name='stt_api_key' type='password' minlength='8' autocomplete='new-password' data-1p-ignore data-lpignore='true' placeholder='Leave blank to keep saved STT key'>"
@@ -137,15 +189,19 @@ String setupPage(const String& error)
             htmlEscape(sttBaseUrl) + "'>"
             "<label for='stt_model'>STT model</label>"
             "<input id='stt_model' name='stt_model' maxlength='80' value='" +
-            htmlEscape(sttModel) + "'>"
-            "<h2>Web search (optional)</h2>"
+            htmlEscape(sttModel) + "'></section>"
+            "<section class='section' aria-labelledby='web-search-heading'>"
+            "<p class='section-kicker'>Tools</p>"
+            "<h2 id='web-search-heading'>Web search (optional)</h2>"
             "<p class='note'>Exa is the default provider and offers a starter tier without a payment method. Its key is stored only in device NVS and is never displayed or logged.</p>"
             "<label for='search_api_key'>Web search API key</label>"
             "<input id='search_api_key' name='search_api_key' type='password' minlength='8' autocomplete='new-password' data-1p-ignore data-lpignore='true' placeholder='Leave blank to keep saved search key'>"
             "<label for='search_base_url'>Web search base URL</label>"
             "<input id='search_base_url' name='search_base_url' type='url' maxlength='180' value='" +
-            htmlEscape(webSearchBaseUrl) + "'>"
-            "<h2>Speech output (optional)</h2>"
+            htmlEscape(webSearchBaseUrl) + "'></section>"
+            "<section class='section' aria-labelledby='speech-output-heading'>"
+            "<p class='section-kicker'>Audio</p>"
+            "<h2 id='speech-output-heading'>Speech output (optional)</h2>"
             "<p class='note'>ElevenLabs multilingual TTS. The separate key is stored only in device NVS.</p>"
             "<label for='tts_api_key'>TTS API key</label>"
             "<input id='tts_api_key' name='tts_api_key' type='password' minlength='8' autocomplete='new-password' data-1p-ignore data-lpignore='true' placeholder='Leave blank to keep saved TTS key'>"
@@ -156,13 +212,14 @@ String setupPage(const String& error)
             "<input id='tts_model' name='tts_model' maxlength='80' value='" + htmlEscape(ttsModel) + "'>"
             "<label for='tts_voice'>TTS voice id</label>"
             "<input id='tts_voice' name='tts_voice' maxlength='80' value='" + htmlEscape(ttsVoice) + "'>"
-            "<label><input name='tts_auto' type='checkbox' style='width:auto' " +
+            "<label class='check-row'><input name='tts_auto' type='checkbox' style='width:auto' " +
             (currentSettings.ttsAutoPlay ? String("checked") : String("")) +
-            "> Automatically speak new assistant replies</label>"
-            "<button type='submit'>Save and restart</button></form>"
-            "<script>const s=document.getElementById('ssid'),m=document.getElementById('ssid_manual');"
-            "function u(){m.style.display=s.value?'none':'block';m.required=!s.value}"
-            "s.addEventListener('change',u);u()</script></body></html>";
+            "><span>Automatically speak new assistant replies</span></label></section>"
+            "<div class='actions'><button type='submit'>Save and restart</button></div></form>"
+            "<script>const s=document.getElementById('ssid'),m=document.getElementById('ssid_manual'),"
+            "g=document.getElementById('ssid-manual-field');"
+            "function u(){g.hidden=!!s.value;m.required=!s.value}"
+            "s.addEventListener('change',u);u()</script></main></body></html>";
     return page;
 }
 
@@ -208,7 +265,6 @@ void saveSubmittedSettings()
     String sttApiKey = webServer.arg("stt_api_key");
     String webSearchApiKey = webServer.arg("search_api_key");
     String ttsApiKey = webServer.arg("tts_api_key");
-    apiKey.trim();
     sttApiKey.trim();
     webSearchApiKey.trim();
     ttsApiKey.trim();
@@ -227,17 +283,43 @@ void saveSubmittedSettings()
     if (!ttsApiKey.isEmpty()) {
         submitted.ttsApiKey = ttsApiKey;
     }
-    const OperationResult result = saveSettings(submitted);
-    if (!result.success) {
-        webServer.send(400, "text/html; charset=utf-8", setupPage(result.error));
+    if (currentProviderStore == nullptr) {
+        webServer.send(500, "text/html; charset=utf-8",
+                       setupPage("Provider profile storage is unavailable"));
+        return;
+    }
+    const ProviderStoreResult result =
+        saveProvisionedSettings(submitted, *currentProviderStore);
+    const bool savedWithCleanupWarning =
+        !providerStoreResultSucceeded(result) && result.committed &&
+        result.error == ProviderStoreError::CleanupFailed;
+    if (!providerStoreResultSucceeded(result) && !savedWithCleanupWarning) {
+        webServer.send(
+            400, "text/html; charset=utf-8",
+            setupPage(String(result.message.c_str())));
         return;
     }
     currentSettings = submitted;
-    webServer.send(200, "text/html; charset=utf-8",
-                   "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
-                   "<body style='font:18px system-ui;background:#101522;color:#eef;padding:30px'>"
-                   "<h1>Saved and verified</h1><p>The Cardputer will restart in five seconds. "
-                   "You may close this page after it disconnects.</p></body>");
+    String response =
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Cardputer Assistant Setup</title><style>";
+    response += kSetupPageStyle;
+    response +=
+        "</style></head><body><header class='instrument'><div class='instrument-inner'>"
+        "<p class='eyebrow'>CardMind / setup</p>"
+        "<p class='instrument-title'>Cardputer Assistant</p>"
+        "</div></header><main class='shell'><article class='result-card'>";
+    response += savedWithCleanupWarning
+        ? "<div class='notice warning' role='status'><h1>Saved with a cleanup warning</h1>"
+          "<p>The provider settings are authoritative. "
+        : "<div class='notice success' role='status'><h1>Saved and verified</h1></div>";
+    if (savedWithCleanupWarning) {
+        response += htmlEscape(String(result.message.c_str())) + "</p></div>";
+    }
+    response += "<p class='result-copy'>The Cardputer will restart in five seconds. "
+                "You may close this page after it disconnects.</p></article></main></body></html>";
+    webServer.send(200, "text/html; charset=utf-8", response);
     Serial.printf("PROVISIONING settings_saved=yes nvs_verified=yes restart_delay_ms=%u\n",
                   static_cast<unsigned int>(kRestartDelayMs));
     restartPending = true;
@@ -314,9 +396,11 @@ void updateProvisioningSerial()
 
 }  // namespace
 
-[[noreturn]] void runProvisioningPortal(const Settings& existingSettings)
+[[noreturn]] void runProvisioningPortal(const Settings& existingSettings,
+                                        ProviderProfileStore& providerStore)
 {
     currentSettings = existingSettings;
+    currentProviderStore = &providerStore;
     const String accessPointName = "Cardputer-" + macSuffix();
     String accessPointPassword;
     const OperationResult passwordLoadResult = loadSetupAccessPointPassword(accessPointPassword);

@@ -52,12 +52,15 @@ void configureWebConsoleRoutes(WebServer& server,
         "X-CardMind-Tool-Intent",
         "X-CardMind-Tool-Policy",
         "X-CardMind-Ssh-Profile-Encoded",
+        "X-CardMind-Api-Profile",
     };
-    server.collectHeaders(headers, 12);
+    server.collectHeaders(headers, 13);
     server.on("/", HTTP_GET, handler(handlers, WebConsoleRouteHandler::Root));
     server.on("/login", HTTP_POST, handler(handlers, WebConsoleRouteHandler::Login));
     server.on("/logout", HTTP_POST, handler(handlers, WebConsoleRouteHandler::Logout));
     server.on("/api/session", HTTP_GET, handler(handlers, WebConsoleRouteHandler::Session));
+    server.on("/api/session", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::SessionHeartbeat));
     server.on("/api/console/close", HTTP_POST,
               handler(handlers, WebConsoleRouteHandler::CloseConsole));
     server.on("/api/state", HTTP_GET, handler(handlers, WebConsoleRouteHandler::State));
@@ -147,10 +150,30 @@ void configureWebConsoleRoutes(WebServer& server,
               handler(handlers, WebConsoleRouteHandler::ClearChat));
     server.on("/api/chat/archived", HTTP_GET,
               handler(handlers, WebConsoleRouteHandler::ArchivedMessages));
+    server.on("/api/search/sources", HTTP_GET,
+              handler(handlers, WebConsoleRouteHandler::SearchSources));
     server.on("/api/settings", HTTP_POST,
               handler(handlers, WebConsoleRouteHandler::Settings));
     server.on("/api/settings", HTTP_GET,
               handler(handlers, WebConsoleRouteHandler::State));
+    server.on("/api/wifi/scan", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::WifiScan));
+    server.on("/api/profile/create", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::ApiProfileCreate));
+    server.on("/api/profile/update", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::ApiProfileUpdate));
+    server.on("/api/profile/default", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::ApiProfileDefault));
+    server.on("/api/profile/delete", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::ApiProfileDelete));
+    server.on("/api/preset/create", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::ModelPresetCreate));
+    server.on("/api/preset/update", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::ModelPresetUpdate));
+    server.on("/api/preset/delete", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::ModelPresetDelete));
+    server.on("/api/preset/apply", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::ModelPresetApply));
     server.on("/api/models", HTTP_GET, handler(handlers, WebConsoleRouteHandler::Models));
     server.on("/api/diagnostics", HTTP_GET,
               handler(handlers, WebConsoleRouteHandler::Diagnostics));
@@ -197,6 +220,8 @@ void configureWebConsoleRoutes(WebServer& server,
               handler(handlers, WebConsoleRouteHandler::FileRead));
     server.on("/api/file/save", HTTP_POST,
               handler(handlers, WebConsoleRouteHandler::FileSave));
+    server.on("/api/file/copy", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::FileCopy));
     server.on("/api/file/rename", HTTP_POST,
               handler(handlers, WebConsoleRouteHandler::FileRename));
     server.on("/api/file/delete", HTTP_POST,

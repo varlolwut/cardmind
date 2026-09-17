@@ -2,6 +2,7 @@
 
 #include "app_types.h"
 #include "chat_storage.h"
+#include "provider_profiles.h"
 #include "ssh_client.h"
 #include "tool_policy.h"
 
@@ -16,6 +17,14 @@ struct WebConsoleRuntimeState {
     const String& status;
     const String& firmwareVersion;
     bool sshTerminalOpen;
+};
+
+struct WebConsoleProviderState {
+    ProviderStoreState state;
+    std::string message;
+    std::vector<ApiProfileSummary> profiles;
+    std::string defaultProfileId;
+    std::vector<ModelPresetRecord> presets;
 };
 
 void buildWebConsoleStatusState(const WebConsoleRuntimeState& runtime,
@@ -48,6 +57,7 @@ OperationResult buildWebConsoleSshState(
     JsonDocument& document);
 OperationResult buildWebConsoleSettingsState(
     const Settings& settings,
+    const WebConsoleProviderState& providerState,
     const WebConsoleRuntimeState& runtime,
     std::uint32_t revision,
     JsonDocument& document);

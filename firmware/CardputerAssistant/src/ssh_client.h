@@ -141,6 +141,11 @@ public:
     SshClient();
     ~SshClient();
 
+    OperationResult prepareConnection();
+    OperationResult connectPrepared(
+        const SshProfile& profile,
+        std::uint32_t timeoutMs,
+        const std::function<bool()>& isCancelled);
     OperationResult connect(const SshProfile& profile, std::uint32_t timeoutMs);
     OperationResult connectControlled(
         const SshProfile& profile,
@@ -239,6 +244,10 @@ public:
     void close();
 
 private:
+    OperationResult connectSessionControlled(
+        const SshProfile& profile,
+        std::uint32_t timeoutMs,
+        const std::function<bool()>& isCancelled);
     struct Implementation;
     Implementation* implementation_;
 };

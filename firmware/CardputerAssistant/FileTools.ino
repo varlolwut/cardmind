@@ -126,8 +126,8 @@ void renderWifiPicker()
 void openModelPicker(Screen returnScreen)
 {
     modelReturnScreen = returnScreen;
-    if (availableModels.empty()) {
-        refreshModels();
+    if (availableModels.empty() || !availableModelsMatchProfile("")) {
+        refreshModels("");
         if (availableModels.empty()) {
             if (returnScreen == Screen::MainCarousel) {
                 menuStatus = statusMessage;

@@ -1161,6 +1161,21 @@ OperationResult saveProjectChatMetadata(const ChatDocument& chat)
     return result;
 }
 
+OperationResult saveProjectChatDraft(const String& projectId,
+                                     const String& chatId,
+                                     const std::string& draft)
+{
+    if (draft.size() > kMaximumProjectChatDraftBytes || !isValidUtf8(draft)) {
+        return {false, "Project chat draft exceeds its limit or is invalid UTF-8"};
+    }
+    ChatDocumentResult current = loadProjectChatMetadataDocument(projectId, chatId);
+    if (!current.success) {
+        return {false, current.error};
+    }
+    current.chat.draft = draft;
+    return writeProjectChatMetadata(current.chat);
+}
+
 OperationResult appendProjectChatMessages(const String& projectId,
                                           const String& chatId,
                                           const std::vector<Message>& messages,
