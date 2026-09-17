@@ -65,6 +65,8 @@ struct WebConsoleResult {
     String error;
 };
 
+void configureWebConsole();
+
 WebConsoleResult runWebConsole(const Settings& settings,
                                ProviderProfileStore& providerStore,
                                const String& initialChatId,

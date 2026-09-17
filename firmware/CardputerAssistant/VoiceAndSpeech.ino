@@ -337,7 +337,7 @@ void retryLastRequest()
     }
     const std::string requestInstructions = retryRequestInstructions;
     history = std::move(retry.messages);
-    activeResponse.clear();
+    std::string().swap(activeResponse);
     currentScreen = Screen::Chat;
     menuStatus = "";
     const std::uint32_t outputTokens = retryOutputTokens == 0

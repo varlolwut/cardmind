@@ -6576,7 +6576,7 @@ outer prompt Project was deleted and the original selected Project restored. Bas
 heap/largest block/minimum were 86,640/31,732/73,256 bytes; with SSH open they were
 18,208/7,156/1,972 bytes and the SSH worker stack margin was 5,132 bytes; after SSH
 close heap/largest block recovered to 87,420/31,732 bytes. The active and closed prompt
-latencies were 25,360 and 42,404 microseconds as reported by the harness clock.
+latencies were 25,360 and 42,404 milliseconds as reported by the harness clock.
 
 The active prompt was initiated while SSH was open, but the production
 `streamStoredWebPrompt` owner closes SSH before provider TLS and emits its notice; this
@@ -6598,3 +6598,108 @@ and returned explicit `P6-07 CLOSURE GO`. P6-07 active work completed at
 02:53:32.956 UTC with no 30-minute alert or 60-minute pivot. P6-07 is now
 `completed`; P6-08 remains `pending` during the zero-active-row publication window
 until the exact remote P6-07 SHA and blobs are verified.
+
+### P6-07 reopened resource lifecycle: verified correction and closure — 2026-09-17
+
+Architect reopened P6-07 at 03:52:30 UTC after the P6-08 workload exposed
+Device and ordinary Web SSH allocation failure on the same ready image: free heap
+95,156 but largest block 23,540 could not satisfy the existing 24,576-byte receive
+allocation. P6-08 returned to pending. At 04:10 UTC Architect took this bounded
+implementation after three Phase-task replies failed to address the assigned work;
+the Phase task was told to stop edits and Device operations. Existing P6-08 WIP,
+tests, credentials, Wi-Fi configuration, main and retained stash were preserved.
+
+The final correction owns exactly CardputerAssistant.ino, VoiceAndSpeech.ino,
+src/ssh_client.cpp/.h, src/web_console.cpp/.h and this trace. It implements the
+existing cross-surface resource contract without a new allocator, pool, queue,
+route, storage format, diagnostic framework or TLS policy:
+
+- Release Device activeResponse capacity only at its ten existing explicit discard
+  sites. Streaming, partial-error and failed-save response retention are unchanged.
+- Remove Web's write-only duplicate activeResponse. SSE still receives each delta;
+  ChatResult and the existing persistence owner retain the complete response.
+- Allocate the existing complete libssh2 session before creating the Web worker.
+  The loaded profile is validated first. A prepared session has one owner; worker
+  creation failure uses existing cleanup, and trust-only continuation reuses it.
+  Device connectControlled retains its validation and shares the unchanged TCP,
+  handshake, trust and authentication continuation. No raw reservation is orphaned.
+- Reduce only the measured Web SSH worker stack from 8 KiB to 6 KiB.
+- Move the exact guarded Web route/header registration body to configureWebConsole,
+  called after configured/provisioning setup and before voice/SD/history/network
+  initialization. Ordinary Console entry retains its idempotent call. Pinned core
+  3.2.1 owns copied callbacks, cloned URIs and header Strings; this starts no socket
+  or handler. Listener, authentication and failure owners are unchanged.
+
+The independent response-release, worker-stack, prepared-connection and final
+route-lifetime design reviews returned GO before their edits; their distinct fresh
+code reviews returned GO. Architect personally reviewed the complete actual final
+six-file production diff, all changed producer/consumer paths, cleanup ownership,
+pinned WebServer/libssh2/FreeRTOS semantics and the raw runtime evidence below.
+No retained test or acceptance oracle was changed for this correction.
+
+Failed observations remain failed; none is converted by a reset or later pass:
+
+- ABBFF startup registration after storage did not repair the post-provider SSH
+  allocation failure. The response-capacity finding caused the 04:31 UTC pivot.
+- C1CAE response-only and 91A4A stack-only images still failed Web response-to-SSH
+  session allocation. These facts justified the prepared-session boundary.
+- DBEE8 prepared-session production passed Device and baseline Web SSH but failed
+  the Web provider stream with TLS -32512 (allocation failure), not an inferred
+  provider outage. Exact cleanup and normal readiness passed.
+- Disposable allocator/layout probes were not production acceptance. The 05:24
+  diagnostic HTTP readiness loss ended that run. A separate authorized vendor
+  restart and exact-owned cleanup restored readiness; that failure remains failed.
+- The D075 TLS allocation callback probe passed but did not reproduce DBEE's
+  failure. Its 8-byte BSS/layout perturbation is not accepted as a correction.
+  Final early permanent allocation was reviewed at 06:45 UTC and tested below.
+
+The exact final normal production build uses core 3.2.1, required FQBN and pinned
+libraries. Existing strict host evidence for unchanged host boundaries, current
+Web UI/asset consistency and whitespace checks passed. Application size is
+3,662,208 bytes, partition reserve 532,096, text 2,241,448, rodata 1,319,224,
+static DRAM 65,924 and IRAM 77,567. Existing budget checks pass; historical growth
+warnings remain. Compared with DBEE the application is 208 bytes smaller with
+unchanged static RAM. Build identity:
+
+- Application SHA-256: 267A3BA18F5AE0E1D8B2A7154CA7175F9EF8B826464DC5E4D51C54AFA5BBA2FE.
+- ELF SHA-256: 67440BC5745CA9F589A82CC007A05C5E0DC9B9795A6722002690E7B3AE8BF0FE.
+- Merged SHA-256: 153CD760274625566FCCB8F75AFCC386DA962E802C95A7DBE51BD2846142F9D4.
+- Options SHA-256: 20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998.
+
+This integrated candidate includes the separately owned P6-08 version 1.13.0 and
+text-budget WIP. The selective P6-07 commit excludes both; it does not claim to be
+the final release image. Exact options inspection preceded one esptool 4.9.0
+application upload with verified writes and vendor RTS reset. The diagnostic
+image is no longer flashed. Current-image artifacts use the exact-owned prefix
+artifacts/architect-p607-permanent-routes-; no build output or logs are committed.
+
+| Current-image observation (UTC) | Observed result |
+| --- | --- |
+| 06:47:34 cold normal STATUS | Ready SD/chats/files/Wi-Fi; heap/largest 99,656/36,852, main stack 7,800 bytes |
+| 06:47:48-06:51:39 existing complete P1 selector | API, actual model file write/link and cleanup, Web/fetch/cache, UI chat response and cleanup, STT/TTS TLS/auth and TTS synthesis/playback passed. SEARCHTEST correctly rejected missing required tool capability; this is not successful model-directed search. Final heap/largest 98,916/31,732, minimum 9,976, main stack 2,168 |
+| 06:52:25 Device SSH after P1, no reset | SSHSESSIONTEST pass; final heap/largest 98,616/31,732 |
+| 06:53:04 ordinary Web key SSH | Before 88,024/31,732; connected 28,632/7,156 with worker stack 3,052; after stop 82,164/31,732; Console EXIT and normal status passed |
+| 06:55:12 real Web response then key SSH | 1,683-byte streamed/stored response exact; connected 23,036/7,156, worker stack 3,052; after stop 84,088/31,732. Two native transport retries preceded successful response; their exact TLS cause is not established. Cleanup, EXIT and normal status passed |
+| 06:58:11 repeat after Console reopen | 1,767-byte streamed/stored response exact, no retry or SSE error; connected 30,452/8,692, worker stack 3,056; after stop 83,996/31,732. Cleanup and normal status passed at 06:58:12 |
+
+Both prompt runs collision-checked their UUID Project before mutation, compared
+SSE text with the stored assistant response, stopped the already-trusted key SSH
+session without trust mutation, deleted the exact returned-ID-owned Project,
+verified absence twice, restored the original Project and verified the unchanged
+settings/API/Wi-Fi projection. Each held Console stopped explicitly before serial
+close. Final normal state retained original history 17/chats 3, ready SD and Wi-Fi,
+heap/largest 92,580/31,732, lifetime minimum 1,588 and main stack 1,144 bytes.
+There was no reset or readiness loss in the final production sequence. General
+free heap remains above 70 KiB; the active-operation minimum is tight and retained
+as a release risk. Worker evidence covers the selected actual key/server, not every
+possible key. P6-08 still owns full firmware coverage, soak, packaging and release.
+The measured Device prompt preparation was 5,216 ms, not keyboard input latency.
+
+At 2026-09-17 07:04:34 UTC Architect returns explicit P6-07 CLOSURE GO for the
+reviewed correction: actual Device/API-to-SSH and repeated Web reply-to-SSH paths
+succeed, full responses persist unchanged, cleanup and normal readiness recover,
+and no unauthorized trust, credential, Wi-Fi or storage mutation was observed.
+Reopened work started 03:52:30 UTC; final required runtime proof completed
+06:58:12 UTC. Material evidence-driven pivots above are retained; no mandatory
+60-minute single-hypothesis stall was recorded. P6-07 is completed; P6-08 stays
+pending until the exact official correction commit and remote blobs are verified.

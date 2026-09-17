@@ -153,7 +153,6 @@ String sessionToken;
 String csrfToken;
 String consoleStatus;
 String consoleSerialInput;
-std::string activeResponse;
 std::uint32_t sessionLastActivityAt = 0;
 bool sessionActivityRecordedForRequest = false;
 bool sessionCookieEmittedForRequest = false;
@@ -450,7 +449,6 @@ void releaseConsoleSessionState()
     filesRevision = 0;
     sshRevision = 0;
     settingsRevision = 0;
-    std::string().swap(activeResponse);
     std::string().swap(failedWebRequestInstructions);
     failedWebRequestInstructionsChatId = String();
     failedWebRequestOutputTokens = 0;
@@ -465,7 +463,6 @@ void releaseActiveDocuments()
     using std::swap;
     swap(activeChat, releasedChat);
     swap(activeProject, releasedProject);
-    std::string().swap(activeResponse);
 }
 
 void failUpload(const String& error)
@@ -1334,7 +1331,6 @@ OperationResult loadActiveChat(const String& id)
         return {false, loaded.error};
     }
     activeChat = std::move(loaded.chat);
-    activeResponse.clear();
     ++chatRevision;
     return {true, ""};
 }
@@ -1450,7 +1446,6 @@ OperationResult loadCommittedConsoleStorageReadOnly()
         result = loadActiveChat(activeProject.activeChatId);
     } else {
         activeChat = ChatDocument{};
-        activeResponse.clear();
         ++chatRevision;
     }
     if (result.success) {
@@ -2159,11 +2154,9 @@ void streamStoredWebPrompt(const ChatDocument& storedChat,
         sendWebSse(server, "notice", "",
                    "SSH terminal was disconnected to free memory for the AI request");
     }
-    activeResponse.clear();
     consoleStatus = "Streaming from web console...";
     renderConsoleScreen();
     const ChatTextCallback onText = [](const std::string& text) {
-        activeResponse += text;
         sendWebSse(server, "delta", text, "");
     };
     Settings requestSettings = std::move(provider.settings);
@@ -2224,7 +2217,6 @@ void streamStoredWebPrompt(const ChatDocument& storedChat,
             requestInstructions,
             toolPlan.intent);
         clearFailedWebRequestInstructions();
-        activeResponse.clear();
         consoleStatus = captured.success
             ? String("Waiting for confirmation: ") + result.error
             : captured.error;
@@ -2236,7 +2228,6 @@ void streamStoredWebPrompt(const ChatDocument& storedChat,
     }
     if (!result.success) {
         consoleStatus = result.error;
-        activeResponse = result.response;
         const OperationResult reloaded = loadActiveChat(activeChat.summary.id);
         if (reloaded.success) {
             refreshChats();
@@ -2269,7 +2260,6 @@ void streamStoredWebPrompt(const ChatDocument& storedChat,
     if (saved.success) {
         saved = loadActiveChat(activeChat.summary.id);
     }
-    activeResponse.clear();
     consoleStatus = saved.success ? String("Saved") : saved.error;
     if (saved.success) {
         saved = refreshChats();
@@ -2607,20 +2597,15 @@ void continueWebPendingDecision(
     if (!historyError.isEmpty()) {
         std::string().swap(decision.pending.continuation.call.arguments);
         clearWebPendingContext();
-        activeResponse.clear();
         consoleStatus = "Tool decision recorded; response was not continued: " +
                         historyError;
         sendWebSse(server, "error", "", consoleStatus);
         renderConsoleScreen();
         return;
     }
-    activeResponse.clear();
     consoleStatus = "Continuing response...";
     renderConsoleScreen();
-    const ChatTextCallback onText = [ownerIsActive](const std::string& text) {
-        if (ownerIsActive) {
-            activeResponse += text;
-        }
+    const ChatTextCallback onText = [](const std::string& text) {
         sendWebSse(server, "delta", text, "");
     };
     const CancelCallback isCancelled = []() {
@@ -2689,7 +2674,6 @@ void continueWebPendingDecision(
         }
         webPendingContext.pendingId = next.pending.pendingId;
         std::string().swap(next.pending.continuation.call.arguments);
-        activeResponse.clear();
         consoleStatus = "Waiting for confirmation: " + result.error;
         sendWebSse(server, "pending", "", consoleStatus);
         renderConsoleScreen();
@@ -2697,7 +2681,6 @@ void continueWebPendingDecision(
     }
     if (!result.success) {
         clearWebPendingContext();
-        activeResponse = ownerIsActive ? result.response : std::string();
         consoleStatus = result.error;
         sendWebSse(server, "error", "", result.error);
         renderConsoleScreen();
@@ -2708,7 +2691,6 @@ void continueWebPendingDecision(
         currentTimestamp(), consoleSettings.projectChatHistoryQuotaBytes);
     if (!saved.success) {
         clearWebPendingContext();
-        activeResponse = ownerIsActive ? result.response : std::string();
         consoleStatus = "Response received but chat save failed: " + saved.error;
         sendWebSse(server, "error", "", consoleStatus);
         renderConsoleScreen();
@@ -2717,7 +2699,6 @@ void continueWebPendingDecision(
     const OperationResult cleared = clearPendingToolCall(
         oldPendingId, terminalState);
     clearWebPendingContext();
-    activeResponse.clear();
     OperationResult refreshed = {true, ""};
     if (ownerIsActive) {
         refreshed = loadActiveChat(chatId);
@@ -4796,7 +4777,8 @@ void runWebSshWorker(void* parameter)
     if (!authenticateOnly) {
         publishWebSshStage(WebSshStage::Connecting, "");
         const std::uint32_t startedAt = millis();
-        result = webSshClient.connect(webSshProfile, 10000);
+        result = webSshClient.connectPrepared(
+            webSshProfile, 10000, []() { return false; });
         const std::uint32_t durationMs = millis() - startedAt;
         portENTER_CRITICAL(&webSshStateMux);
         webSshConnectMs = durationMs;
@@ -4902,7 +4884,7 @@ OperationResult startWebSshWorker(bool authenticateOnly)
     TaskHandle_t task = nullptr;
     vTaskSuspendAll();
     const BaseType_t created = xTaskCreate(
-        runWebSshWorker, "web-ssh-connect", 8192,
+        runWebSshWorker, "web-ssh-connect", 6144,
         reinterpret_cast<void*>(authenticateOnly ? 1U : 0U), 1, &task);
     if (created == pdPASS && task != nullptr) {
         portENTER_CRITICAL(&webSshStateMux);
@@ -4953,7 +4935,10 @@ void handleSshStart()
     webSshHostKeyType[0] = '\0';
     webSshHostChanged = false;
     portEXIT_CRITICAL(&webSshStateMux);
-    const OperationResult result = startWebSshWorker(false);
+    OperationResult result = webSshClient.prepareConnection();
+    if (result.success) {
+        result = startWebSshWorker(false);
+    }
     if (!result.success) {
         clearWebSshConnection();
         clearWebSshAuthorityCapture();
@@ -5926,99 +5911,8 @@ void updateConsoleSerial()
 
 }  // namespace
 
-WebConsoleResult runWebConsole(const Settings& settings,
-                               ProviderProfileStore& providerStore,
-                               const String& initialChatId,
-                               const String& version)
+void configureWebConsole()
 {
-    if (WiFi.status() != WL_CONNECTED) {
-        return {false, initialChatId, "Web console requires an active Wi-Fi connection"};
-    }
-    if (!webSessionLifetimePolicy(settings.webSessionLifetime).valid) {
-        return {false, initialChatId, "Web session lifetime is invalid"};
-    }
-    setWebDiagnosticsEnabled(false);
-    Serial.println("WEB_CONSOLE stage=load_password");
-    Serial.flush();
-    consoleSettings = settings;
-    consoleProviderStore = &providerStore;
-    firmwareVersion = version;
-    OperationResult result = loadSetupAccessPointPassword(accessPassword);
-    if (!result.success || accessPassword.isEmpty()) {
-        releaseConsoleSessionState();
-        return {false, initialChatId,
-                result.success ? String("Installation password is missing") : result.error};
-    }
-    Serial.println("WEB_CONSOLE stage=refresh_projects");
-    Serial.flush();
-    settingsRevision = 1;
-    String storageStartupError;
-    const SdStorageStatus startupStorage = inspectSdStorage();
-    result = requireSdReadAccess();
-    if (result.success && startupStorage.state == SdStorageState::Ready) {
-        result = refreshProjects();
-        if (!result.success) {
-            releaseConsoleSessionState();
-            return {false, initialChatId, result.error};
-        }
-        Serial.println("WEB_CONSOLE stage=load_project");
-        Serial.flush();
-        const ProjectStorageManifestResult manifest = loadProjectStorageManifest();
-        if (!manifest.success || manifest.manifest.activeProjectId.isEmpty()) {
-            releaseConsoleSessionState();
-            return {false, initialChatId,
-                    manifest.success ? String("Active project is missing") : manifest.error};
-        }
-        result = selectActiveProject(manifest.manifest.activeProjectId);
-        if (result.success && !initialChatId.isEmpty() &&
-            initialChatId != activeChat.summary.id) {
-            ChatDocumentResult requested = loadProjectChat(
-                activeProject.summary.id, initialChatId, 96,
-                activeProjectTailByteBudget());
-            if (requested.success) {
-                activeChat = std::move(requested.chat);
-                result = saveActiveChatSelection(initialChatId);
-                if (result.success) {
-                    ++chatRevision;
-                    ++projectRevision;
-                }
-            }
-        }
-        if (!result.success) {
-            releaseConsoleSessionState();
-            return {false, initialChatId, result.error};
-        }
-    } else if (result.success && startupStorage.state == SdStorageState::Full) {
-        result = loadCommittedConsoleStorageReadOnly();
-        storageStartupError = startupStorage.error;
-        if (!result.success) {
-            activeProject = ProjectDocument{};
-            activeChat = ChatDocument{};
-            consoleProjects.clear();
-            consoleChats.clear();
-            consoleFiles.clear();
-            storageStartupError += "; ";
-            storageStartupError += result.error;
-        }
-    } else {
-        activeProject = ProjectDocument{};
-        activeChat = ChatDocument{};
-        consoleProjects.clear();
-        consoleChats.clear();
-        consoleFiles.clear();
-        storageStartupError = result.success ? startupStorage.error : result.error;
-    }
-    clearSessionAuthentication();
-    sessionActivityRecordedForRequest = false;
-    sessionCookieEmittedForRequest = false;
-    presentedAuthenticationActive = false;
-    presentedBrowserState = WebConsoleBrowserState::Waiting;
-    consoleStatus = storageStartupError;
-    exitRequested = false;
-    pythonRestartRequested = false;
-    consoleEscapeConsumed = consoleEscapePressed();
-    loginFailures = 0;
-    loginLockedUntil = 0;
     if (!routesConfigured) {
         const WebConsoleRouteHandlers handlers = {{
             sendRoot,
@@ -6113,6 +6007,102 @@ WebConsoleResult runWebConsole(const Settings& settings,
         configureWebConsoleRoutes(server, handlers);
         routesConfigured = true;
     }
+}
+
+WebConsoleResult runWebConsole(const Settings& settings,
+                               ProviderProfileStore& providerStore,
+                               const String& initialChatId,
+                               const String& version)
+{
+    if (WiFi.status() != WL_CONNECTED) {
+        return {false, initialChatId, "Web console requires an active Wi-Fi connection"};
+    }
+    if (!webSessionLifetimePolicy(settings.webSessionLifetime).valid) {
+        return {false, initialChatId, "Web session lifetime is invalid"};
+    }
+    setWebDiagnosticsEnabled(false);
+    Serial.println("WEB_CONSOLE stage=load_password");
+    Serial.flush();
+    consoleSettings = settings;
+    consoleProviderStore = &providerStore;
+    firmwareVersion = version;
+    OperationResult result = loadSetupAccessPointPassword(accessPassword);
+    if (!result.success || accessPassword.isEmpty()) {
+        releaseConsoleSessionState();
+        return {false, initialChatId,
+                result.success ? String("Installation password is missing") : result.error};
+    }
+    Serial.println("WEB_CONSOLE stage=refresh_projects");
+    Serial.flush();
+    settingsRevision = 1;
+    String storageStartupError;
+    const SdStorageStatus startupStorage = inspectSdStorage();
+    result = requireSdReadAccess();
+    if (result.success && startupStorage.state == SdStorageState::Ready) {
+        result = refreshProjects();
+        if (!result.success) {
+            releaseConsoleSessionState();
+            return {false, initialChatId, result.error};
+        }
+        Serial.println("WEB_CONSOLE stage=load_project");
+        Serial.flush();
+        const ProjectStorageManifestResult manifest = loadProjectStorageManifest();
+        if (!manifest.success || manifest.manifest.activeProjectId.isEmpty()) {
+            releaseConsoleSessionState();
+            return {false, initialChatId,
+                    manifest.success ? String("Active project is missing") : manifest.error};
+        }
+        result = selectActiveProject(manifest.manifest.activeProjectId);
+        if (result.success && !initialChatId.isEmpty() &&
+            initialChatId != activeChat.summary.id) {
+            ChatDocumentResult requested = loadProjectChat(
+                activeProject.summary.id, initialChatId, 96,
+                activeProjectTailByteBudget());
+            if (requested.success) {
+                activeChat = std::move(requested.chat);
+                result = saveActiveChatSelection(initialChatId);
+                if (result.success) {
+                    ++chatRevision;
+                    ++projectRevision;
+                }
+            }
+        }
+        if (!result.success) {
+            releaseConsoleSessionState();
+            return {false, initialChatId, result.error};
+        }
+    } else if (result.success && startupStorage.state == SdStorageState::Full) {
+        result = loadCommittedConsoleStorageReadOnly();
+        storageStartupError = startupStorage.error;
+        if (!result.success) {
+            activeProject = ProjectDocument{};
+            activeChat = ChatDocument{};
+            consoleProjects.clear();
+            consoleChats.clear();
+            consoleFiles.clear();
+            storageStartupError += "; ";
+            storageStartupError += result.error;
+        }
+    } else {
+        activeProject = ProjectDocument{};
+        activeChat = ChatDocument{};
+        consoleProjects.clear();
+        consoleChats.clear();
+        consoleFiles.clear();
+        storageStartupError = result.success ? startupStorage.error : result.error;
+    }
+    clearSessionAuthentication();
+    sessionActivityRecordedForRequest = false;
+    sessionCookieEmittedForRequest = false;
+    presentedAuthenticationActive = false;
+    presentedBrowserState = WebConsoleBrowserState::Waiting;
+    consoleStatus = storageStartupError;
+    exitRequested = false;
+    pythonRestartRequested = false;
+    consoleEscapeConsumed = consoleEscapePressed();
+    loginFailures = 0;
+    loginLockedUntil = 0;
+    configureWebConsole();
     if (!serverStarted) {
         Serial.println("WEB_CONSOLE stage=server_begin");
         Serial.flush();

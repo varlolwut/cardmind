@@ -2203,6 +2203,30 @@ SshClient::~SshClient()
     implementation_ = nullptr;
 }
 
+OperationResult SshClient::prepareConnection()
+{
+    if (implementation_ == nullptr) {
+        return {false, "Failed to allocate SSH client state"};
+    }
+    close();
+    if (libssh2_init(0) != 0) {
+        return {false, "libssh2 initialization failed"};
+    }
+    implementation_->runtimeInitialized = true;
+    const std::size_t freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    implementation_->allocator.capabilities = freePsram > 0
+        ? static_cast<std::uint32_t>(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+        : static_cast<std::uint32_t>(MALLOC_CAP_8BIT);
+    implementation_->session = initializeReservedSshSession(implementation_->allocator);
+    if (implementation_->session == nullptr) {
+        const std::size_t requested = implementation_->allocator.failedAllocationBytes;
+        close();
+        return {false, "SSH session allocation failed; requested " + String(requested) +
+                       " bytes"};
+    }
+    return {true, ""};
+}
+
 OperationResult SshClient::connect(const SshProfile& profile, std::uint32_t timeoutMs)
 {
     const std::function<bool()> isCancelled = []() { return false; };
@@ -2229,22 +2253,45 @@ OperationResult SshClient::connectControlled(
     if (isCancelled()) {
         return {false, "SSH connection canceled by user"};
     }
-    close();
-    if (libssh2_init(0) != 0) {
-        return {false, "libssh2 initialization failed"};
+    const OperationResult prepared = prepareConnection();
+    if (!prepared.success) {
+        return prepared;
     }
-    implementation_->runtimeInitialized = true;
-    const std::size_t freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    implementation_->allocator.capabilities = freePsram > 0
-        ? static_cast<std::uint32_t>(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-        : static_cast<std::uint32_t>(MALLOC_CAP_8BIT);
-    implementation_->session = initializeReservedSshSession(implementation_->allocator);
-    if (implementation_->session == nullptr) {
-        const std::size_t requested = implementation_->allocator.failedAllocationBytes;
+    return connectSessionControlled(profile, timeoutMs, isCancelled);
+}
+
+OperationResult SshClient::connectPrepared(
+    const SshProfile& profile,
+    std::uint32_t timeoutMs,
+    const std::function<bool()>& isCancelled)
+{
+    if (implementation_ == nullptr || !implementation_->runtimeInitialized ||
+        implementation_->session == nullptr) {
+        return {false, "SSH connection is not prepared"};
+    }
+    if (implementation_->network.fd() >= 0) {
+        return {false, "SSH prepared connection has already been consumed"};
+    }
+    if (timeoutMs < 1000 || timeoutMs > 120000) {
         close();
-        return {false, "SSH session allocation failed; requested " + String(requested) +
-                       " bytes"};
+        return {false, "SSH timeout must be between 1000 and 120000 ms"};
     }
+    if (!isCancelled) {
+        close();
+        return {false, "SSH connection requires a cancellation callback"};
+    }
+    if (isCancelled()) {
+        close();
+        return {false, "SSH connection canceled by user"};
+    }
+    return connectSessionControlled(profile, timeoutMs, isCancelled);
+}
+
+OperationResult SshClient::connectSessionControlled(
+    const SshProfile& profile,
+    std::uint32_t timeoutMs,
+    const std::function<bool()>& isCancelled)
+{
     implementation_->network.setTimeout(timeoutMs);
     if (!implementation_->network.connect(profile.host.c_str(), profile.port,
                                            static_cast<int32_t>(timeoutMs))) {

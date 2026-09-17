@@ -977,7 +977,7 @@ cardputer::OperationResult activateChat(const String& id)
     activeChatToolPolicy = loaded.chat.toolPolicy;
     activeChatSshProfile = loaded.chat.sshProfile;
     activeProjectDocument = project.project;
-    activeResponse.clear();
+    std::string().swap(activeResponse);
     inputBuffer = loaded.chat.draft;
     persistedDraft = inputBuffer;
     if (switchingChat) {
@@ -1010,7 +1010,7 @@ cardputer::OperationResult createAndActivateChat()
     activeChatToolPolicy = created.chat.toolPolicy;
     activeChatSshProfile = created.chat.sshProfile;
     history.clear();
-    activeResponse.clear();
+    std::string().swap(activeResponse);
     inputBuffer.clear();
     persistedDraft.clear();
     currentChatMetadataSavePending = false;
@@ -1981,7 +1981,7 @@ void executeStoredPromptRequest(const std::string& prompt,
     cardputer::ProviderSettingsResult provider =
         resolveProviderSettings(project.apiProfile);
     if (!cardputer::providerStoreResultSucceeded(provider.result)) {
-        activeResponse.clear();
+        std::string().swap(activeResponse);
         statusMessage = "API profile unavailable: " +
             String(provider.result.message.c_str());
         render();
@@ -1992,7 +1992,7 @@ void executeStoredPromptRequest(const std::string& prompt,
     std::string effectiveInstructions = effectiveProjectChatInstructions(
         project, storedChat, requestInstructions);
     clearDevicePendingContext();
-    activeResponse.clear();
+    std::string().swap(activeResponse);
     scrollOffset = 0;
     statusMessage = "Streaming...";
     render();
@@ -2048,7 +2048,7 @@ void executeStoredPromptRequest(const std::string& prompt,
     cardputer::markOperation("idle");
     if (result.outcome ==
         cardputer::ChatCompletionOutcome::AwaitingConfirmation) {
-        activeResponse.clear();
+        std::string().swap(activeResponse);
         clearRetryRequestState();
         const cardputer::OperationResult captured = captureDevicePendingContext(
             requestProjectId, requestChatId, requestPolicy,
@@ -2096,7 +2096,7 @@ void executeStoredPromptRequest(const std::string& prompt,
                                  history.begin() + finalFit.droppedMessages);
     }
     history = std::move(finalFit.retained);
-    activeResponse.clear();
+    std::string().swap(activeResponse);
     cardputer::OperationResult finalSave = cardputer::requireSdWriteAccess(
         0, cardputer::kStorageOperationalFloorBytes);
     if (finalSave.success) {
@@ -2879,7 +2879,7 @@ void continuePendingToolDecision(
             ? String("Tool decision recorded; response was not continued: ") + historyError
             : warning + "; response was not continued: " + historyError;
         if (ownerIsActive) {
-            activeResponse.clear();
+            std::string().swap(activeResponse);
             statusMessage = error;
             currentScreen = Screen::Chat;
             render();
@@ -2889,7 +2889,7 @@ void continuePendingToolDecision(
         return;
     }
     if (ownerIsActive) {
-        activeResponse.clear();
+        std::string().swap(activeResponse);
         statusMessage = "Continuing response...";
         currentScreen = Screen::Chat;
         render();
@@ -2995,7 +2995,7 @@ void continuePendingToolDecision(
         cardputer::ContextWindowResult fitted = cardputer::fitMessagesToByteBudget(
             history, contextBudget);
         history = std::move(fitted.retained);
-        activeResponse.clear();
+        std::string().swap(activeResponse);
         statusMessage = !cleared.success
             ? "Response saved; pending cleanup failed: " + cleared.error
             : (warning.isEmpty() ? String("Response complete") : warning);
@@ -3632,6 +3632,8 @@ void setup()
         cardputer::runProvisioningPortal(settings, providerProfileStore);
         cardputer::markOperation("idle");
     }
+
+    cardputer::configureWebConsole();
 
     const cardputer::OperationResult voiceStorageResult = cardputer::initializeVoiceStorage();
     voiceStorageInitialized = voiceStorageResult.success;
