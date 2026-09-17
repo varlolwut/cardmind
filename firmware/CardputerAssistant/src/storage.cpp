@@ -1,6 +1,7 @@
 #include "storage.h"
 
 #include "text_utils.h"
+#include "tool_policy_codec.h"
 
 #include <Preferences.h>
 
@@ -10,6 +11,119 @@ namespace cardputer {
 namespace {
 
 constexpr const char* kNamespace = "assistant";
+constexpr const char* kSdVolumeIdentityKey = "sd_volume_id";
+constexpr const char* kToolPolicyKey = "tool_policy";
+constexpr const char* kWebSessionLifetimeKey = "session_life";
+constexpr std::size_t kSdVolumeIdentityBytes = 16;
+constexpr std::size_t kGlobalToolPolicyRecordLength =
+    1 + (2 * kEncodedToolPolicyLength);
+
+struct EncodedGlobalToolPoliciesResult {
+    bool success;
+    String value;
+    String error;
+};
+
+struct DecodedGlobalToolPoliciesResult {
+    bool success;
+    ToolPermissionPolicy master;
+    ScopedToolPermissionPolicy newChat;
+    String error;
+};
+
+EncodedGlobalToolPoliciesResult encodeGlobalToolPolicies(
+    const ToolPermissionPolicy& master,
+    const ScopedToolPermissionPolicy& newChat)
+{
+    const ToolPolicyEncodeResult encodedMaster =
+        encodeToolPermissionPolicy(master);
+    if (encodedMaster.error != ToolPolicyCodecError::None) {
+        return {
+            false,
+            "",
+            String("Cannot store Master access: ") +
+                toolPolicyCodecErrorText(encodedMaster.error),
+        };
+    }
+    const ToolPolicyEncodeResult encodedNewChat =
+        encodeScopedToolPermissionPolicy(newChat);
+    if (encodedNewChat.error != ToolPolicyCodecError::None) {
+        return {
+            false,
+            "",
+            String("Cannot store default policy for new chats: ") +
+                toolPolicyCodecErrorText(encodedNewChat.error),
+        };
+    }
+    const String value = String(encodedMaster.encoded.value.data()) +
+        "|" + encodedNewChat.encoded.value.data();
+    return {true, value, ""};
+}
+
+DecodedGlobalToolPoliciesResult decodeGlobalToolPolicies(
+    const String& value)
+{
+    const ToolPermissionPolicy defaultMaster =
+        defaultGlobalToolPermissionPolicy();
+    const ScopedToolPermissionPolicy defaultNewChat =
+        defaultNewChatToolPermissionPolicy();
+    if (value.length() != kGlobalToolPolicyRecordLength) {
+        return {
+            false,
+            defaultMaster,
+            defaultNewChat,
+            "Stored global tool policy has an invalid length",
+        };
+    }
+    if (value[kEncodedToolPolicyLength] != '|') {
+        return {
+            false,
+            defaultMaster,
+            defaultNewChat,
+            "Stored global tool policy has an invalid separator",
+        };
+    }
+    const ToolPermissionPolicyDecodeResult decodedMaster =
+        decodeToolPermissionPolicy(value.c_str(), kEncodedToolPolicyLength);
+    if (decodedMaster.error != ToolPolicyCodecError::None) {
+        return {
+            false,
+            defaultMaster,
+            defaultNewChat,
+            String("Stored Master access is invalid: ") +
+                toolPolicyCodecErrorText(decodedMaster.error),
+        };
+    }
+    const ScopedToolPermissionPolicyDecodeResult decodedNewChat =
+        decodeScopedToolPermissionPolicy(
+            value.c_str() + 1 + kEncodedToolPolicyLength,
+            kEncodedToolPolicyLength);
+    if (decodedNewChat.error != ToolPolicyCodecError::None) {
+        return {
+            false,
+            defaultMaster,
+            defaultNewChat,
+            String("Stored default policy for new chats is invalid: ") +
+                toolPolicyCodecErrorText(decodedNewChat.error),
+        };
+    }
+    return {true, decodedMaster.policy, decodedNewChat.policy, ""};
+}
+
+bool isValidSdVolumeIdentity(const String& identity)
+{
+    if (identity.length() != kSdVolumeIdentityBytes) {
+        return false;
+    }
+    for (std::size_t index = 0; index < identity.length(); ++index) {
+        const char character = identity[index];
+        if (!((character >= '0' && character <= '9') ||
+              (character >= 'a' && character <= 'f'))) {
+            return false;
+        }
+    }
+    return true;
+}
 
 OperationResult verifyStoredLength(std::size_t storedLength, std::size_t expectedLength, const char* field)
 {
@@ -42,7 +156,12 @@ bool isSafeTtsIdentifier(const String& value)
 
 }  // namespace
 
-OperationResult loadSettings(Settings& settings)
+bool isValidProjectChatHistoryQuota(std::uint32_t quotaBytes)
+{
+    return quotaBytes == 0 || quotaBytes >= kMinimumProjectChatHistoryQuotaBytes;
+}
+
+OperationResult loadSettings(Settings& settings, ProviderProfileStore& providerStore)
 {
     Preferences preferences;
     if (!preferences.begin(kNamespace, false)) {
@@ -54,6 +173,7 @@ OperationResult loadSettings(Settings& settings)
         preferences.getString("api_key", ""),
         preferences.getString("base_url", ""),
         preferences.getString("model", ""),
+        preferences.getString("global_inst", ""),
         preferences.getString("stt_key", ""),
         preferences.getString("stt_url", ""),
         preferences.getString("stt_model", ""),
@@ -69,12 +189,86 @@ OperationResult loadSettings(Settings& settings)
         preferences.getUShort("sleep_min", 5),
         preferences.getUShort("key_repeat", 125),
         preferences.getUChar("power", 1),
+        preferences.getUInt("chat_quota", 0),
     };
+    const PreferenceType sessionLifetimeType =
+        preferences.getType(kWebSessionLifetimeKey);
+    if (sessionLifetimeType != PT_INVALID) {
+        if (sessionLifetimeType != PT_U8) {
+            preferences.end();
+            return {false, "Stored Web session lifetime has the wrong NVS type"};
+        }
+        const WebSessionLifetime lifetime = static_cast<WebSessionLifetime>(
+            preferences.getUChar(kWebSessionLifetimeKey, UINT8_MAX));
+        if (!webSessionLifetimeIsValid(lifetime)) {
+            preferences.end();
+            return {false, "Stored Web session lifetime is outside the supported range"};
+        }
+        loaded.webSessionLifetime = lifetime;
+    }
+    const PreferenceType policyType = preferences.getType(kToolPolicyKey);
+    if (policyType == PT_INVALID) {
+        const EncodedGlobalToolPoliciesResult encoded = encodeGlobalToolPolicies(
+            loaded.masterToolPolicy, loaded.newChatToolPolicy);
+        if (!encoded.success) {
+            preferences.end();
+            return {false, encoded.error};
+        }
+        OperationResult migration = verifyStoredLength(
+            preferences.putString(kToolPolicyKey, encoded.value),
+            encoded.value.length(),
+            "global tool policy");
+        if (migration.success) {
+            migration = verifyStoredValue(
+                preferences.getString(kToolPolicyKey, ""),
+                encoded.value,
+                "global tool policy");
+        }
+        if (!migration.success) {
+            preferences.end();
+            return {false, migration.error};
+        }
+    } else if (policyType != PT_STR) {
+        preferences.end();
+        return {false, "Stored global tool policy has the wrong NVS type"};
+    } else {
+        const DecodedGlobalToolPoliciesResult decoded =
+            decodeGlobalToolPolicies(preferences.getString(kToolPolicyKey, ""));
+        if (!decoded.success) {
+            preferences.end();
+            return {false, decoded.error};
+        }
+        loaded.masterToolPolicy = decoded.master;
+        loaded.newChatToolPolicy = decoded.newChat;
+    }
     preferences.end();
-    loaded.apiKey.trim();
     loaded.sttApiKey.trim();
     loaded.webSearchApiKey.trim();
     loaded.ttsApiKey.trim();
+    ProviderStoreResult providerResult = providerStore.state() ==
+            ProviderStoreState::Uninitialized
+        ? providerStore.initialize(loaded)
+        : validProviderStoreResult();
+    if (providerStore.state() == ProviderStoreState::Ready) {
+        if (!providerStoreResultSucceeded(providerResult) &&
+            providerResult.error != ProviderStoreError::CleanupFailed) {
+            return {false, String(providerResult.message.c_str())};
+        }
+        const ProviderStoreResult resolved = providerStore.loadDefaultInto(loaded);
+        if (!providerStoreResultSucceeded(resolved)) {
+            return {false, String(resolved.message.c_str())};
+        }
+        if (providerResult.error == ProviderStoreError::CleanupFailed) {
+            Serial.printf("WARN event=provider_store state=ready error=%s\n",
+                          providerStoreErrorName(providerResult.error));
+        }
+    } else if (providerStore.state() == ProviderStoreState::LegacyRetained) {
+        Serial.printf("WARN event=provider_store state=%s error=%s\n",
+                      providerStoreStateName(providerStore.state()),
+                      providerStoreErrorName(ProviderStoreError::LegacyRetained));
+    } else if (providerStore.state() != ProviderStoreState::Unconfigured) {
+        return {false, String(providerStore.stateMessage().c_str())};
+    }
     settings = loaded;
     return {true, ""};
 }
@@ -84,16 +278,12 @@ OperationResult saveSettings(const Settings& settings)
     if (settings.wifiSsid.isEmpty()) {
         return {false, "Wi-Fi SSID must not be empty"};
     }
-    if (settings.apiKey.length() < 8) {
-        return {false, "API key must contain at least 8 characters"};
-    }
-    if (!settings.apiBaseUrl.startsWith("https://") || settings.apiBaseUrl.length() < 12 ||
-        settings.apiBaseUrl.length() > 180 || settings.apiBaseUrl.indexOf(' ') >= 0 ||
-        settings.apiBaseUrl.indexOf('?') >= 0 || settings.apiBaseUrl.indexOf('#') >= 0) {
-        return {false, "API base URL must be an https:// URL without spaces, query, or fragment"};
-    }
     if (settings.model.isEmpty()) {
         return {false, "Model id must not be empty"};
+    }
+    if (settings.globalInstructions.length() > 2048 ||
+        !isValidUtf8(std::string(settings.globalInstructions.c_str()))) {
+        return {false, "Global instructions must be valid UTF-8 and at most 2048 bytes"};
     }
     if (!settings.sttApiKey.isEmpty() && settings.sttApiKey.length() < 8) {
         return {false, "STT API key must contain at least 8 characters"};
@@ -149,6 +339,18 @@ OperationResult saveSettings(const Settings& settings)
     if (settings.powerProfile > 2) {
         return {false, "Power profile must be Performance, Balanced, or Saver"};
     }
+    if (!isValidProjectChatHistoryQuota(settings.projectChatHistoryQuotaBytes)) {
+        return {false, "Chat history quota must be 0 or at least 2 MiB"};
+    }
+    if (!webSessionLifetimeIsValid(settings.webSessionLifetime)) {
+        return {false, "Web session lifetime is invalid"};
+    }
+    const EncodedGlobalToolPoliciesResult encodedToolPolicies =
+        encodeGlobalToolPolicies(
+            settings.masterToolPolicy, settings.newChatToolPolicy);
+    if (!encodedToolPolicies.success) {
+        return {false, encodedToolPolicies.error};
+    }
 
     Preferences preferences;
     if (!preferences.begin(kNamespace, false)) {
@@ -161,16 +363,13 @@ OperationResult saveSettings(const Settings& settings)
                                     settings.wifiPassword.length(), "Wi-Fi password");
     }
     if (result.success) {
-        result = verifyStoredLength(preferences.putString("api_key", settings.apiKey),
-                                    settings.apiKey.length(), "API key");
-    }
-    if (result.success) {
-        result = verifyStoredLength(preferences.putString("base_url", settings.apiBaseUrl),
-                                    settings.apiBaseUrl.length(), "API base URL");
+        result = verifyStoredLength(
+            preferences.putString("model", settings.model), settings.model.length(), "model id");
     }
     if (result.success) {
         result = verifyStoredLength(
-            preferences.putString("model", settings.model), settings.model.length(), "model id");
+            preferences.putString("global_inst", settings.globalInstructions),
+            settings.globalInstructions.length(), "global instructions");
     }
     if (result.success) {
         result = verifyStoredLength(preferences.putString("stt_key", settings.sttApiKey),
@@ -226,6 +425,22 @@ OperationResult saveSettings(const Settings& settings)
     if (result.success && preferences.putUChar("power", settings.powerProfile) != 1) {
         result = {false, "Failed to store power profile"};
     }
+    if (result.success &&
+        preferences.putUInt("chat_quota", settings.projectChatHistoryQuotaBytes) != 4) {
+        result = {false, "Failed to store project chat history quota"};
+    }
+    if (result.success &&
+        preferences.putUChar(
+            kWebSessionLifetimeKey,
+            static_cast<std::uint8_t>(settings.webSessionLifetime)) != 1) {
+        result = {false, "Failed to store Web session lifetime"};
+    }
+    if (result.success) {
+        result = verifyStoredLength(
+            preferences.putString(kToolPolicyKey, encodedToolPolicies.value),
+            encodedToolPolicies.value.length(),
+            "global tool policy");
+    }
     if (result.success) {
         result = verifyStoredValue(preferences.getString("ssid", ""), settings.wifiSsid, "Wi-Fi SSID");
     }
@@ -234,14 +449,11 @@ OperationResult saveSettings(const Settings& settings)
             preferences.getString("wifi_pass", "__missing__"), settings.wifiPassword, "Wi-Fi password");
     }
     if (result.success) {
-        result = verifyStoredValue(preferences.getString("api_key", ""), settings.apiKey, "API key");
-    }
-    if (result.success) {
-        result = verifyStoredValue(
-            preferences.getString("base_url", ""), settings.apiBaseUrl, "API base URL");
-    }
-    if (result.success) {
         result = verifyStoredValue(preferences.getString("model", ""), settings.model, "model id");
+    }
+    if (result.success) {
+        result = verifyStoredValue(preferences.getString("global_inst", ""),
+                                   settings.globalInstructions, "global instructions");
     }
     if (result.success) {
         result = verifyStoredValue(
@@ -297,8 +509,51 @@ OperationResult saveSettings(const Settings& settings)
     if (result.success && preferences.getUChar("power", 255) != settings.powerProfile) {
         result = {false, "Failed to verify power profile after NVS write"};
     }
+    if (result.success &&
+        preferences.getUInt("chat_quota", 1) != settings.projectChatHistoryQuotaBytes) {
+        result = {false, "Failed to verify project chat history quota after NVS write"};
+    }
+    if (result.success &&
+        preferences.getType(kWebSessionLifetimeKey) != PT_U8) {
+        result = {false, "Failed to verify Web session lifetime NVS type after write"};
+    }
+    if (result.success &&
+        preferences.getUChar(kWebSessionLifetimeKey, UINT8_MAX) !=
+            static_cast<std::uint8_t>(settings.webSessionLifetime)) {
+        result = {false, "Failed to verify Web session lifetime after NVS write"};
+    }
+    if (result.success) {
+        result = verifyStoredValue(
+            preferences.getString(kToolPolicyKey, ""),
+            encodedToolPolicies.value,
+            "global tool policy");
+    }
     preferences.end();
     return result;
+}
+
+ProviderStoreResult saveProvisionedSettings(
+    const Settings& settings,
+    ProviderProfileStore& providerStore)
+{
+    const ProviderStoreResult provider =
+        providerStore.saveProvisionedDefault(settings);
+    if (!providerStoreResultSucceeded(provider) &&
+        (provider.error != ProviderStoreError::CleanupFailed ||
+         !provider.committed)) {
+        return provider;
+    }
+    const OperationResult saved = saveSettings(settings);
+    if (!saved.success) {
+        std::string message(saved.error.c_str());
+        if (provider.committed) {
+            message = "API provider authority was saved, but other settings failed: " +
+                      message;
+        }
+        return {ProviderStoreError::Storage, provider.committed,
+                provider.outcomeUnknown, std::move(message)};
+    }
+    return provider;
 }
 
 OperationResult saveModel(const String& model)
@@ -378,6 +633,42 @@ OperationResult saveActiveChatId(const String& id)
     if (result.success) {
         result = verifyStoredValue(
             preferences.getString("active_chat", ""), id, "active chat id");
+    }
+    preferences.end();
+    return result;
+}
+
+OperationResult loadSdVolumeIdentity(String& identity)
+{
+    Preferences preferences;
+    if (!preferences.begin(kNamespace, true)) {
+        return {false, "Failed to open NVS namespace 'assistant' for microSD identity"};
+    }
+    const String loaded = preferences.getString(kSdVolumeIdentityKey, "");
+    preferences.end();
+    if (!loaded.isEmpty() && !isValidSdVolumeIdentity(loaded)) {
+        return {false, "Stored microSD identity is invalid"};
+    }
+    identity = loaded;
+    return {true, ""};
+}
+
+OperationResult saveSdVolumeIdentity(const String& identity)
+{
+    if (!isValidSdVolumeIdentity(identity)) {
+        return {false, "Cannot store an invalid microSD identity"};
+    }
+    Preferences preferences;
+    if (!preferences.begin(kNamespace, false)) {
+        return {false, "Failed to open NVS namespace 'assistant' for microSD identity write"};
+    }
+    OperationResult result = verifyStoredLength(
+        preferences.putString(kSdVolumeIdentityKey, identity),
+        identity.length(), "microSD identity");
+    if (result.success) {
+        result = verifyStoredValue(
+            preferences.getString(kSdVolumeIdentityKey, ""), identity,
+            "microSD identity");
     }
     preferences.end();
     return result;

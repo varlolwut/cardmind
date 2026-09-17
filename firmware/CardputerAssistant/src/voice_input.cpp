@@ -1,6 +1,8 @@
 #include "voice_input.h"
 
+#include "adv_audio_power.h"
 #include "audio_utils.h"
+#include "sd_storage.h"
 
 #include <M5Cardputer.h>
 #include <SD.h>
@@ -25,6 +27,8 @@ constexpr std::uint32_t kMinimumSamples = kSampleRate / 2;
 constexpr std::uint32_t kMaximumRecordingSeconds = 60;
 constexpr std::uint32_t kMaximumSamples = kSampleRate * kMaximumRecordingSeconds;
 constexpr std::size_t kWavHeaderSize = 44;
+constexpr std::uint8_t kSdMountAttempts = 6;
+constexpr std::uint32_t kSdInitialSettleMilliseconds = 500;
 
 std::uint16_t normalizedPeak(const std::array<std::int16_t, kChunkSamples>& samples)
 {
@@ -47,6 +51,8 @@ std::uint16_t normalizedMean(std::uint64_t absoluteTotal, std::uint32_t sampleCo
 
 OperationResult deleteRecordingIfPresent()
 {
+    const OperationResult access = requireSdWriteAccess(0, kStorageOperationalFloorBytes);
+    if (!access.success) return access;
     if (!SD.exists(kVoicePath)) {
         return {true, ""};
     }
@@ -60,20 +66,47 @@ OperationResult deleteRecordingIfPresent()
 
 OperationResult initializeVoiceStorage()
 {
-    SPI.begin(kSdClockPin, kSdMisoPin, kSdMosiPin, kSdChipSelectPin);
-    if (!SD.begin(kSdChipSelectPin, SPI, 25000000)) {
-        return {false, "Failed to mount the microSD card for temporary voice recording"};
+    bool mountSucceeded = false;
+    delay(kSdInitialSettleMilliseconds);
+    for (std::uint8_t attempt = 1; attempt <= kSdMountAttempts; ++attempt) {
+        SPI.begin(kSdClockPin, kSdMisoPin, kSdMosiPin, kSdChipSelectPin);
+        const bool mounted = SD.begin(kSdChipSelectPin, SPI, 25000000);
+        mountSucceeded = mountSucceeded || mounted;
+        if (mounted && SD.cardType() != CARD_NONE) {
+            const OperationResult identity = initializeSdStorageIdentity();
+            if (!identity.success) return identity;
+            if (inspectSdStorage().state == SdStorageState::Full) {
+                return {true, ""};
+            }
+            return deleteRecordingIfPresent();
+        }
+        Serial.printf("WARN event=sd_mount attempt=%u result=failed\n",
+                      static_cast<unsigned int>(attempt));
+        SD.end();
+        SPI.end();
+        if (attempt < kSdMountAttempts) {
+            delay(static_cast<std::uint32_t>(attempt) * 500U);
+        }
     }
-    if (SD.cardType() == CARD_NONE) {
-        return {false, "No microSD card is present for temporary voice recording"};
-    }
-    return deleteRecordingIfPresent();
+    const SdStorageStatus status = inspectSdStorage();
+    return {false, status.error.isEmpty()
+        ? (mountSucceeded
+            ? String("No microSD card was detected after 6 attempts")
+            : String("Failed to mount microSD after 6 attempts; reinsert or check the card"))
+        : status.error};
 }
 
 VoiceRecordingResult recordVoiceWhileButtonHeld(const VoiceProgressCallback& onProgress)
 {
     if (!M5Cardputer.BtnA.isPressed()) {
         return {false, 0, 0, 0, "Hold the G0 microphone button while speaking"};
+    }
+    const std::uint64_t maximumRecordingBytes = kWavHeaderSize +
+        static_cast<std::uint64_t>(kMaximumSamples) * sizeof(std::int16_t);
+    const OperationResult access = requireSdWriteAccess(
+        maximumRecordingBytes, kStorageOperationalFloorBytes);
+    if (!access.success) {
+        return {false, 0, 0, 0, access.error};
     }
     const OperationResult deleteResult = deleteRecordingIfPresent();
     if (!deleteResult.success) {
@@ -90,7 +123,12 @@ VoiceRecordingResult recordVoiceWhileButtonHeld(const VoiceProgressCallback& onP
         return {false, 0, 0, 0, "Failed to reserve the WAV header on microSD"};
     }
 
-    M5Cardputer.Speaker.end();
+    const OperationResult audioPowerResult = powerDownCardputerAdvAudio();
+    if (!audioPowerResult.success) {
+        file.close();
+        deleteRecordingIfPresent();
+        return {false, 0, 0, 0, audioPowerResult.error};
+    }
     if (!M5Cardputer.Mic.begin()) {
         file.close();
         deleteRecordingIfPresent();
@@ -129,6 +167,10 @@ VoiceRecordingResult recordVoiceWhileButtonHeld(const VoiceProgressCallback& onP
         onProgress(millis() - startedAt, normalizedPeak(samples));
     }
     M5Cardputer.Mic.end();
+    const OperationResult shutdownResult = powerDownCardputerAdvAudio();
+    if (!shutdownResult.success && error.isEmpty()) {
+        error = shutdownResult.error;
+    }
 
     if (!error.isEmpty()) {
         file.close();
@@ -158,7 +200,10 @@ VoiceRecordingResult probeMicrophone(std::uint32_t durationMs)
     if (durationMs == 0 || durationMs > 5000) {
         return {false, 0, 0, 0, "Microphone probe duration must be between 1 and 5000 ms"};
     }
-    M5Cardputer.Speaker.end();
+    const OperationResult audioPowerResult = powerDownCardputerAdvAudio();
+    if (!audioPowerResult.success) {
+        return {false, 0, 0, 0, audioPowerResult.error};
+    }
     if (!M5Cardputer.Mic.begin()) {
         return {false, 0, 0, 0, "Failed to start the Cardputer ADV microphone"};
     }
@@ -174,9 +219,13 @@ VoiceRecordingResult probeMicrophone(std::uint32_t durationMs)
             kChunkSamples, static_cast<std::size_t>(targetSamples - sampleCount));
         if (!M5Cardputer.Mic.record(samples.data(), requested, kSampleRate)) {
             M5Cardputer.Mic.end();
+            const OperationResult shutdownResult = powerDownCardputerAdvAudio();
+            const String error = shutdownResult.success
+                ? String("Microphone probe queue rejected an audio chunk")
+                : shutdownResult.error;
             return {false, sampleCount, peakLevel,
                     normalizedMean(absoluteTotal, sampleCount),
-                    "Microphone probe queue rejected an audio chunk"};
+                    error};
         }
         while (M5Cardputer.Mic.isRecording() != 0) {
             M5Cardputer.update();
@@ -190,6 +239,11 @@ VoiceRecordingResult probeMicrophone(std::uint32_t durationMs)
         sampleCount += static_cast<std::uint32_t>(requested);
     }
     M5Cardputer.Mic.end();
+    const OperationResult shutdownResult = powerDownCardputerAdvAudio();
+    if (!shutdownResult.success) {
+        return {false, sampleCount, peakLevel,
+                normalizedMean(absoluteTotal, sampleCount), shutdownResult.error};
+    }
     return {true, sampleCount, peakLevel, normalizedMean(absoluteTotal, sampleCount), ""};
 }
 

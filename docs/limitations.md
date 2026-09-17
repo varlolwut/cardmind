@@ -5,20 +5,31 @@
 - Cardputer ADV uses ESP32-S3FN8: 8 MB flash, 512 KB internal SRAM, and no PSRAM.
 - Wi-Fi is 2.4 GHz only.
 - Display resolution is 240 × 135 pixels.
-- Persistent chats, workspace files, audio, logs, and backups require microSD.
+- Persistent chats, workspace files, audio, and logs require microSD.
 - Release builds pin the M5Stack ESP32 board package to 3.2.1. Version 3.3.9 is not
   supported because it produces a silent microphone stream on Cardputer ADV with the
   pinned M5Unified audio implementation.
 
 ## Current firmware limits
 
-- Up to 20 chats.
-- Active context: 64 messages and 32,768 UTF-8 bytes per chat; older complete turns
-  are archived on microSD.
-- Chat instructions: 2,048 bytes.
-- Workspace: up to 40 supported files; 491,520 bytes per file.
-- Supported workspace formats: `.txt`, `.md`, `.json`, `.jsonl`, `.csv`, `.html`,
-  `.svg`, and `.py`; text must be valid UTF-8.
+- Projects, chats, and Shared workspace files use paginated microSD indexes rather than
+  a small in-memory count. A 500-file workspace is exercised by the hardware release
+  suite without making 500 a product limit. Bookmark metadata rejects more than
+  4,096 entries; that validation ceiling is not a tested operating point on this
+  no-PSRAM device.
+- Request context is configurable per project from 8 KiB to 256 KiB. The default is
+  32 KiB. Complete raw history stays on microSD and does not have a fixed 16- or
+  64-message ceiling.
+- Project and chat instructions: 16 KiB each. A compacted context summary may use up
+  to 128 KiB on microSD.
+- A typed or pasted chat prompt is limited to 16 KiB of valid UTF-8.
+- Workspace files have no CardMind-specific size ceiling. Available microSD capacity,
+  filesystem limits, 32-bit file offsets, and the safe free-space reserve are the
+  effective limits. Nested relative UTF-8 paths are supported; absolute paths,
+  traversal, control characters, and internal `.tmp`/`.bak` targets are rejected.
+- Arbitrary binary files may be stored, downloaded, copied, and transferred over SFTP.
+  Editing and model read/append tools require valid UTF-8 text and use bounded internal
+  windows of at most 12 KiB per operation.
 - QR display: up to 320 UTF-8 bytes. Longer files must be shortened before they can
   be rendered as a QR code on the 240 × 135 display.
 - Voice recording: up to 60 seconds. TTS input: up to 5,000 bytes.
@@ -26,7 +37,9 @@
 - Web sessions expire after 15 minutes of inactivity.
 
 Large files behave as complete files in the UI. The firmware transfers and commits
-them incrementally because loading 480 KiB beside Wi-Fi and TLS state is unsafe.
+them incrementally because loading a multi-megabyte document beside Wi-Fi and TLS
+state is unsafe. Replacement also needs enough temporary free space plus a small
+recovery floor; only the operation that cannot complete is rejected.
 
 ## Provider compatibility
 
@@ -42,6 +55,26 @@ the model's file tools, the normal Web console, and MicroPython all see the same
 files. Open **Web Console → Start Python workspace**. Browser launches hand off the
 current authenticated session automatically; launches from the Cardputer show the IP
 address and installation password before restart.
+
+A model-requested run is a separate one-shot path. It always stops for **Allow once**,
+even when Python policy is Allow. Approval covers one normalized project-linked `.py`
+path, exact byte size, and SHA-256; review the complete source before approving. A
+changed file or identity, another run, or stale approval after restart requires new
+approval. Off, Deny, malformed tool input, or lack of one-run approval prevents the
+handoff. Before switching modes, CardMind rechecks the approved path, size, SHA-256,
+and source. After the switch, MicroPython rechecks the staged request and source before
+execution; a mismatch there returns to CardMind without running the script. A later
+result-integrity failure may mean effects are unknown; CardMind reports that and never
+replays the run.
+
+Approved bytes run as privileged MicroPython code with full device access; this is not
+a sandbox. CardMind runs one foreground script, then returns bounded stdout, stderr,
+and exit state to the originating chat. The fixed watchdog returns from an ordinary
+unresponsive one-shot, but approved privileged code can feed or disable the watchdog or
+alter boot behavior. It is recovery for accidental hangs, not a sandbox, containment
+boundary, or adversarial timeout guarantee. If execution may already have had effects
+but no valid complete result survived, CardMind reports that uncertainty and never
+automatically replays the script.
 
 This is MicroPython, not desktop CPython. Native CPython wheels, large data-science
 packages, subprocesses, and operating-system APIs are unavailable. Only one user

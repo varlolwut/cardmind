@@ -1,22 +1,1354 @@
 #include "../firmware/CardputerAssistant/src/text_utils.h"
 #include "../firmware/CardputerAssistant/src/audio_utils.h"
 #include "../firmware/CardputerAssistant/src/document_reader.h"
+#include "../firmware/CardputerAssistant/src/instruction_policy.h"
+#include "../firmware/CardputerAssistant/src/json_string_reader.h"
 #include "../firmware/CardputerAssistant/src/offline_tools.h"
+#include "../firmware/CardputerAssistant/src/pending_tool_preview.h"
+#include "../firmware/CardputerAssistant/src/pending_tool_call.h"
+#include "../firmware/CardputerAssistant/src/python_mode.h"
+#include "../firmware/CardputerAssistant/src/provider_profiles.h"
 #include "../firmware/CardputerAssistant/src/ssh_terminal.h"
+#include "../firmware/CardputerAssistant/src/ssh_command_options.h"
+#include "../firmware/CardputerAssistant/src/tool_catalog.h"
+#include "../firmware/CardputerAssistant/src/tool_policy.h"
+#include "../firmware/CardputerAssistant/src/tool_policy_codec.h"
+#include "../firmware/CardputerAssistant/src/web_console.h"
 
+#include <algorithm>
+#include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
+
+class MemoryJsonReader {
+public:
+    explicit MemoryJsonReader(const std::string& value) : value_(value), position_(0) {}
+
+    int available() const
+    {
+        return position_ < value_.size() ? 1 : 0;
+    }
+
+    int read()
+    {
+        return available() ? static_cast<unsigned char>(value_[position_++]) : -1;
+    }
+
+    int peek() const
+    {
+        return available() ? static_cast<unsigned char>(value_[position_]) : -1;
+    }
+
+    std::size_t position() const
+    {
+        return position_;
+    }
+
+    bool seek(std::size_t position)
+    {
+        if (position > value_.size()) return false;
+        position_ = position;
+        return true;
+    }
+
+private:
+    const std::string& value_;
+    std::size_t position_;
+};
 
 void require(bool condition, const std::string& message)
 {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+cardputer::ToolPermissionPolicy uniformToolPermissionPolicy(
+    cardputer::ToolPermission permission)
+{
+    cardputer::ToolPermissionPolicy result;
+    result.fill(permission);
+    return result;
+}
+
+cardputer::ScopedToolPermissionPolicy uniformScopedToolPermissionPolicy(
+    cardputer::ScopedToolPermission permission)
+{
+    cardputer::ScopedToolPermissionPolicy result;
+    result.fill(permission);
+    return result;
+}
+
+cardputer::ToolAvailabilitySet uniformToolAvailability(bool available)
+{
+    cardputer::ToolAvailabilitySet result;
+    result.fill(available);
+    return result;
+}
+
+std::uint8_t toolCapabilityGroupMask(cardputer::ToolCapabilityGroup group)
+{
+    return static_cast<std::uint8_t>(1U << static_cast<std::uint8_t>(group));
+}
+
+void requireInvalidToolResolution(
+    const cardputer::ToolPolicyResolutionResult& result,
+    cardputer::ToolPolicyContractError error)
+{
+    require(result.error == error && result.requiredGroups == 0,
+            "Invalid tool policy input returned the wrong contract error");
+    for (const cardputer::ResolvedToolPermission& permission : result.permissions) {
+        require(permission.decision == cardputer::ToolPermissionDecision::Deny &&
+                    permission.source == cardputer::ToolPermissionSource::None,
+                "Invalid tool policy input did not fail closed");
+    }
+}
+
+void testToolPolicyContracts()
+{
+    static_assert(std::is_trivially_copyable<
+        cardputer::ToolPolicyResolutionResult>::value);
+
+    require(cardputer::kToolCapabilityCount == 8 &&
+                cardputer::kToolCapabilityGroupCount == 4,
+            "Tool policy identity counts changed");
+    const std::array<std::uint8_t, cardputer::kToolCapabilityCount>
+        expectedMasks = {
+            toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Web),
+            toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Web),
+            toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Files),
+            toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Files),
+            toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Ssh),
+            toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Ssh),
+            toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Ssh),
+            toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Python),
+        };
+    for (std::size_t index = 0; index < expectedMasks.size(); ++index) {
+        const auto result = cardputer::toolCapabilityGroupMask(
+            static_cast<cardputer::ToolCapability>(index));
+        require(result.error == cardputer::ToolPolicyContractError::None &&
+                    result.mask == expectedMasks[index],
+                "Tool capability group mapping is incorrect");
+    }
+
+    const std::array<cardputer::ToolCapability, 2> invalidCapabilities = {
+        cardputer::ToolCapability::Count,
+        static_cast<cardputer::ToolCapability>(255),
+    };
+    for (const auto capability : invalidCapabilities) {
+        const auto result = cardputer::toolCapabilityGroupMask(capability);
+        require(result.error ==
+                    cardputer::ToolPolicyContractError::InvalidCapability &&
+                    result.mask == 0,
+                "Invalid tool capability was accepted");
+    }
+}
+
+void testToolMessageIntent()
+{
+    const auto builtIn = uniformToolPermissionPolicy(
+        cardputer::ToolPermission::Allow);
+    const auto global = builtIn;
+    const auto project = uniformScopedToolPermissionPolicy(
+        cardputer::ScopedToolPermission::Inherit);
+    const auto chat = project;
+    const auto available = uniformToolAvailability(true);
+    const auto automatic = cardputer::resolveToolPolicy(
+        builtIn, global, project, chat,
+        {cardputer::ToolMessageIntentMode::Auto, 0}, available);
+    require(automatic.error == cardputer::ToolPolicyContractError::None,
+            "Automatic tool intent failed");
+
+    for (std::uint8_t mask = 1;
+         mask <= cardputer::kAllToolCapabilityGroups;
+         ++mask) {
+        const auto required = cardputer::resolveToolPolicy(
+            builtIn, global, project, chat,
+            {cardputer::ToolMessageIntentMode::Required, mask}, available);
+        require(required.error == cardputer::ToolPolicyContractError::None &&
+                    required.requiredGroups == mask,
+                "Required tool intent lost its capability union");
+        for (std::size_t index = 0;
+             index < cardputer::kToolCapabilityCount;
+             ++index) {
+            require(required.permissions[index].decision ==
+                        automatic.permissions[index].decision &&
+                        required.permissions[index].source ==
+                            automatic.permissions[index].source,
+                    "Required tool intent changed an effective permission");
+        }
+    }
+
+    struct InvalidIntentCase {
+        cardputer::ToolMessageIntent intent;
+        cardputer::ToolPolicyContractError error;
+    };
+    const std::array<InvalidIntentCase, 6> invalidCases = {{
+        {{cardputer::ToolMessageIntentMode::Count, 0},
+         cardputer::ToolPolicyContractError::InvalidIntentMode},
+        {{static_cast<cardputer::ToolMessageIntentMode>(255), 0},
+         cardputer::ToolPolicyContractError::InvalidIntentMode},
+        {{cardputer::ToolMessageIntentMode::Required, 0},
+         cardputer::ToolPolicyContractError::InvalidIntentGroups},
+        {{cardputer::ToolMessageIntentMode::Auto, 1},
+         cardputer::ToolPolicyContractError::InvalidIntentGroups},
+        {{cardputer::ToolMessageIntentMode::NoTools, 1},
+         cardputer::ToolPolicyContractError::InvalidIntentGroups},
+        {{cardputer::ToolMessageIntentMode::Required, 0x10},
+         cardputer::ToolPolicyContractError::InvalidIntentGroups},
+    }};
+    for (const InvalidIntentCase& invalidCase : invalidCases) {
+        requireInvalidToolResolution(
+            cardputer::resolveToolPolicy(
+                builtIn, global, project, chat, invalidCase.intent, available),
+            invalidCase.error);
+    }
+}
+
+void testToolMessageIntentCodec()
+{
+    const std::array<cardputer::ToolMessageIntent, 2> simpleIntents = {{
+        {cardputer::ToolMessageIntentMode::Auto, 0},
+        {cardputer::ToolMessageIntentMode::NoTools, 0},
+    }};
+    const std::array<std::string, 2> simpleTexts = {"auto", "none"};
+    for (std::size_t index = 0; index < simpleIntents.size(); ++index) {
+        const auto encoded = cardputer::encodeToolMessageIntent(
+            simpleIntents[index]);
+        require(encoded.error ==
+                    cardputer::ToolMessageIntentCodecError::None &&
+                    std::string(encoded.value.data(), encoded.length) ==
+                        simpleTexts[index],
+                "Simple message intent encoded incorrectly");
+        const auto decoded = cardputer::decodeToolMessageIntent(
+            encoded.value.data(), encoded.length);
+        require(decoded.error ==
+                    cardputer::ToolMessageIntentCodecError::None &&
+                    decoded.intent.mode == simpleIntents[index].mode &&
+                    decoded.intent.requiredGroups == 0,
+                "Simple message intent did not round-trip");
+    }
+    for (std::uint8_t mask = 1;
+         mask <= cardputer::kAllToolCapabilityGroups;
+         ++mask) {
+        const auto encoded = cardputer::encodeToolMessageIntent(
+            {cardputer::ToolMessageIntentMode::Required, mask});
+        const char expectedDigit = mask < 10
+            ? static_cast<char>('0' + mask)
+            : static_cast<char>('a' + mask - 10);
+        require(encoded.error ==
+                    cardputer::ToolMessageIntentCodecError::None &&
+                    encoded.length == 10 && encoded.value[9] == expectedDigit,
+                "Required message intent was not canonical lowercase hex");
+        const auto decoded = cardputer::decodeToolMessageIntent(
+            encoded.value.data(), encoded.length);
+        require(decoded.error ==
+                    cardputer::ToolMessageIntentCodecError::None &&
+                    decoded.intent.mode ==
+                        cardputer::ToolMessageIntentMode::Required &&
+                    decoded.intent.requiredGroups == mask,
+                "Required message intent did not round-trip");
+    }
+
+    require(cardputer::encodeToolMessageIntent(
+                {cardputer::ToolMessageIntentMode::Count, 0}).error ==
+                cardputer::ToolMessageIntentCodecError::InvalidIntentMode &&
+                cardputer::encodeToolMessageIntent(
+                    {cardputer::ToolMessageIntentMode::Auto, 1}).error ==
+                cardputer::ToolMessageIntentCodecError::InvalidIntentGroups &&
+                cardputer::encodeToolMessageIntent(
+                    {cardputer::ToolMessageIntentMode::Required, 0}).error ==
+                cardputer::ToolMessageIntentCodecError::InvalidIntentGroups,
+            "Invalid message intent encoded successfully");
+    const std::array<std::string, 8> malformed = {
+        "", "AUTO", "required:0", "required:A",
+        "required:10", "required:g", "required:1x", " required:1",
+    };
+    for (const std::string& value : malformed) {
+        require(cardputer::decodeToolMessageIntent(
+                    value.data(), value.size()).error !=
+                    cardputer::ToolMessageIntentCodecError::None,
+                "Noncanonical message intent was accepted");
+    }
+    require(cardputer::decodeToolMessageIntent(nullptr, 4).error ==
+                cardputer::ToolMessageIntentCodecError::InvalidLength,
+            "Null message intent text was accepted");
+}
+
+cardputer::ToolPolicyResolutionResult uniformToolResolution(
+    cardputer::ToolPermissionDecision decision)
+{
+    cardputer::ToolPolicyResolutionResult result = {};
+    result.error = cardputer::ToolPolicyContractError::None;
+    for (cardputer::ResolvedToolPermission& permission : result.permissions) {
+        permission = {decision, cardputer::ToolPermissionSource::None};
+    }
+    return result;
+}
+
+void testToolCatalogAndRequestPlan()
+{
+    const auto& catalog = cardputer::toolCatalog();
+    const std::array<std::string, 13> expectedNames = {
+        "web_search", "web_fetch", "list_files", "read_file",
+        "write_file", "append_file", "ssh_command",
+        "sftp_list", "sftp_read", "sftp_write", "sftp_move",
+        "ssh_safe_action", "python_run",
+    };
+    const std::array<cardputer::ToolCapabilityGroup, 13> expectedGroups = {
+        cardputer::ToolCapabilityGroup::Web,
+        cardputer::ToolCapabilityGroup::Web,
+        cardputer::ToolCapabilityGroup::Files,
+        cardputer::ToolCapabilityGroup::Files,
+        cardputer::ToolCapabilityGroup::Files,
+        cardputer::ToolCapabilityGroup::Files,
+        cardputer::ToolCapabilityGroup::Ssh,
+        cardputer::ToolCapabilityGroup::Ssh,
+        cardputer::ToolCapabilityGroup::Ssh,
+        cardputer::ToolCapabilityGroup::Ssh,
+        cardputer::ToolCapabilityGroup::Ssh,
+        cardputer::ToolCapabilityGroup::Ssh,
+        cardputer::ToolCapabilityGroup::Python,
+    };
+    const std::array<cardputer::ToolCapability, 13> expectedPrimary = {
+        cardputer::ToolCapability::WebSearch,
+        cardputer::ToolCapability::WebFetch,
+        cardputer::ToolCapability::FilesRead,
+        cardputer::ToolCapability::FilesRead,
+        cardputer::ToolCapability::FilesWriteDelete,
+        cardputer::ToolCapability::FilesWriteDelete,
+        cardputer::ToolCapability::SshMutate,
+        cardputer::ToolCapability::SftpReadWrite,
+        cardputer::ToolCapability::SftpReadWrite,
+        cardputer::ToolCapability::SftpReadWrite,
+        cardputer::ToolCapability::SftpReadWrite,
+        cardputer::ToolCapability::SshRead,
+        cardputer::ToolCapability::PythonWriteRun,
+    };
+    require(catalog.size() == 13, "Tool catalog size changed");
+    for (std::size_t index = 0; index < catalog.size(); ++index) {
+        require(static_cast<std::size_t>(catalog[index].schema) == index &&
+                    expectedNames[index] == catalog[index].name &&
+                    catalog[index].group == expectedGroups[index] &&
+                    catalog[index].capability == expectedPrimary[index],
+                "Tool catalog identity, mapping, or order changed");
+        for (std::size_t other = index + 1;
+             other < catalog.size(); ++other) {
+            require(expectedNames[index] != catalog[other].name,
+                    "Tool catalog contains a duplicate name");
+        }
+        require(cardputer::toolCatalogEntryForName(expectedNames[index]) ==
+                    &catalog[index],
+                "Canonical tool name did not resolve to its catalog row");
+    }
+    const std::array<std::string, 10> noncanonicalNames = {
+        "WebSearch", "web-search", "SSH_COMMAND", "ssh-command",
+        "SFTP_LIST", "sftp-list", "SSH_SAFE_ACTION", "ssh-safe-action",
+        "PYTHON_RUN", "python-run",
+    };
+    for (const std::string& name : noncanonicalNames) {
+        require(cardputer::toolCatalogEntryForName(name) == nullptr,
+                "Noncanonical or unsupported tool name entered the catalog");
+    }
+
+    auto resolution = uniformToolResolution(
+        cardputer::ToolPermissionDecision::Deny);
+    resolution.permissions[static_cast<std::size_t>(
+        cardputer::ToolCapability::WebSearch)].decision =
+        cardputer::ToolPermissionDecision::Ask;
+    resolution.permissions[static_cast<std::size_t>(
+        cardputer::ToolCapability::WebFetch)].decision =
+        cardputer::ToolPermissionDecision::Allow;
+    auto plan = cardputer::buildToolRequestPlan(
+        resolution, {cardputer::ToolMessageIntentMode::Auto, 0});
+    require(plan.error == cardputer::ToolPolicyContractError::None &&
+                cardputer::toolRequestPlanIsConsistent(plan) &&
+                plan.schemas == 0x03 &&
+                plan.includedGroups == toolCapabilityGroupMask(
+                    cardputer::ToolCapabilityGroup::Web) &&
+                plan.missingRequiredGroups == 0 &&
+                cardputer::toolRequestPlanDecision(
+                    plan, cardputer::ToolSchemaId::WebSearch) ==
+                    cardputer::ToolPermissionDecision::Ask &&
+                cardputer::toolRequestPlanDecision(
+                    plan, cardputer::ToolSchemaId::WebFetch) ==
+                    cardputer::ToolPermissionDecision::Allow,
+            "Ask/Allow Web schema selection is incorrect");
+
+    resolution = uniformToolResolution(
+        cardputer::ToolPermissionDecision::Unavailable);
+    resolution.permissions[static_cast<std::size_t>(
+        cardputer::ToolCapability::SshMutate)].decision =
+        cardputer::ToolPermissionDecision::Ask;
+    plan = cardputer::buildToolRequestPlan(
+        resolution, {cardputer::ToolMessageIntentMode::Auto, 0});
+    require(plan.schemas == 0x40 &&
+                plan.includedGroups == toolCapabilityGroupMask(
+                    cardputer::ToolCapabilityGroup::Ssh),
+            "SSH schema did not use conservative mutate eligibility");
+
+    resolution = uniformToolResolution(
+        cardputer::ToolPermissionDecision::Deny);
+    resolution.permissions[static_cast<std::size_t>(
+        cardputer::ToolCapability::SshRead)].decision =
+        cardputer::ToolPermissionDecision::Allow;
+    resolution.permissions[static_cast<std::size_t>(
+        cardputer::ToolCapability::SshMutate)].decision =
+        cardputer::ToolPermissionDecision::Unavailable;
+    resolution.requiredGroups = toolCapabilityGroupMask(
+        cardputer::ToolCapabilityGroup::Ssh);
+    plan = cardputer::buildToolRequestPlan(
+        resolution,
+        {cardputer::ToolMessageIntentMode::Required,
+         resolution.requiredGroups});
+    require(plan.schemas == 0x800 &&
+                plan.missingRequiredGroups == 0 &&
+                cardputer::toolRequestPlanDecision(
+                    plan, cardputer::ToolSchemaId::SshCommand) ==
+                    cardputer::ToolPermissionDecision::Unavailable &&
+                cardputer::toolRequestPlanDecision(
+                    plan, cardputer::ToolSchemaId::SshSafeAction) ==
+                    cardputer::ToolPermissionDecision::Allow,
+            "SSH read-only policy did not expose only the fixed Safe Action schema");
+
+    const std::array<std::string, 5> expectedActionIds = {
+        "logs", "service_state", "containers", "disk", "processes",
+    };
+    const std::array<std::string, 5> expectedActionCommands = {
+        "journalctl --no-pager --lines=100 --output=short-iso",
+        "systemctl list-units --type=service --state=running,failed --no-pager --plain",
+        "docker ps --no-trunc",
+        "df -hP",
+        "ps -eo pid,ppid,user,stat,etime,comm",
+    };
+    const auto& safeActions = cardputer::sshSafeActionCatalog();
+    require(safeActions.size() == expectedActionIds.size(),
+            "SSH Safe Action catalog size changed");
+    for (std::size_t index = 0; index < safeActions.size(); ++index) {
+        require(expectedActionIds[index] == safeActions[index].id &&
+                    expectedActionCommands[index] == safeActions[index].command &&
+                    cardputer::sshSafeActionEntryForId(expectedActionIds[index]) ==
+                        &safeActions[index],
+                "SSH Safe Action identity or fixed command changed");
+    }
+    require(cardputer::sshSafeActionEntryForId("unknown") == nullptr,
+            "Unknown SSH Safe Action id resolved");
+
+    resolution = uniformToolResolution(
+        cardputer::ToolPermissionDecision::Deny);
+    resolution.permissions[static_cast<std::size_t>(
+        cardputer::ToolCapability::FilesRead)].decision =
+        cardputer::ToolPermissionDecision::Ask;
+    plan = cardputer::buildToolRequestPlan(
+        resolution, {cardputer::ToolMessageIntentMode::Auto, 0});
+    require(plan.schemas == 0x0C,
+            "Files read permission exposed write schemas");
+    resolution.permissions[static_cast<std::size_t>(
+        cardputer::ToolCapability::FilesRead)].decision =
+        cardputer::ToolPermissionDecision::Unavailable;
+    resolution.permissions[static_cast<std::size_t>(
+        cardputer::ToolCapability::FilesWriteDelete)].decision =
+        cardputer::ToolPermissionDecision::Allow;
+    plan = cardputer::buildToolRequestPlan(
+        resolution, {cardputer::ToolMessageIntentMode::Auto, 0});
+    require(plan.schemas == 0x30,
+            "Files write permission exposed read schemas");
+
+    const auto builtIn = uniformToolPermissionPolicy(
+        cardputer::ToolPermission::Allow);
+    const auto scoped = uniformScopedToolPermissionPolicy(
+        cardputer::ScopedToolPermission::Inherit);
+    auto availability = uniformToolAvailability(true);
+    availability[static_cast<std::size_t>(
+        cardputer::ToolCapability::PythonWriteRun)] = false;
+    for (std::uint8_t mask = 1;
+         mask <= cardputer::kAllToolCapabilityGroups;
+         ++mask) {
+        const cardputer::ToolMessageIntent intent = {
+            cardputer::ToolMessageIntentMode::Required, mask};
+        const auto resolved = cardputer::resolveToolPolicy(
+            builtIn, builtIn, scoped, scoped, intent, availability);
+        const auto resolvedBefore = resolved;
+        plan = cardputer::buildToolRequestPlan(resolved, intent);
+        std::uint8_t remainingGroups = mask;
+        for (const cardputer::ToolCatalogEntry& entry : catalog) {
+            remainingGroups = cardputer::remainingRequiredGroupsAfterToolCall(
+                plan, remainingGroups, entry.name);
+        }
+        const std::uint8_t pythonGroup = toolCapabilityGroupMask(
+            cardputer::ToolCapabilityGroup::Python);
+        bool resolutionUnchanged =
+            resolved.requiredGroups == resolvedBefore.requiredGroups &&
+            resolved.error == resolvedBefore.error;
+        for (std::size_t index = 0;
+             index < resolved.permissions.size(); ++index) {
+            resolutionUnchanged = resolutionUnchanged &&
+                resolved.permissions[index].decision ==
+                    resolvedBefore.permissions[index].decision &&
+                resolved.permissions[index].source ==
+                    resolvedBefore.permissions[index].source;
+        }
+        require(plan.error == cardputer::ToolPolicyContractError::None &&
+                    plan.schemas == 0xFFF &&
+                    plan.missingRequiredGroups ==
+                        static_cast<std::uint8_t>(mask & pythonGroup) &&
+                    remainingGroups ==
+                        static_cast<std::uint8_t>(mask & pythonGroup) &&
+                    resolutionUnchanged,
+                "Required request plan lost obligations or changed input");
+    }
+
+    resolution = uniformToolResolution(
+        cardputer::ToolPermissionDecision::Allow);
+    const std::uint8_t requiredUnion = static_cast<std::uint8_t>(
+        toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Web) |
+        toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Files) |
+        toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Ssh));
+    resolution.requiredGroups = requiredUnion;
+    plan = cardputer::buildToolRequestPlan(
+        resolution,
+        {cardputer::ToolMessageIntentMode::Required, requiredUnion});
+    std::uint8_t remaining = requiredUnion;
+    remaining = cardputer::remainingRequiredGroupsAfterToolCall(
+        plan, remaining, "WebSearch");
+    remaining = cardputer::remainingRequiredGroupsAfterToolCall(
+        plan, remaining, "SFTP_LIST");
+    require(remaining == requiredUnion,
+            "Unknown or noncanonical tool call satisfied a required group");
+    remaining = cardputer::remainingRequiredGroupsAfterToolCall(
+        plan, remaining, "web_fetch");
+    require(remaining == static_cast<std::uint8_t>(
+                requiredUnion & static_cast<std::uint8_t>(
+                    ~toolCapabilityGroupMask(
+                        cardputer::ToolCapabilityGroup::Web))),
+            "Exact Web tool call did not satisfy only the Web group");
+    cardputer::ToolRequestPlan omittedWrite = plan;
+    omittedWrite.schemas = static_cast<cardputer::ToolSchemaMask>(
+        omittedWrite.schemas & static_cast<cardputer::ToolSchemaMask>(
+            ~(1U << static_cast<std::uint8_t>(
+                cardputer::ToolSchemaId::WriteFile))));
+    require(!cardputer::toolRequestPlanIsConsistent(omittedWrite),
+            "Plan with an omitted Allow schema was accepted as consistent");
+    const std::uint8_t beforeOmitted = remaining;
+    remaining = cardputer::remainingRequiredGroupsAfterToolCall(
+        omittedWrite, remaining, "write_file");
+    require(remaining == beforeOmitted,
+            "Omitted schema satisfied a required group");
+    remaining = cardputer::remainingRequiredGroupsAfterToolCall(
+        plan, remaining, "read_file");
+    remaining = cardputer::remainingRequiredGroupsAfterToolCall(
+        plan, remaining, "sftp_list");
+    require(remaining == 0,
+            "Exact SFTP call did not satisfy the SSH required group");
+
+    cardputer::ToolRequestPlan forged = plan;
+    forged.decisions[static_cast<std::size_t>(
+        cardputer::ToolSchemaId::WebSearch)] =
+        cardputer::ToolPermissionDecision::Deny;
+    require(!cardputer::toolRequestPlanIsConsistent(forged) &&
+                cardputer::remainingRequiredGroupsAfterToolCall(
+                forged,
+                toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Web),
+                "web_search") ==
+                toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Web),
+            "Inconsistent denied schema satisfied a required group");
+    forged = plan;
+    constexpr std::uint8_t firstUnknownSchemaBit =
+        static_cast<std::uint8_t>(cardputer::ToolSchemaId::Count);
+    static_assert(firstUnknownSchemaBit < sizeof(cardputer::ToolSchemaMask) * 8U,
+                  "Tool schema mask has no bit available for the unknown-schema test");
+    forged.schemas = static_cast<cardputer::ToolSchemaMask>(
+        forged.schemas | (1U << firstUnknownSchemaBit));
+    require(!cardputer::toolRequestPlanIsConsistent(forged),
+            "Plan with an unknown schema bit was accepted");
+    forged = plan;
+    forged.includedGroups = 0;
+    require(!cardputer::toolRequestPlanIsConsistent(forged),
+            "Plan with inconsistent included groups was accepted");
+    forged = plan;
+    forged.missingRequiredGroups = requiredUnion;
+    require(!cardputer::toolRequestPlanIsConsistent(forged),
+            "Plan with inconsistent missing groups was accepted");
+    forged = plan;
+    forged.intent.requiredGroups = cardputer::kAllToolCapabilityGroups + 1U;
+    require(!cardputer::toolRequestPlanIsConsistent(forged),
+            "Plan with invalid intent groups was accepted");
+    forged = plan;
+    forged.decisions[0] = static_cast<cardputer::ToolPermissionDecision>(255);
+    require(!cardputer::toolRequestPlanIsConsistent(forged),
+            "Plan with an invalid decision was accepted");
+    forged.error = cardputer::ToolPolicyContractError::InvalidIntentGroups;
+    require(cardputer::remainingRequiredGroupsAfterToolCall(
+                forged,
+                toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Web),
+                "web_fetch") ==
+                toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Web),
+            "Invalid request plan satisfied a required group");
+    require(cardputer::toolRequestPlanDecision(
+                plan, cardputer::ToolSchemaId::Count) ==
+                cardputer::ToolPermissionDecision::Deny,
+            "Invalid schema returned a permissive decision");
+
+    for (const cardputer::ToolCatalogEntry& entry : catalog) {
+        const bool alwaysMandatory =
+            entry.schema == cardputer::ToolSchemaId::SshCommand ||
+            entry.schema == cardputer::ToolSchemaId::PythonRun;
+        require(cardputer::toolConfirmationReason(
+                    cardputer::ToolPermissionDecision::Deny,
+                    entry.schema, true) ==
+                    cardputer::ToolConfirmationReason::None &&
+                    cardputer::toolConfirmationReason(
+                        cardputer::ToolPermissionDecision::Unavailable,
+                        entry.schema, true) ==
+                        cardputer::ToolConfirmationReason::None,
+                "Denied or unavailable schema requested confirmation");
+        require(cardputer::toolConfirmationReason(
+                    cardputer::ToolPermissionDecision::Allow,
+                    entry.schema, false) ==
+                    (alwaysMandatory
+                         ? cardputer::ToolConfirmationReason::Mandatory
+                         : cardputer::ToolConfirmationReason::None),
+                "Allow confirmation matrix is incorrect");
+        require(cardputer::toolConfirmationReason(
+                    cardputer::ToolPermissionDecision::Ask,
+                    entry.schema, false) ==
+                    (alwaysMandatory
+                         ? cardputer::ToolConfirmationReason::Mandatory
+                         : cardputer::ToolConfirmationReason::PolicyAsk),
+                "Ask confirmation matrix is incorrect");
+    }
+    require(cardputer::toolConfirmationReason(
+                cardputer::ToolPermissionDecision::Allow,
+                cardputer::ToolSchemaId::WriteFile, true) ==
+                cardputer::ToolConfirmationReason::Mandatory &&
+                cardputer::toolConfirmationReason(
+                    cardputer::ToolPermissionDecision::Ask,
+                    cardputer::ToolSchemaId::WriteFile, true) ==
+                    cardputer::ToolConfirmationReason::Mandatory &&
+                cardputer::toolConfirmationReason(
+                    cardputer::ToolPermissionDecision::Allow,
+                    cardputer::ToolSchemaId::AppendFile, true) ==
+                    cardputer::ToolConfirmationReason::None &&
+                cardputer::toolConfirmationReason(
+                    cardputer::ToolPermissionDecision::Allow,
+                    cardputer::ToolSchemaId::SftpWrite, true) ==
+                    cardputer::ToolConfirmationReason::Mandatory &&
+                cardputer::toolConfirmationReason(
+                    cardputer::ToolPermissionDecision::Allow,
+                    cardputer::ToolSchemaId::SftpMove, true) ==
+                    cardputer::ToolConfirmationReason::Mandatory &&
+                cardputer::toolConfirmationReason(
+                    cardputer::ToolPermissionDecision::Allow,
+                    cardputer::ToolSchemaId::SftpRead, true) ==
+                    cardputer::ToolConfirmationReason::None,
+            "Destructive file confirmation matrix is incorrect");
+    require(cardputer::toolConfirmationReason(
+                static_cast<cardputer::ToolPermissionDecision>(255),
+                cardputer::ToolSchemaId::SshCommand, true) ==
+                cardputer::ToolConfirmationReason::None &&
+                cardputer::toolConfirmationReason(
+                    cardputer::ToolPermissionDecision::Ask,
+                    cardputer::ToolSchemaId::Count, true) ==
+                cardputer::ToolConfirmationReason::None,
+            "Invalid confirmation input did not fail closed");
+
+    const auto noToolsResolution = cardputer::resolveToolPolicy(
+        builtIn, builtIn, scoped, scoped,
+        {cardputer::ToolMessageIntentMode::NoTools, 0},
+        uniformToolAvailability(true));
+    plan = cardputer::buildToolRequestPlan(
+        noToolsResolution, {cardputer::ToolMessageIntentMode::NoTools, 0});
+    require(plan.schemas == 0 && plan.includedGroups == 0 &&
+                plan.missingRequiredGroups == 0,
+            "No-tools intent retained a model schema");
+}
+
+void testPythonRunStageFailureOwnership()
+{
+    const cardputer::PythonRunStageResult ordinaryFailure = {
+        false, false, false, "ordinary",
+    };
+    const cardputer::PythonRunStageResult recoveryOwnedFailure = {
+        false, false, true, "recovery",
+    };
+    const cardputer::PythonRunStageResult successfulHandoff = {
+        true, true, false, "",
+    };
+    require(cardputer::pythonRunStageFailureAllowsContinuation(ordinaryFailure),
+            "Ordinary Python staging failure blocked bounded continuation");
+    require(!cardputer::pythonRunStageFailureAllowsContinuation(
+                recoveryOwnedFailure),
+            "Recovery-owned Python staging failure allowed continuation");
+    require(!cardputer::pythonRunStageFailureAllowsContinuation(successfulHandoff),
+            "Successful Python staging was classified as a failure continuation");
+}
+
+void testPendingToolPreview()
+{
+    const auto ordinary = cardputer::buildPendingFileReplacementPreview(
+        "alpha\nbeta\nomega\n", 17, true,
+        "alpha\nBETA\nomega\n");
+    require(ordinary.success && !ordinary.truncated &&
+                ordinary.body.find("--- current (17 bytes)") !=
+                    std::string::npos &&
+                ordinary.body.find("+++ proposed (17 bytes)") !=
+                    std::string::npos &&
+                ordinary.body.find("@@ first difference at byte 6 @@") !=
+                    std::string::npos &&
+                ordinary.body.find("-beta\\n") != std::string::npos &&
+                ordinary.body.find("+BETA\\n") != std::string::npos,
+            "Ordinary file replacement preview is incorrect");
+
+    const auto unchanged = cardputer::buildPendingFileReplacementPreview(
+        "same\n", 5, true, "same\n");
+    require(unchanged.success && !unchanged.truncated &&
+                unchanged.body.find("@@ no changes @@") != std::string::npos,
+            "Unchanged file replacement was not explicit");
+
+    const auto whitespace = cardputer::buildPendingFileReplacementPreview(
+        "alpha\r\n  beta \r\n", 16, true,
+        "alpha\r\n beta\t\r\n");
+    require(whitespace.success && !whitespace.truncated &&
+                whitespace.body.find("-\\s\\sbeta\\s\\r\\n") !=
+                    std::string::npos &&
+                whitespace.body.find("+\\sbeta\\t\\r\\n") !=
+                    std::string::npos,
+            "Whitespace-only file replacement is not visible");
+
+    const auto noFinalNewline = cardputer::buildPendingFileReplacementPreview(
+        "line\nlast", 9, true, "line\nlast ");
+    require(noFinalNewline.success && !noFinalNewline.truncated &&
+                noFinalNewline.body.find("+last\\s\n") !=
+                    std::string::npos,
+            "No-final-newline replacement hid trailing whitespace");
+
+    std::string deepCurrent(9001, 'a');
+    std::string deepProposed = deepCurrent;
+    deepCurrent[8999] = 'X';
+    deepProposed[8999] = 'Y';
+    deepCurrent.push_back('\n');
+    deepProposed.push_back('\n');
+    const auto deep = cardputer::buildPendingFileReplacementPreview(
+        deepCurrent, static_cast<std::uint32_t>(deepCurrent.size()), true,
+        deepProposed);
+    require(deep.success && deep.truncated &&
+                deep.body.find("first difference at byte 8999") !=
+                    std::string::npos &&
+                deep.body.find('X') != std::string::npos &&
+                deep.body.find('Y') != std::string::npos,
+            "Deep file change fell outside the bounded preview window");
+
+    const std::string incompletePrefix(
+        cardputer::kMaximumPendingFilePreviewSourceBytes, 'a');
+    const auto incomplete = cardputer::buildPendingFileReplacementPreview(
+        incompletePrefix, 15000, false, incompletePrefix);
+    require(incomplete.success && incomplete.truncated &&
+                incomplete.body.find("2712 current bytes not shown") !=
+                    std::string::npos &&
+                incomplete.body.size() <=
+                    cardputer::kMaximumPendingToolPreviewBodyBytes,
+            "Incomplete current-file prefix was presented as complete");
+
+    const auto unicode = cardputer::buildPendingFileReplacementPreview(
+        "Привет мир\n", 20, true, "Привет  мир\n");
+    require(unicode.success && cardputer::isValidUtf8(unicode.body) &&
+                unicode.body.size() <=
+                    cardputer::kMaximumPendingToolPreviewBodyBytes,
+            "UTF-8 file preview is invalid or unbounded");
+
+    std::string clippedUtf8;
+    for (std::size_t index = 0; index < 200; ++index) {
+        clippedUtf8 += "я";
+    }
+    std::string changedUtf8 = clippedUtf8;
+    changedUtf8.replace(0, std::string("я").size(), "ю");
+    const auto utf8Boundary = cardputer::buildPendingFileReplacementPreview(
+        clippedUtf8, static_cast<std::uint32_t>(clippedUtf8.size()), true,
+        changedUtf8);
+    require(utf8Boundary.success && utf8Boundary.truncated &&
+                cardputer::isValidUtf8(utf8Boundary.body) &&
+                utf8Boundary.body.find("first difference at byte 0") !=
+                    std::string::npos,
+            "UTF-8 line clipping split a code point boundary");
+
+    std::string manyCurrent = "old\n";
+    std::string manyProposed = "new\n";
+    for (std::size_t index = 0; index < 20; ++index) {
+        manyCurrent += "current line " + std::to_string(index) + "\n";
+        manyProposed += "proposed line " + std::to_string(index) + "\n";
+    }
+    const auto bounded = cardputer::buildPendingFileReplacementPreview(
+        manyCurrent, static_cast<std::uint32_t>(manyCurrent.size()), true,
+        manyProposed);
+    std::size_t lineCount = 0;
+    std::size_t lineBytes = 0;
+    std::size_t maximumLineBytes = 0;
+    for (const char value : bounded.body) {
+        if (value == '\n') {
+            ++lineCount;
+            maximumLineBytes = std::max(maximumLineBytes, lineBytes);
+            lineBytes = 0;
+        } else {
+            ++lineBytes;
+        }
+    }
+    require(bounded.success && bounded.truncated &&
+                bounded.body.size() <=
+                    cardputer::kMaximumPendingToolPreviewBodyBytes &&
+                lineCount <= 13 &&
+                maximumLineBytes <=
+                    cardputer::kMaximumPendingToolPreviewLineBytes,
+            "File preview exceeded its body, line, or line-width bound");
+
+    const std::string command =
+        "  printf '\"quoted\"\\\\path'\t\n echo Привет  ";
+    const auto ssh = cardputer::buildPendingSshCommandPreview(command);
+    require(ssh.success && !ssh.truncated && ssh.body == command,
+            "SSH command preview changed exact command bytes");
+    require(!cardputer::buildPendingSshCommandPreview("").success &&
+                !cardputer::buildPendingSshCommandPreview(
+                    std::string(1025, 'x')).success,
+            "SSH command preview accepted input outside its exact limits");
+
+    const auto python = cardputer::buildPendingPythonSourcePreview(
+        "tools/check.py", 4096,
+        std::string(64, 'a'), std::string(1536, 'x'), false);
+    require(python.success && python.truncated &&
+                python.body.size() <=
+                    cardputer::kMaximumPendingToolPreviewBodyBytes &&
+                python.body.find("Privileged one-run MicroPython code") !=
+                    std::string::npos &&
+                python.body.find("stored durably in the originating chat") !=
+                    std::string::npos &&
+                python.body.find("not adversarial containment") !=
+                    std::string::npos &&
+                python.body.find("tools/check.py") != std::string::npos &&
+                python.body.find(std::string(64, 'a')) != std::string::npos,
+            "Python approval preview omitted trust or exact-byte identity");
+    std::string maximumPythonSource(65533, 'x');
+    maximumPythonSource += "\xe2\x82\xac";
+    cardputer::PythonUtf8StreamState utf8 = {0, 0, 0, true};
+    utf8 = cardputer::consumePythonUtf8Chunk(
+        utf8,
+        reinterpret_cast<const std::uint8_t*>(maximumPythonSource.data()),
+        65534);
+    require(utf8.valid && !cardputer::pythonUtf8StreamComplete(utf8),
+            "Streaming UTF-8 verifier lost a split maximum-size code point");
+    utf8 = cardputer::consumePythonUtf8Chunk(
+        utf8,
+        reinterpret_cast<const std::uint8_t*>(maximumPythonSource.data() + 65534),
+        2);
+    require(cardputer::pythonUtf8StreamComplete(utf8),
+            "Streaming UTF-8 verifier rejected the exact 65536-byte source ceiling");
+    const std::uint8_t invalidUtf8[] = {0xe2U, 0x28U, 0xa1U};
+    utf8 = cardputer::consumePythonUtf8Chunk(
+        {0, 0, 0, true}, invalidUtf8, sizeof(invalidUtf8));
+    require(!utf8.valid,
+            "Streaming UTF-8 verifier accepted an invalid continuation byte");
+    require(!cardputer::pendingToolContinuationAllowsSchema(
+                cardputer::ToolSchemaId::PythonRun, 1U) &&
+                cardputer::pendingToolContinuationAllowsSchema(
+                    cardputer::ToolSchemaId::PythonRun, 0U) &&
+                cardputer::pendingToolContinuationAllowsSchema(
+                    cardputer::ToolSchemaId::WebSearch, 1U),
+            "Python handoff was not constrained to the final required tool group");
+
+    require(!cardputer::buildPendingFileReplacementPreview(
+                 "x", 2, true, "y").success,
+            "File preview accepted inconsistent completeness metadata");
+}
+
+void testSshProfileCeilings()
+{
+    const auto one = cardputer::decodeSshProfileId(
+        "0000000000000001", 16);
+    const auto maximum = cardputer::decodeSshProfileId(
+        "ffffffffffffffff", 16);
+    require(one.error == cardputer::SshProfileIdCodecError::None &&
+                one.profileId == 1 &&
+                maximum.error == cardputer::SshProfileIdCodecError::None &&
+                maximum.profileId == UINT64_MAX,
+            "Canonical SSH profile IDs did not decode exactly");
+    const auto encoded = cardputer::encodeSshProfileId(UINT64_MAX);
+    require(encoded.error == cardputer::SshProfileIdCodecError::None &&
+                std::string(encoded.value.data(), encoded.length) ==
+                    "ffffffffffffffff",
+            "SSH profile ID formatter did not emit 16 lowercase hex characters");
+    require(cardputer::encodeSshProfileId(0).error ==
+                cardputer::SshProfileIdCodecError::InvalidValue &&
+                cardputer::isValidSshProfileCeiling("", 0) &&
+                !cardputer::isValidSshProfileCeiling("0000000000000000", 16) &&
+                !cardputer::isValidSshProfileCeiling("0000000000000001x", 17) &&
+                !cardputer::isValidSshProfileCeiling("000000000000000A", 16) &&
+                !cardputer::isValidSshProfileCeiling("000000000000000g", 16),
+            "SSH profile ceiling validation accepted a noncanonical ID");
+    require(cardputer::sshProfileCeilingsAllowSelected(
+                1, "", 0, "", 0) &&
+                cardputer::sshProfileCeilingsAllowSelected(
+                    1, "0000000000000001", 16, "", 0) &&
+                cardputer::sshProfileCeilingsAllowSelected(
+                    1, "0000000000000001", 16,
+                    "0000000000000001", 16) &&
+                !cardputer::sshProfileCeilingsAllowSelected(
+                    0, "", 0, "", 0) &&
+                !cardputer::sshProfileCeilingsAllowSelected(
+                    1, "0000000000000002", 16, "", 0) &&
+                !cardputer::sshProfileCeilingsAllowSelected(
+                    1, "", 0, "0000000000000002", 16),
+            "Project/chat SSH ceilings did not conjunctively narrow selected authority");
+}
+
+void testToolPolicyPrecedence()
+{
+    const std::array<cardputer::ToolPermission, 3> permissions = {
+        cardputer::ToolPermission::Off,
+        cardputer::ToolPermission::Ask,
+        cardputer::ToolPermission::Allow,
+    };
+    const std::array<cardputer::ScopedToolPermission, 4> scopedPermissions = {
+        cardputer::ScopedToolPermission::Inherit,
+        cardputer::ScopedToolPermission::Off,
+        cardputer::ScopedToolPermission::Ask,
+        cardputer::ScopedToolPermission::Allow,
+    };
+    const auto available = uniformToolAvailability(true);
+    const cardputer::ToolMessageIntent automatic = {
+        cardputer::ToolMessageIntentMode::Auto, 0};
+    const std::size_t target = static_cast<std::size_t>(
+        cardputer::ToolCapability::FilesWriteDelete);
+
+    for (const auto builtInValue : permissions) {
+        for (const auto globalValue : permissions) {
+            for (const auto projectValue : scopedPermissions) {
+                for (const auto chatValue : scopedPermissions) {
+                    auto builtIn = uniformToolPermissionPolicy(
+                        cardputer::ToolPermission::Allow);
+                    auto global = builtIn;
+                    auto project = uniformScopedToolPermissionPolicy(
+                        cardputer::ScopedToolPermission::Inherit);
+                    auto chat = project;
+                    builtIn[target] = builtInValue;
+                    global[target] = globalValue;
+                    project[target] = projectValue;
+                    chat[target] = chatValue;
+                    const auto builtInBefore = builtIn;
+                    const auto globalBefore = global;
+                    const auto projectBefore = project;
+                    const auto chatBefore = chat;
+
+                    std::uint8_t expectedRank = 2;
+                    auto expectedSource =
+                        cardputer::ToolPermissionSource::None;
+                    const auto restrictExpected =
+                        [&expectedRank, &expectedSource](
+                            std::uint8_t rank,
+                            cardputer::ToolPermissionSource source) {
+                            if (rank < expectedRank) {
+                                expectedRank = rank;
+                                expectedSource = source;
+                            }
+                        };
+                    restrictExpected(
+                        static_cast<std::uint8_t>(builtInValue),
+                        cardputer::ToolPermissionSource::BuiltIn);
+                    restrictExpected(
+                        static_cast<std::uint8_t>(globalValue),
+                        cardputer::ToolPermissionSource::Global);
+                    if (projectValue !=
+                        cardputer::ScopedToolPermission::Inherit) {
+                        restrictExpected(
+                            static_cast<std::uint8_t>(projectValue) - 1,
+                            cardputer::ToolPermissionSource::Project);
+                    }
+                    if (chatValue !=
+                        cardputer::ScopedToolPermission::Inherit) {
+                        restrictExpected(
+                            static_cast<std::uint8_t>(chatValue) - 1,
+                            cardputer::ToolPermissionSource::Chat);
+                    }
+
+                    const auto result = cardputer::resolveToolPolicy(
+                        builtIn, global, project, chat, automatic, available);
+                    require(
+                        result.error ==
+                                cardputer::ToolPolicyContractError::None &&
+                            result.permissions[target].decision ==
+                                static_cast<
+                                    cardputer::ToolPermissionDecision>(
+                                    expectedRank) &&
+                            result.permissions[target].source ==
+                                expectedSource,
+                        "Tool policy precedence is incorrect");
+                    for (std::size_t index = 0;
+                         index < result.permissions.size();
+                         ++index) {
+                        if (index != target) {
+                            require(
+                                result.permissions[index].decision ==
+                                        cardputer::
+                                            ToolPermissionDecision::Allow &&
+                                    result.permissions[index].source ==
+                                        cardputer::
+                                            ToolPermissionSource::None,
+                                "One capability changed another capability");
+                        }
+                    }
+                    require(builtIn == builtInBefore &&
+                                global == globalBefore &&
+                                project == projectBefore &&
+                                chat == chatBefore,
+                            "Tool policy resolution modified an input");
+                }
+            }
+        }
+    }
+
+    for (std::size_t denied = 0;
+         denied < cardputer::kToolCapabilityCount;
+         ++denied) {
+        const auto builtIn = uniformToolPermissionPolicy(
+            cardputer::ToolPermission::Allow);
+        auto global = builtIn;
+        global[denied] = cardputer::ToolPermission::Off;
+        const auto project = uniformScopedToolPermissionPolicy(
+            cardputer::ScopedToolPermission::Inherit);
+        const auto result = cardputer::resolveToolPolicy(
+            builtIn, global, project, project, automatic, available);
+        for (std::size_t index = 0;
+             index < result.permissions.size();
+             ++index) {
+            require(
+                result.permissions[index].decision ==
+                        (index == denied
+                             ? cardputer::ToolPermissionDecision::Deny
+                             : cardputer::ToolPermissionDecision::Allow) &&
+                    result.permissions[index].source ==
+                        (index == denied
+                             ? cardputer::ToolPermissionSource::Global
+                             : cardputer::ToolPermissionSource::None),
+                "Capability identity isolation failed");
+        }
+    }
+}
+
+void testToolPolicyRoadmapExamples()
+{
+    const auto builtIn = uniformToolPermissionPolicy(
+        cardputer::ToolPermission::Allow);
+    auto global = builtIn;
+    const auto project = uniformScopedToolPermissionPolicy(
+        cardputer::ScopedToolPermission::Inherit);
+    auto chat = project;
+    const auto available = uniformToolAvailability(true);
+    const cardputer::ToolMessageIntent automatic = {
+        cardputer::ToolMessageIntentMode::Auto, 0};
+    const std::size_t ssh = static_cast<std::size_t>(
+        cardputer::ToolCapability::SshRead);
+    const std::size_t files = static_cast<std::size_t>(
+        cardputer::ToolCapability::FilesRead);
+    const std::size_t web = static_cast<std::size_t>(
+        cardputer::ToolCapability::WebSearch);
+
+    global[ssh] = cardputer::ToolPermission::Off;
+    chat[ssh] = cardputer::ScopedToolPermission::Allow;
+    auto result = cardputer::resolveToolPolicy(
+        builtIn, global, project, chat, automatic, available);
+    require(
+        result.permissions[ssh].decision ==
+                cardputer::ToolPermissionDecision::Deny &&
+            result.permissions[ssh].source ==
+                cardputer::ToolPermissionSource::Global,
+        "Chat Allow elevated global SSH Off");
+
+    global[ssh] = cardputer::ToolPermission::Ask;
+    result = cardputer::resolveToolPolicy(
+        builtIn, global, project, chat, automatic, available);
+    require(
+        result.permissions[ssh].decision ==
+                cardputer::ToolPermissionDecision::Ask &&
+            result.permissions[ssh].source ==
+                cardputer::ToolPermissionSource::Global,
+        "Chat Allow elevated global SSH Ask");
+
+    global[ssh] = cardputer::ToolPermission::Allow;
+    chat[ssh] = cardputer::ScopedToolPermission::Inherit;
+    chat[files] = cardputer::ScopedToolPermission::Off;
+    result = cardputer::resolveToolPolicy(
+        builtIn, global, project, chat, automatic, available);
+    require(
+        result.permissions[files].decision ==
+                cardputer::ToolPermissionDecision::Deny &&
+            result.permissions[files].source ==
+                cardputer::ToolPermissionSource::Chat,
+        "Chat Files Off did not restrict global Files Allow");
+
+    result = cardputer::resolveToolPolicy(
+        builtIn, global, project, chat, automatic, available);
+    require(
+        result.permissions[web].decision ==
+                cardputer::ToolPermissionDecision::Allow &&
+            result.permissions[web].source ==
+                cardputer::ToolPermissionSource::None,
+        "Inherited Web permission did not preserve global Allow");
+
+    global[ssh] = cardputer::ToolPermission::Off;
+    const std::uint8_t sshGroup =
+        toolCapabilityGroupMask(cardputer::ToolCapabilityGroup::Ssh);
+    result = cardputer::resolveToolPolicy(
+        builtIn, global, project, chat,
+        {cardputer::ToolMessageIntentMode::Required, sshGroup}, available);
+    require(result.requiredGroups == sshGroup &&
+                result.permissions[ssh].decision ==
+                    cardputer::ToolPermissionDecision::Deny,
+            "Required SSH elevated a denied policy or lost its obligation");
+}
+
+void testToolPolicyIntentAvailabilityAndErrors()
+{
+    auto builtIn = uniformToolPermissionPolicy(
+        cardputer::ToolPermission::Allow);
+    auto global = builtIn;
+    auto project = uniformScopedToolPermissionPolicy(
+        cardputer::ScopedToolPermission::Inherit);
+    auto chat = project;
+    auto availability = uniformToolAvailability(true);
+    const cardputer::ToolMessageIntent automatic = {
+        cardputer::ToolMessageIntentMode::Auto, 0};
+
+    const auto noTools = cardputer::resolveToolPolicy(
+        builtIn, global, project, chat,
+        {cardputer::ToolMessageIntentMode::NoTools, 0}, availability);
+    for (const auto& permission : noTools.permissions) {
+        require(
+            permission.decision ==
+                    cardputer::ToolPermissionDecision::Deny &&
+                permission.source ==
+                    cardputer::ToolPermissionSource::Message,
+            "No tools left an executable capability");
+    }
+
+    const std::size_t python = static_cast<std::size_t>(
+        cardputer::ToolCapability::PythonWriteRun);
+    availability[python] = false;
+    auto result = cardputer::resolveToolPolicy(
+        builtIn, global, project, chat, automatic, availability);
+    require(
+        result.permissions[python].decision ==
+                cardputer::ToolPermissionDecision::Unavailable &&
+            result.permissions[python].source ==
+                cardputer::ToolPermissionSource::Availability,
+        "Unavailable Python capability was not explicit");
+    global[python] = cardputer::ToolPermission::Off;
+    result = cardputer::resolveToolPolicy(
+        builtIn, global, project, chat, automatic, availability);
+    require(
+        result.permissions[python].decision ==
+                cardputer::ToolPermissionDecision::Deny &&
+            result.permissions[python].source ==
+                cardputer::ToolPermissionSource::Global,
+        "Capability unavailability hid an explicit policy denial");
+
+    const std::array<cardputer::ToolPermission, 2> invalidPermissions = {
+        cardputer::ToolPermission::Count,
+        static_cast<cardputer::ToolPermission>(255),
+    };
+    const std::array<cardputer::ScopedToolPermission, 2>
+        invalidScopedPermissions = {
+            cardputer::ScopedToolPermission::Count,
+            static_cast<cardputer::ScopedToolPermission>(255),
+        };
+    for (std::size_t index = 0;
+         index < cardputer::kToolCapabilityCount;
+         ++index) {
+        for (const auto invalid : invalidPermissions) {
+            builtIn = uniformToolPermissionPolicy(
+                cardputer::ToolPermission::Allow);
+            global = builtIn;
+            project = uniformScopedToolPermissionPolicy(
+                cardputer::ScopedToolPermission::Inherit);
+            chat = project;
+            builtIn[index] = invalid;
+            requireInvalidToolResolution(
+                cardputer::resolveToolPolicy(
+                    builtIn, global, project, chat, automatic, availability),
+                cardputer::ToolPolicyContractError::
+                    InvalidBuiltInPermission);
+            builtIn[index] = cardputer::ToolPermission::Allow;
+            global[index] = invalid;
+            requireInvalidToolResolution(
+                cardputer::resolveToolPolicy(
+                    builtIn, global, project, chat, automatic, availability),
+                cardputer::ToolPolicyContractError::
+                    InvalidGlobalPermission);
+        }
+        for (const auto invalid : invalidScopedPermissions) {
+            global = uniformToolPermissionPolicy(
+                cardputer::ToolPermission::Allow);
+            project = uniformScopedToolPermissionPolicy(
+                cardputer::ScopedToolPermission::Inherit);
+            chat = project;
+            project[index] = invalid;
+            requireInvalidToolResolution(
+                cardputer::resolveToolPolicy(
+                    global, global, project, chat, automatic, availability),
+                cardputer::ToolPolicyContractError::
+                    InvalidProjectPermission);
+            project[index] =
+                cardputer::ScopedToolPermission::Inherit;
+            chat[index] = invalid;
+            requireInvalidToolResolution(
+                cardputer::resolveToolPolicy(
+                    global, global, project, chat, automatic, availability),
+                cardputer::ToolPolicyContractError::
+                    InvalidChatPermission);
+        }
+    }
+}
+
+void testToolPolicyCodecDefaultsAndLegacyMigration()
+{
+    const auto master = cardputer::defaultGlobalToolPermissionPolicy();
+    const auto newChat = cardputer::defaultNewChatToolPermissionPolicy();
+    const auto inherited = cardputer::inheritedToolPermissionPolicy();
+    const auto encodedMaster = cardputer::encodeToolPermissionPolicy(master);
+    const auto encodedNewChat =
+        cardputer::encodeScopedToolPermissionPolicy(newChat);
+    require(encodedMaster.error == cardputer::ToolPolicyCodecError::None &&
+                std::string(encodedMaster.encoded.value.data()) ==
+                    "v1;ws=a;wf=a;fr=a;fw=a;sr=a;sm=a;sf=a;py=o",
+            "Default Master policy or persisted capability order changed");
+    require(encodedNewChat.error == cardputer::ToolPolicyCodecError::None &&
+                std::string(encodedNewChat.encoded.value.data()) ==
+                    "v1;ws=a;wf=a;fr=q;fw=q;sr=o;sm=o;sf=o;py=o",
+            "Default new-chat policy changed");
+    for (const auto permission : inherited) {
+        require(permission == cardputer::ScopedToolPermission::Inherit,
+                "Inherited project policy contains an explicit permission");
+    }
+
+    const auto legacyDisabled =
+        cardputer::migrateLegacyChatToolPermissionPolicy(false);
+    const auto legacyEnabled =
+        cardputer::migrateLegacyChatToolPermissionPolicy(true);
+    require(!cardputer::legacySshToolsEnabled(legacyDisabled),
+            "Disabled legacy SSH state migrated as enabled");
+    require(cardputer::legacySshToolsEnabled(legacyEnabled),
+            "Enabled legacy SSH state did not preserve its grant");
+    auto mixedSsh = legacyEnabled;
+    mixedSsh[static_cast<std::size_t>(cardputer::ToolCapability::SshMutate)] =
+        cardputer::ScopedToolPermission::Ask;
+    require(!cardputer::legacySshToolsEnabled(mixedSsh),
+            "Lossy legacy SSH projection granted a mixed policy");
+    const auto disabledAgain =
+        cardputer::setLegacySshToolsEnabled(legacyEnabled, false);
+    require(disabledAgain[static_cast<std::size_t>(
+                cardputer::ToolCapability::WebSearch)] ==
+                legacyEnabled[static_cast<std::size_t>(
+                    cardputer::ToolCapability::WebSearch)] &&
+                !cardputer::legacySshToolsEnabled(disabledAgain),
+            "Legacy SSH update changed an unrelated capability");
+}
+
+void testToolPolicyCodecRoundTrip()
+{
+    for (std::size_t index = 0;
+         index < cardputer::kToolCapabilityCount;
+         ++index) {
+        for (std::uint8_t value = 0;
+             value < static_cast<std::uint8_t>(cardputer::ToolPermission::Count);
+             ++value) {
+            auto policy = cardputer::defaultGlobalToolPermissionPolicy();
+            policy[index] = static_cast<cardputer::ToolPermission>(value);
+            const auto encoded = cardputer::encodeToolPermissionPolicy(policy);
+            require(encoded.error == cardputer::ToolPolicyCodecError::None,
+                    "Valid Master policy failed to encode");
+            const auto decoded = cardputer::decodeToolPermissionPolicy(
+                encoded.encoded.value.data(), cardputer::kEncodedToolPolicyLength);
+            require(decoded.error == cardputer::ToolPolicyCodecError::None &&
+                        decoded.policy == policy,
+                    "Master policy did not round-trip");
+        }
+        for (std::uint8_t value = 0;
+             value < static_cast<std::uint8_t>(
+                 cardputer::ScopedToolPermission::Count);
+             ++value) {
+            auto policy = cardputer::defaultNewChatToolPermissionPolicy();
+            policy[index] = static_cast<cardputer::ScopedToolPermission>(value);
+            const auto encoded =
+                cardputer::encodeScopedToolPermissionPolicy(policy);
+            require(encoded.error == cardputer::ToolPolicyCodecError::None,
+                    "Valid scoped policy failed to encode");
+            const auto decoded = cardputer::decodeScopedToolPermissionPolicy(
+                encoded.encoded.value.data(), cardputer::kEncodedToolPolicyLength);
+            require(decoded.error == cardputer::ToolPolicyCodecError::None &&
+                        decoded.policy == policy,
+                    "Scoped policy did not round-trip");
+        }
+    }
+
+    auto invalidMaster = cardputer::defaultGlobalToolPermissionPolicy();
+    invalidMaster[0] = static_cast<cardputer::ToolPermission>(255);
+    require(cardputer::encodeToolPermissionPolicy(invalidMaster).error ==
+                cardputer::ToolPolicyCodecError::InvalidPermission,
+            "Invalid Master permission encoded successfully");
+    auto invalidScoped = cardputer::defaultNewChatToolPermissionPolicy();
+    invalidScoped[0] = static_cast<cardputer::ScopedToolPermission>(255);
+    require(cardputer::encodeScopedToolPermissionPolicy(invalidScoped).error ==
+                cardputer::ToolPolicyCodecError::InvalidPermission,
+            "Invalid scoped permission encoded successfully");
+}
+
+void testToolPolicyCodecRejectsMalformedText()
+{
+    const auto encoded = cardputer::encodeScopedToolPermissionPolicy(
+        cardputer::defaultNewChatToolPermissionPolicy());
+    require(encoded.error == cardputer::ToolPolicyCodecError::None,
+            "Scoped codec fixture failed to encode");
+    const std::string canonical(encoded.encoded.value.data());
+    require(cardputer::decodeScopedToolPermissionPolicy(
+                nullptr, cardputer::kEncodedToolPolicyLength).error ==
+                cardputer::ToolPolicyCodecError::InvalidLength,
+            "Null policy text was accepted");
+    require(cardputer::decodeScopedToolPermissionPolicy(
+                canonical.c_str(), canonical.size() - 1).error ==
+                cardputer::ToolPolicyCodecError::InvalidLength,
+            "Truncated policy text was accepted");
+    const std::string trailing = canonical + "x";
+    require(cardputer::decodeScopedToolPermissionPolicy(
+                trailing.c_str(), trailing.size()).error ==
+                cardputer::ToolPolicyCodecError::InvalidLength,
+            "Policy text with trailing data was accepted");
+
+    std::string malformed = canonical;
+    malformed[1] = '2';
+    require(cardputer::decodeScopedToolPermissionPolicy(
+                malformed.c_str(), malformed.size()).error ==
+                cardputer::ToolPolicyCodecError::InvalidVersion,
+            "Unknown policy version was accepted");
+    malformed = canonical;
+    malformed[3] = 'x';
+    require(cardputer::decodeScopedToolPermissionPolicy(
+                malformed.c_str(), malformed.size()).error ==
+                cardputer::ToolPolicyCodecError::InvalidCapabilityOrder,
+            "Unknown capability name was accepted");
+    malformed = canonical;
+    malformed[6] = 'x';
+    require(cardputer::decodeScopedToolPermissionPolicy(
+                malformed.c_str(), malformed.size()).error ==
+                cardputer::ToolPolicyCodecError::InvalidPermissionCode,
+            "Unknown scoped permission code was accepted");
+    malformed[6] = 'i';
+    require(cardputer::decodeToolPermissionPolicy(
+                malformed.c_str(), malformed.size()).error ==
+                cardputer::ToolPolicyCodecError::InvalidPermissionCode,
+            "Inherit was accepted in a Master policy");
 }
 
 void testUtf8Backspace()
@@ -54,6 +1386,20 @@ void testWrapping()
     const std::vector<std::string> russianWrapped = {"Ты: Это", "пример", "строки"};
     require(cardputer::wrapUtf8Text("Ты: Это пример строки", 14) == russianWrapped,
             "Cyrillic word-aware wrapping failed");
+
+    const auto segmentedWindow =
+        cardputer::wrapUtf8TextWindow("ab", "яcd", 2, 0, 7);
+    require(cardputer::countWrappedUtf8Lines("ab", "яcd", 2) == expected.size() &&
+                segmentedWindow.totalLines == expected.size() &&
+                segmentedWindow.lines == expected,
+            "Segmented UTF-8 wrapping changed prefix/body continuity");
+    const std::vector<std::string> whitespaceExpected = {"You: alpha", "", ""};
+    const auto whitespaceWindow =
+        cardputer::wrapUtf8TextWindow("You: ", "\talpha\n\n", 38, 0, 7);
+    require(whitespaceWindow.totalLines == whitespaceExpected.size() &&
+                whitespaceWindow.lines == whitespaceExpected,
+            "Segmented wrapping changed whitespace or trailing-line behavior");
+
     const std::string largeUnbrokenText(65536, 'x');
     const auto largeWrapped = cardputer::wrapUtf8Text(largeUnbrokenText, 38);
     require(largeWrapped.size() == 1725, "Large text line count is incorrect");
@@ -63,6 +1409,35 @@ void testWrapping()
         wrappedBytes += line.size();
     }
     require(wrappedBytes == largeUnbrokenText.size(), "Large text wrapping lost data");
+
+    const std::size_t largeLineCount =
+        cardputer::countWrappedUtf8Lines("", largeUnbrokenText, 38);
+    require(largeLineCount == largeWrapped.size(),
+            "Bounded large-text line count differs from existing wrapping");
+    const std::array<std::size_t, 3> visibleLineCounts = {5U, 6U, 7U};
+    for (const std::size_t maximumLines : visibleLineCounts) {
+        const std::size_t firstLine = largeLineCount - maximumLines;
+        const auto tailWindow = cardputer::wrapUtf8TextWindow(
+            "", largeUnbrokenText, 38, firstLine, maximumLines);
+        const std::vector<std::string> expectedTail(
+            largeWrapped.begin() + firstLine, largeWrapped.end());
+        require(tailWindow.totalLines == largeLineCount &&
+                    tailWindow.lines == expectedTail &&
+                    tailWindow.lines.size() == maximumLines,
+                "Large-text tail window is not bounded to visible rows");
+    }
+    const auto topWindow =
+        cardputer::wrapUtf8TextWindow("", largeUnbrokenText, 38, 0, 7);
+    const std::vector<std::string> expectedTop(
+        largeWrapped.begin(), largeWrapped.begin() + 7);
+    require(topWindow.totalLines == largeLineCount &&
+                topWindow.lines == expectedTop,
+            "Large-text top window differs from existing wrapping");
+    const auto overscrolledWindow = cardputer::wrapUtf8TextWindow(
+        "", largeUnbrokenText, 38, largeLineCount + 1U, 7);
+    require(overscrolledWindow.totalLines == largeLineCount &&
+                overscrolledWindow.lines.empty(),
+            "Large-text overscroll result is incorrect");
 }
 
 void testSse()
@@ -83,6 +1458,8 @@ void testUtf8Validation()
 {
     require(cardputer::isValidUtf8("Привет"), "Valid UTF-8 rejected");
     require(!cardputer::isValidUtf8(std::string("\xD0", 1)), "Truncated UTF-8 accepted");
+    require(!cardputer::isValidUtf8(std::string("a\0b", 3)),
+            "Embedded NUL accepted as application text");
     const std::string largeValid(65536, 'x');
     require(cardputer::isValidUtf8(largeValid), "Large valid UTF-8 rejected");
     std::string largeInvalid = largeValid;
@@ -113,9 +1490,439 @@ void testChatText()
     require(cardputer::isValidWorkspaceFilename("chat_export.chat.jsonl"),
             "Portable chat bundle filename rejected");
     require(!cardputer::isValidWorkspaceFilename("../secret.txt"), "Traversal filename accepted");
-    require(!cardputer::isValidWorkspaceFilename("program.exe"), "Executable extension accepted");
-    require(!cardputer::isValidWorkspaceFilename(".hidden.txt"), "Hidden filename accepted");
-    require(!cardputer::isValidWorkspaceFilename("note.MD"), "Uppercase extension accepted");
+    require(cardputer::isValidWorkspaceFilename("bin/program.exe"),
+            "Arbitrary nested workspace file rejected");
+    require(cardputer::isValidWorkspaceFilename(".hidden.txt"),
+            "Hidden workspace filename rejected");
+    require(cardputer::isValidWorkspaceFilename("note.MD"),
+            "Uppercase workspace extension rejected");
+    const std::vector<std::string> textExtensions = {
+        ".txt", ".md", ".json", ".jsonl", ".csv", ".html", ".svg", ".py",
+        ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".log", ".xml",
+        ".css", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".sh", ".bash", ".zsh",
+        ".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx", ".ino",
+        ".env", ".properties", ".sql",
+    };
+    for (const std::string& extension : textExtensions) {
+        require(cardputer::isWorkspaceTextFile("nested/source" + extension),
+                "Safe workspace text extension rejected: " + extension);
+        require(cardputer::requestsWorkspaceAccess("inspect nested/source" + extension),
+                "Safe workspace text extension did not enable tools: " + extension);
+        std::string uppercase = extension;
+        for (char& value : uppercase) {
+            value = static_cast<char>(std::toupper(static_cast<unsigned char>(value)));
+        }
+        require(cardputer::isWorkspaceTextFile("nested/source" + uppercase),
+                "Uppercase workspace text extension rejected: " + uppercase);
+        require(cardputer::requestsWorkspaceAccess("inspect nested/source" + uppercase),
+                "Uppercase workspace text extension did not enable tools: " + uppercase);
+    }
+    const std::vector<std::string> transferOnlyNames = {
+        "firmware.bin", "archive.zip", "program.exe", "image.png", "README",
+        "notes.txt.exe", "nested/no-extension",
+    };
+    for (const std::string& name : transferOnlyNames) {
+        require(!cardputer::isWorkspaceTextFile(name),
+                "Transfer-only workspace file accepted as text: " + name);
+        require(!cardputer::requestsWorkspaceAccess("inspect " + name),
+                "Transfer-only extension enabled workspace tools: " + name);
+    }
+    require(!cardputer::isValidWorkspaceFilename("draft.tmp"),
+            "Reserved temporary workspace suffix accepted");
+    require(!cardputer::isValidWorkspaceFilename("backup.bak"),
+            "Reserved backup workspace suffix accepted");
+    require(cardputer::isValidStorageRelativePath("Проекты/заметки/идея.md", 512),
+            "Valid nested UTF-8 storage path rejected");
+    require(cardputer::isValidStorageRelativePath("src/main.cpp", 512),
+            "Valid source storage path rejected");
+    require(!cardputer::isValidStorageRelativePath("../secret.txt", 512),
+            "Parent traversal storage path accepted");
+    require(!cardputer::isValidStorageRelativePath("notes//draft.md", 512),
+            "Empty storage path segment accepted");
+    require(!cardputer::isValidStorageRelativePath("C:/secret.txt", 512),
+            "Drive-qualified storage path accepted");
+    require(!cardputer::isValidStorageRelativePath("/absolute.txt", 512),
+            "Absolute storage path accepted");
+    require(!cardputer::isValidStorageRelativePath(std::string("bad\x01.txt", 8), 512),
+            "Control character in storage path accepted");
+    require(!cardputer::isValidStorageRelativePath("notes/./draft.md", 512),
+            "Current-directory storage segment accepted");
+    require(!cardputer::isValidStorageRelativePath("notes/../draft.md", 512),
+            "Nested parent traversal storage path accepted");
+}
+
+void testContextWindowBudget()
+{
+    const std::vector<cardputer::Message> messages = {
+        {"user", "first"},
+        {"assistant", "second"},
+        {"user", "third"},
+    };
+    const cardputer::ContextWindowResult all =
+        cardputer::fitMessagesToByteBudget(messages, 4096);
+    require(all.droppedMessages == 0 && all.retained.size() == 3,
+            "Context budget dropped messages that fit");
+    const cardputer::ContextWindowResult newest =
+        cardputer::fitMessagesToByteBudget(messages, 22);
+    require(newest.droppedMessages == 2 && newest.retained.size() == 1 &&
+                newest.retained.front().content == "third",
+            "Context budget did not retain the newest complete message");
+    const cardputer::ContextWindowResult zero =
+        cardputer::fitMessagesToByteBudget(messages, 0);
+    require(zero.droppedMessages == 3 && zero.retained.empty(),
+            "Zero context budget retained messages");
+    const std::vector<cardputer::Message> oversized = {{"user", std::string(128, 'x')}};
+    const cardputer::ContextWindowResult one =
+        cardputer::fitMessagesToByteBudget(oversized, 16);
+    require(one.droppedMessages == 0 && one.retained.size() == 1,
+            "Context budget discarded the only newest message");
+    std::vector<cardputer::Message> owned = {
+        {"user", "first"},
+        {"assistant", "second"},
+        {"user", std::string(16384, 'x')},
+    };
+    const char* promptStorage = owned.back().content.data();
+    const cardputer::ContextWindowResult moved =
+        cardputer::fitOwnedMessagesToByteBudget(std::move(owned), 16404);
+    require(moved.droppedMessages == 2 && moved.retained.size() == 1 &&
+                moved.retained.front().content.data() == promptStorage,
+            "Owned context fitting copied the retained large prompt");
+    std::vector<cardputer::Message> finalMessages = moved.retained;
+    finalMessages.push_back({"assistant", std::string(16384, 'y')});
+    const std::vector<cardputer::Message> dropped =
+        cardputer::takeMessagesDroppedToByteBudget(std::move(finalMessages), 16409);
+    require(dropped.size() == 1 && dropped.front().content.size() == 16384,
+            "Owned context fitting did not return the omitted prefix");
+}
+
+void testJsonStringReader()
+{
+    const std::string exactContent(16384, 'x');
+    const std::string exactRecord = "{\"sequence\":1,\"content\":\"" +
+        exactContent + "\",\"role\":\"user\"}";
+    MemoryJsonReader exactReader(exactRecord);
+    const cardputer::json_reader::JsonStringValueResult exact =
+        cardputer::json_reader::readObjectStringField(
+            exactReader, "content", 64, 16384);
+    require(exact.success && exact.value == exactContent,
+            "Exact JSON string boundary decoding failed");
+
+    const std::string escapedRecord =
+        "{\"content\":\"quote: \\\" slash: \\\\ unicode: \\u041f"
+        " emoji: \\uD83D\\uDE00\"}";
+    MemoryJsonReader escapedReader(escapedRecord);
+    const cardputer::json_reader::JsonStringValueResult escaped =
+        cardputer::json_reader::readObjectStringField(
+            escapedReader, "content", 64, 16384);
+    require(escaped.success && escaped.value == "quote: \" slash: \\ unicode: П emoji: 😀",
+            "Escaped JSON string decoding failed");
+
+    const std::string canonicalCommand =
+        "{\"command\":\"printf ok\",\"max_inline_output_bytes\":16384,"
+        "\"timeout_ms\":60000}";
+    const cardputer::json_reader::JsonStringValueResult decodedCommand =
+        cardputer::readCanonicalStringArgument(
+            canonicalCommand, "command", 1024);
+    require(decodedCommand.success && decodedCommand.value == "printf ok",
+            "Canonical SSH command options blocked command extraction");
+
+    const std::string canonicalAction =
+        "{\"action\":\"disk\",\"max_inline_output_bytes\":16384,"
+        "\"timeout_ms\":60000}";
+    const cardputer::json_reader::JsonStringValueResult decodedAction =
+        cardputer::readCanonicalStringArgument(
+            canonicalAction, "action", 32);
+    require(decodedAction.success && decodedAction.value == "disk",
+            "Canonical SSH Safe Action options blocked action extraction");
+
+    const std::string oversizedCanonicalField =
+        "{\"action\":\"disk\",\"abcdefghijklmnopqrstuvwx\":true}";
+    require(!cardputer::readCanonicalStringArgument(
+                 oversizedCanonicalField, "action", 32).success,
+            "Canonical tool argument key above 23 bytes was accepted");
+
+    const std::string duplicateRecord =
+        "{\"content\":\"first\",\"content\":\"second\"}";
+    MemoryJsonReader duplicateReader(duplicateRecord);
+    require(!cardputer::json_reader::readObjectStringField(
+                 duplicateReader, "content", 64, 16384).success,
+            "Duplicate JSON string field was accepted");
+
+    MemoryJsonReader exactMeasureReader(exactRecord);
+    const cardputer::json_reader::JsonStringLengthResult exactMeasure =
+        cardputer::json_reader::measureObjectStringField(
+            exactMeasureReader, "content", 64, 16384);
+    require(exactMeasure.success && exactMeasure.bytes == 16384,
+            "Exact JSON string boundary measurement failed");
+
+    const std::string unicodeRecord =
+        "{\"ignored\":{\"nested\":true},\"c\\u006Fntent\":\"Привет "
+        "\\u041C\\u0438\\u0440 \\uD83D\\uDE00\"}";
+    const std::string decodedUnicode = "Привет Мир 😀";
+    MemoryJsonReader unicodeReader(unicodeRecord);
+    const cardputer::json_reader::JsonStringLengthResult unicode =
+        cardputer::json_reader::measureObjectStringField(
+            unicodeReader, "content", 64, 16384);
+    require(unicode.success && unicode.bytes == decodedUnicode.size(),
+            "Raw and escaped Unicode JSON measurement failed");
+
+    const std::string maximumContent(131072, 'm');
+    const std::string maximumRecord = "{\"content\":\"" + maximumContent + "\"}";
+    MemoryJsonReader maximumReader(maximumRecord);
+    const cardputer::json_reader::JsonStringLengthResult maximum =
+        cardputer::json_reader::measureObjectStringField(
+            maximumReader, "content", 64, 131072);
+    require(maximum.success && maximum.bytes == 131072,
+            "Maximum JSON string measurement failed");
+
+    const std::string emptyRecord = "{\"content\":\"\"}";
+    MemoryJsonReader emptyReader(emptyRecord);
+    const cardputer::json_reader::JsonStringLengthResult empty =
+        cardputer::json_reader::measureObjectStringField(
+            emptyReader, "content", 64, 16384);
+    require(empty.success && empty.bytes == 0,
+            "Empty JSON string measurement did not remain caller-controlled");
+
+    const std::string oversizedRecord =
+        "{\"content\":\"" + std::string(131073, 'o') + "\"}";
+    MemoryJsonReader oversizedReader(oversizedRecord);
+    require(!cardputer::json_reader::measureObjectStringField(
+                 oversizedReader, "content", 64, 131072).success,
+            "JSON string above the measurement limit was accepted");
+
+    const std::string malformedEscapeRecord = "{\"content\":\"bad\\q\"}";
+    MemoryJsonReader malformedEscapeReader(malformedEscapeRecord);
+    require(!cardputer::json_reader::measureObjectStringField(
+                 malformedEscapeReader, "content", 64, 16384).success,
+            "Malformed JSON escape was accepted during measurement");
+
+    const std::string malformedSurrogateRecord =
+        "{\"content\":\"bad \\uD83Dvalue\"}";
+    MemoryJsonReader malformedSurrogateReader(malformedSurrogateRecord);
+    require(!cardputer::json_reader::measureObjectStringField(
+                 malformedSurrogateReader, "content", 64, 16384).success,
+            "Malformed JSON surrogate pair was accepted during measurement");
+
+    std::string invalidUtf8Record = "{\"content\":\"bad ";
+    invalidUtf8Record.push_back(static_cast<char>(0xF0));
+    invalidUtf8Record.push_back(static_cast<char>(0x80));
+    invalidUtf8Record.push_back(static_cast<char>(0x80));
+    invalidUtf8Record.push_back(static_cast<char>(0x80));
+    invalidUtf8Record += "\"}";
+    MemoryJsonReader invalidUtf8Reader(invalidUtf8Record);
+    require(!cardputer::json_reader::measureObjectStringField(
+                 invalidUtf8Reader, "content", 64, 16384).success,
+            "Invalid literal UTF-8 was accepted during JSON measurement");
+
+    MemoryJsonReader measuredDuplicateReader(duplicateRecord);
+    require(!cardputer::json_reader::measureObjectStringField(
+                 measuredDuplicateReader, "content", 64, 16384).success,
+            "Duplicate JSON string field was accepted during measurement");
+
+    const std::string missingRecord = "{\"role\":\"user\"}";
+    MemoryJsonReader missingReader(missingRecord);
+    require(!cardputer::json_reader::measureObjectStringField(
+                 missingReader, "content", 64, 16384).success,
+            "Missing JSON string field was accepted during measurement");
+
+    const std::string trailingRecord = "{\"content\":\"ok\"}garbage";
+    MemoryJsonReader trailingReader(trailingRecord);
+    require(!cardputer::json_reader::measureObjectStringField(
+                 trailingReader, "content", 64, 16384).success,
+            "Trailing JSON data was accepted during measurement");
+}
+
+void testLargePromptTitle()
+{
+    const std::string prompt = std::string(16384, 'x');
+    const std::string title = cardputer::makeChatTitle(prompt, 36);
+    require(title == std::string(33, 'x') + "...",
+            "Large prompt title was not bounded to its display-cell budget");
+    std::string unicodePrompt;
+    unicodePrompt.reserve(16384);
+    for (std::size_t index = 0; index < 5461; ++index) {
+        unicodePrompt += "\xE7\x94\xA8";
+    }
+    unicodePrompt += 'x';
+    const std::string unicodeTitle = cardputer::makeChatTitle(unicodePrompt, 36);
+    require(unicodePrompt.size() == 16384 && unicodeTitle.size() <= 51 &&
+                unicodeTitle.size() >= 3 &&
+                unicodeTitle.compare(unicodeTitle.size() - 3, 3, "...") == 0,
+            "Large Unicode prompt title was not bounded without full-prompt growth");
+}
+
+void testInstructionPrecedence()
+{
+    const std::string scoped = cardputer::buildScopedInstructions(
+        "project", "chat", "request", "summary");
+    const std::string resolved = cardputer::buildUserInstructionScopes("global", scoped);
+    const std::size_t global = resolved.find("Global instructions");
+    const std::size_t project = resolved.find("Project instructions");
+    const std::size_t chat = resolved.find("Chat-specific instructions");
+    const std::size_t request = resolved.find("Instructions for this request");
+    const std::size_t summary = resolved.find("Conversation summary");
+    require(global != std::string::npos && global < project && project < chat &&
+                chat < summary && summary < request,
+            "Scoped instruction precedence is not global -> project -> chat -> request");
+    require(cardputer::buildScopedInstructions("", "chat", "", "").find(
+                "Project instructions supplied by the user") == std::string::npos,
+            "Empty instruction scope produced a synthetic section");
+    require(cardputer::kMaximumRequestInstructionsBytes == 2048,
+            "One-request instruction limit changed unexpectedly");
+}
+
+void testRequestOutputBudget()
+{
+    require(cardputer::resolveRequestOutputTokens(2048, 0) == 2048,
+            "Missing request output override did not preserve the project budget");
+    require(cardputer::resolveRequestOutputTokens(2048, 8192) == 8192,
+            "Request output override did not take precedence over the project budget");
+}
+
+void testProjectRequestPolicy()
+{
+    cardputer::Settings settings = {};
+    settings.model = "global-model";
+    cardputer::ProjectDocument project = {};
+    project.contextByteBudget = 65536;
+    project.maximumOutputTokens = 2048;
+    project.automaticCompaction = true;
+    cardputer::ChatDocument chat = {};
+    const cardputer::ResolvedProjectRequestPolicy inherited =
+        cardputer::resolveProjectRequestPolicy(settings, project, chat, 0);
+    require(inherited.model == "global-model" &&
+                inherited.contextByteBudget == 65536 &&
+                inherited.maximumOutputTokens == 2048 &&
+                inherited.automaticCompaction,
+            "Project request policy did not inherit global/project defaults");
+    require(!cardputer::shouldAutomaticallyCompactRequest(inherited, 0) &&
+                cardputer::shouldAutomaticallyCompactRequest(inherited, 1),
+            "Automatic compaction gate ignored the dropped-message boundary");
+
+    project.model = "project-model";
+    project.automaticCompaction = false;
+    chat.model = "chat-model";
+    const String settingsModel = settings.model;
+    const String projectModel = project.model;
+    const String chatModel = chat.model;
+    const std::uint32_t contextByteBudget = project.contextByteBudget;
+    const std::uint32_t maximumOutputTokens = project.maximumOutputTokens;
+    const bool automaticCompaction = project.automaticCompaction;
+    const cardputer::ResolvedProjectRequestPolicy overridden =
+        cardputer::resolveProjectRequestPolicy(settings, project, chat, 8192);
+    require(overridden.model == "chat-model" &&
+                overridden.maximumOutputTokens == 8192 &&
+                !overridden.automaticCompaction &&
+                !cardputer::shouldAutomaticallyCompactRequest(overridden, 4),
+            "Chat/request overrides did not resolve deterministically");
+    require(settings.model == settingsModel && project.model == projectModel &&
+                chat.model == chatModel &&
+                project.contextByteBudget == contextByteBudget &&
+                project.maximumOutputTokens == maximumOutputTokens &&
+                project.automaticCompaction == automaticCompaction,
+            "Request-policy resolution modified one of its input scopes");
+
+    chat.model.clear();
+    const cardputer::ResolvedProjectRequestPolicy projectOverride =
+        cardputer::resolveProjectRequestPolicy(settings, project, chat, 0);
+    require(projectOverride.model == "project-model",
+            "Empty chat model did not inherit the project model");
+}
+
+void testContextUsage()
+{
+    cardputer::ChatDocument chat = {};
+    chat.summary.messageCount = 10;
+    chat.summarizedMessageCount = 2;
+    chat.messages = {
+        {"user", "a"},
+        {"assistant", "bb"},
+        {"user", "ccc"},
+        {"assistant", "dddd"},
+    };
+    const cardputer::ContextUsage bounded = cardputer::resolveContextUsage(chat, 29);
+    require(bounded.retainedBytes == 29 && bounded.retainedMessages == 1 &&
+                bounded.droppedMessages == 7 && bounded.summarizedMessages == 2 &&
+                bounded.totalMessages == 10,
+            "Context usage did not include the bounded-tail and role overhead");
+    const cardputer::ContextUsage oversizedNewest =
+        cardputer::resolveContextUsage(chat, 1);
+    require(oversizedNewest.retainedBytes == 29 &&
+                oversizedNewest.retainedMessages == 1 &&
+                oversizedNewest.droppedMessages == 7,
+            "Context usage did not preserve the newest oversized message");
+    const cardputer::ContextUsage disabled = cardputer::resolveContextUsage(chat, 0);
+    require(disabled.retainedBytes == 0 && disabled.retainedMessages == 0 &&
+                disabled.droppedMessages == 8,
+            "Zero context budget retained unsummarized messages");
+}
+
+void testRetryRequestPreparation()
+{
+    const std::vector<cardputer::Message> failedHistory = {
+        {"user", "first"},
+        {"assistant", "answer"},
+        {"user", "retry exactly once"},
+    };
+    const cardputer::RetryRequestResult retry = cardputer::prepareRetryRequest(
+        failedHistory, 4096);
+    require(retry.success && retry.prompt == "retry exactly once",
+            "Retry preparation did not retain the failed user request");
+    require(retry.messages.size() == failedHistory.size(),
+            "Retry preparation duplicated or removed a stored message");
+    require(failedHistory.size() == 3 && failedHistory.back().content == "retry exactly once",
+            "Retry preparation modified its input history");
+    require(!cardputer::prepareRetryRequest(
+                {{"user", "done"}, {"assistant", "answer"}}, 4096).success,
+            "Retry preparation accepted a completed assistant turn");
+}
+
+void testSummarizedChatTail()
+{
+    cardputer::ChatDocument chat = {};
+    chat.summary.messageCount = 12;
+    chat.summarizedMessageCount = 8;
+    chat.messages = {
+        {"user", "6"},
+        {"assistant", "7"},
+        {"user", "8"},
+        {"assistant", "9"},
+        {"user", "10"},
+        {"assistant", "11"},
+    };
+    const std::vector<cardputer::Message> active =
+        cardputer::unsummarizedChatTail(chat);
+    require(active.size() == 4 && active.front().content == "8" &&
+                active.back().content == "11",
+            "Summarized messages remained in the active context tail");
+    require(chat.messages.size() == 6,
+            "Active-tail calculation modified raw chat messages");
+    const std::vector<cardputer::Message> owned =
+        cardputer::takeUnsummarizedChatTail(std::move(chat));
+    require(owned.size() == 4 && owned.front().content == "8" &&
+                owned.back().content == "11",
+            "Owned active-tail calculation changed the summarized boundary");
+}
+
+void testContextSummaryPrompt()
+{
+    const std::vector<cardputer::Message> messages = {
+        {"user", "first"},
+        {"assistant", "second"},
+    };
+    const cardputer::ContextSummaryPromptResult result =
+        cardputer::buildContextSummaryPrompt("earlier", messages, 1024);
+    require(result.success, "Context summary prompt should fit");
+    require(result.includedMessages == 2,
+            "Context summary prompt should include both messages");
+    require(result.prompt.find("Previous summary:\nearlier") != std::string::npos,
+            "Context summary prompt should preserve the previous summary");
+    require(result.prompt.find("You: first\nAI: second\n") != std::string::npos,
+            "Context summary prompt should preserve roles and content");
+    const cardputer::ContextSummaryPromptResult tooSmall =
+        cardputer::buildContextSummaryPrompt("earlier", messages, 32);
+    require(!tooSmall.success,
+            "Context summary prompt should reject an insufficient allocation budget");
 }
 
 void testWorkspaceRouting()
@@ -140,6 +1947,320 @@ void testWorkspaceRouting()
             "English create request did not require a file write");
     require(!cardputer::requestsWorkspaceWrite("ПОКАЖИ, КАКИЕ ФАЙЛЫ ЕСТЬ НА SD"),
             "Read-only file request incorrectly required a file write");
+    std::string inertBoundaryPrompt;
+    inertBoundaryPrompt.reserve(16384);
+    for (std::size_t index = 0; index < 5461; ++index) {
+        inertBoundaryPrompt += "用";
+    }
+    inertBoundaryPrompt += 'x';
+    require(inertBoundaryPrompt.size() == 16384,
+            "Workspace routing fixture is not exactly 16384 bytes");
+    require(!cardputer::requestsWorkspaceAccess(inertBoundaryPrompt) &&
+                !cardputer::requestsWorkspaceWrite(inertBoundaryPrompt) &&
+                !cardputer::requestsWebSearch(inertBoundaryPrompt),
+            "Inert exact-boundary prompt enabled a tool policy");
+    const std::string trailingCommand = " СОХРАНИ В ФАЙЛ";
+    std::string commandBoundaryPrompt(16384 - trailingCommand.size(), 'x');
+    commandBoundaryPrompt += trailingCommand;
+    require(cardputer::requestsWorkspaceAccess(commandBoundaryPrompt) &&
+                cardputer::requestsWorkspaceWrite(commandBoundaryPrompt),
+            "Exact-boundary trailing Russian file command was not scanned");
+}
+
+void testProviderProfileValidationAndIdentity()
+{
+    const std::string firstId = "0123456789abcdef";
+    const std::string secondId = "fedcba9876543210";
+    const std::string missingId = "1111111111111111";
+    const std::string minimumUrl = "https://a.co";
+    const std::string maximumUrl = std::string("https://") +
+        std::string(cardputer::kMaximumApiBaseUrlBytes - 8U, 'a');
+    const std::string invalidUtf8("\xC3\x28", 2);
+
+    require(cardputer::kMaximumApiProfiles == 3 &&
+                cardputer::kMaximumModelPresets == 6,
+            "Provider collection limits changed");
+    require(cardputer::kProviderStableIdBytes == 16 &&
+                cardputer::isValidProviderStableId(firstId) &&
+                !cardputer::isValidProviderStableId("0123456789abcde") &&
+                !cardputer::isValidProviderStableId("0123456789abcdeF") &&
+                !cardputer::isValidProviderStableId("0123456789abcdeg"),
+            "Provider stable ID validation failed");
+
+    require(cardputer::providerStoreResultSucceeded(
+                cardputer::validateApiProfileMetadataInput("n", minimumUrl)) &&
+                cardputer::providerStoreResultSucceeded(
+                    cardputer::validateApiProfileMetadataInput(
+                        std::string(cardputer::kMaximumApiProfileNameBytes, 'n'),
+                        maximumUrl)),
+            "API profile exact validation boundaries were rejected");
+    require(cardputer::validateApiProfileMetadataInput("", minimumUrl).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    std::string(cardputer::kMaximumApiProfileNameBytes + 1U, 'n'),
+                    minimumUrl).error == cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    invalidUtf8, minimumUrl).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    "name", "https://a.c").error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    "name", maximumUrl + "a").error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    "name", "http://a.co").error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiProfileMetadataInput(
+                    "name", "https://a.co?q=1").error ==
+                    cardputer::ProviderStoreError::InvalidInput,
+            "API profile invalid input was accepted");
+
+    require(cardputer::providerStoreResultSucceeded(
+                cardputer::validateApiKeyInput(
+                    std::string(cardputer::kMinimumApiKeyBytes, 'k'))) &&
+                cardputer::providerStoreResultSucceeded(
+                    cardputer::validateApiKeyInput(
+                        std::string(cardputer::kMaximumApiKeyBytes, 'k'))),
+            "API key exact validation boundaries were rejected");
+    require(cardputer::validateApiKeyInput(
+                std::string(cardputer::kMinimumApiKeyBytes - 1U, 'k')).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiKeyInput(
+                    std::string(cardputer::kMaximumApiKeyBytes + 1U, 'k')).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateApiKeyInput("abcd\nefgh").error ==
+                    cardputer::ProviderStoreError::InvalidInput,
+            "API key invalid input was accepted");
+
+    const cardputer::ModelPresetInput minimumPreset = {
+        "n", "m", cardputer::kMinimumModelPresetOutputTokens};
+    const cardputer::ModelPresetInput maximumPreset = {
+        std::string(cardputer::kMaximumModelPresetNameBytes, 'n'),
+        std::string(cardputer::kMaximumModelPresetModelBytes, 'm'),
+        cardputer::kMaximumModelPresetOutputTokens};
+    require(cardputer::providerStoreResultSucceeded(
+                cardputer::validateModelPresetInput(minimumPreset)) &&
+                cardputer::providerStoreResultSucceeded(
+                    cardputer::validateModelPresetInput(maximumPreset)),
+            "Model preset exact validation boundaries were rejected");
+    require(cardputer::validateModelPresetInput(
+                {"", "m", cardputer::kMinimumModelPresetOutputTokens}).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateModelPresetInput(
+                    {"n", invalidUtf8,
+                     cardputer::kMinimumModelPresetOutputTokens}).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateModelPresetInput(
+                    {"n", std::string(
+                              cardputer::kMaximumModelPresetModelBytes + 1U, 'm'),
+                     cardputer::kMinimumModelPresetOutputTokens}).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateModelPresetInput(
+                    {"n", "m",
+                     cardputer::kMinimumModelPresetOutputTokens - 1U}).error ==
+                    cardputer::ProviderStoreError::InvalidInput &&
+                cardputer::validateModelPresetInput(
+                    {"n", "m",
+                     cardputer::kMaximumModelPresetOutputTokens + 1U}).error ==
+                    cardputer::ProviderStoreError::InvalidInput,
+            "Model preset invalid input was accepted");
+
+    cardputer::ApiProfileIdReferences profileIds = {};
+    profileIds[0] = &firstId;
+    profileIds[2] = &secondId;
+    require(cardputer::providerStoreResultSucceeded(
+                cardputer::validateApiProfileIdentitySet(profileIds)) &&
+                cardputer::providerStoreResultSucceeded(
+                    cardputer::validateDefaultApiProfileReference(
+                        profileIds, secondId)),
+            "Valid API profile identity set was rejected");
+    require(cardputer::validateDefaultApiProfileReference(
+                profileIds, missingId).error ==
+                    cardputer::ProviderStoreError::Corrupt,
+            "Missing default API profile reference was accepted");
+    profileIds[1] = &firstId;
+    require(cardputer::validateApiProfileIdentitySet(profileIds).error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Duplicate API profile identity was accepted");
+
+    cardputer::ModelPresetIdReferences presetIds = {};
+    presetIds[0] = &firstId;
+    presetIds[5] = &secondId;
+    require(cardputer::providerStoreResultSucceeded(
+                cardputer::validateModelPresetIdentitySet(presetIds)),
+            "Valid model preset identity set was rejected");
+    presetIds[3] = &secondId;
+    require(cardputer::validateModelPresetIdentitySet(presetIds).error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Duplicate model preset identity was accepted");
+}
+
+void testProviderProfileCodecs()
+{
+    const std::string id = "0123456789abcdef";
+    const std::string maximumUrl = std::string("https://") +
+        std::string(cardputer::kMaximumApiBaseUrlBytes - 8U, 'a');
+    const cardputer::ApiProfileMetadataRecord metadata = {
+        id,
+        std::string(cardputer::kMaximumApiProfileNameBytes, 'n'),
+        maximumUrl,
+        0x12345678U,
+        static_cast<std::uint16_t>(cardputer::kMaximumApiKeyBytes),
+    };
+    const cardputer::EncodedProviderRecordResult encodedMetadata =
+        cardputer::encodeApiProfileMetadataRecord(metadata);
+    require(cardputer::providerStoreResultSucceeded(encodedMetadata.result) &&
+                encodedMetadata.bytes.size() == 253,
+            "Maximum API profile metadata encoding failed");
+    const cardputer::ApiProfileMetadataDecodeResult decodedMetadata =
+        cardputer::decodeApiProfileMetadataRecord(encodedMetadata.bytes);
+    require(cardputer::providerStoreResultSucceeded(decodedMetadata.result) &&
+                decodedMetadata.record.id == metadata.id &&
+                decodedMetadata.record.name == metadata.name &&
+                decodedMetadata.record.baseUrl == metadata.baseUrl &&
+                decodedMetadata.record.authorityRevision ==
+                    metadata.authorityRevision &&
+                decodedMetadata.record.secretLength == metadata.secretLength,
+            "API profile metadata round trip failed");
+
+    std::vector<std::uint8_t> malformed = encodedMetadata.bytes;
+    malformed[0] = 2;
+    require(cardputer::decodeApiProfileMetadataRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile metadata version corruption was accepted");
+    malformed = encodedMetadata.bytes;
+    malformed.pop_back();
+    require(cardputer::decodeApiProfileMetadataRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile metadata length corruption was accepted");
+    malformed = encodedMetadata.bytes;
+    std::fill(malformed.begin() + 1, malformed.begin() + 5, 0);
+    require(cardputer::decodeApiProfileMetadataRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile metadata revision corruption was accepted");
+    malformed = encodedMetadata.bytes;
+    malformed[7] = 'A';
+    require(cardputer::decodeApiProfileMetadataRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile metadata ID corruption was accepted");
+
+    const cardputer::ApiProfileSecretRecord secret = {
+        metadata.authorityRevision,
+        std::string(cardputer::kMaximumApiKeyBytes, 'k'),
+    };
+    const cardputer::EncodedProviderRecordResult encodedSecret =
+        cardputer::encodeApiProfileSecretRecord(secret);
+    require(cardputer::providerStoreResultSucceeded(encodedSecret.result) &&
+                encodedSecret.bytes.size() == 519,
+            "Maximum API profile secret encoding failed");
+    const cardputer::ApiProfileSecretDecodeResult decodedSecret =
+        cardputer::decodeApiProfileSecretRecord(encodedSecret.bytes);
+    require(cardputer::providerStoreResultSucceeded(decodedSecret.result) &&
+                decodedSecret.record.authorityRevision ==
+                    secret.authorityRevision &&
+                decodedSecret.record.apiKey == secret.apiKey,
+            "API profile secret round trip failed");
+    malformed = encodedSecret.bytes;
+    malformed.pop_back();
+    require(cardputer::decodeApiProfileSecretRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile secret length corruption was accepted");
+    malformed = encodedSecret.bytes;
+    std::fill(malformed.begin() + 1, malformed.begin() + 5, 0);
+    require(cardputer::decodeApiProfileSecretRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "API profile secret revision corruption was accepted");
+
+    const cardputer::ModelPresetRecord preset = {
+        id,
+        std::string(cardputer::kMaximumModelPresetNameBytes, 'n'),
+        std::string(cardputer::kMaximumModelPresetModelBytes, 'm'),
+        cardputer::kMaximumModelPresetOutputTokens,
+    };
+    const cardputer::EncodedProviderRecordResult encodedPreset =
+        cardputer::encodeModelPresetRecord(preset);
+    require(cardputer::providerStoreResultSucceeded(encodedPreset.result) &&
+                encodedPreset.bytes.size() == 191,
+            "Maximum model preset encoding failed");
+    const cardputer::ModelPresetDecodeResult decodedPreset =
+        cardputer::decodeModelPresetRecord(encodedPreset.bytes);
+    require(cardputer::providerStoreResultSucceeded(decodedPreset.result) &&
+                decodedPreset.record.id == preset.id &&
+                decodedPreset.record.name == preset.name &&
+                decodedPreset.record.model == preset.model &&
+                decodedPreset.record.maximumOutputTokens ==
+                    preset.maximumOutputTokens,
+            "Model preset round trip failed");
+    malformed = encodedPreset.bytes;
+    malformed[0] = 2;
+    require(cardputer::decodeModelPresetRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Model preset version corruption was accepted");
+    malformed = encodedPreset.bytes;
+    malformed.pop_back();
+    require(cardputer::decodeModelPresetRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Model preset length corruption was accepted");
+    malformed = encodedPreset.bytes;
+    malformed[1] = 'A';
+    require(cardputer::decodeModelPresetRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Model preset ID corruption was accepted");
+    malformed = encodedPreset.bytes;
+    malformed[19] = 0x7FU;
+    malformed[20] = 0;
+    malformed[21] = 0;
+    malformed[22] = 0;
+    require(cardputer::decodeModelPresetRecord(malformed).result.error ==
+                cardputer::ProviderStoreError::Corrupt,
+            "Model preset output corruption was accepted");
+}
+
+void testProviderProfileAuthorityOutcomes()
+{
+    const cardputer::ProviderAuthorityIdentity profile = {
+        cardputer::ProviderAuthorityKind::Profile,
+        "0123456789abcdef",
+        7,
+    };
+    require(cardputer::providerAuthorityIdentitiesEqual(profile, profile) &&
+                !cardputer::providerAuthorityIdentitiesEqual(
+                    profile,
+                    {cardputer::ProviderAuthorityKind::Profile,
+                     "0123456789abcdef", 8}) &&
+                !cardputer::providerAuthorityIdentitiesEqual(
+                    profile,
+                    {cardputer::ProviderAuthorityKind::LegacySingleton, "", 7}),
+            "Provider authority identity comparison failed");
+
+    require(cardputer::classifyProviderCandidateSetResult(0) ==
+                cardputer::ProviderWriteDisposition::Stored &&
+                cardputer::classifyProviderCandidateSetResult(
+                    cardputer::kProviderNvsNotEnoughSpaceCode) ==
+                    cardputer::ProviderWriteDisposition::Capacity &&
+                cardputer::classifyProviderCandidateSetResult(
+                    cardputer::kProviderNvsRemoveFailedCode) ==
+                    cardputer::ProviderWriteDisposition::CandidateUncertain &&
+                cardputer::classifyProviderCandidateSetResult(-1) ==
+                    cardputer::ProviderWriteDisposition::DefiniteFailure,
+            "Provider candidate-write classification failed");
+    require(cardputer::classifyProviderAuthoritySetResult(0) ==
+                cardputer::ProviderWriteDisposition::Stored &&
+                cardputer::classifyProviderAuthoritySetResult(
+                    cardputer::kProviderNvsNotEnoughSpaceCode) ==
+                    cardputer::ProviderWriteDisposition::Capacity &&
+                cardputer::classifyProviderAuthoritySetResult(
+                    cardputer::kProviderNvsRemoveFailedCode) ==
+                    cardputer::ProviderWriteDisposition::AuthorityUncertain &&
+                cardputer::classifyProviderAuthoritySetResult(-1) ==
+                    cardputer::ProviderWriteDisposition::DefiniteFailure,
+            "Provider authority-write classification failed");
+    require(cardputer::classifyProviderAuthorityCommitResult(0) ==
+                cardputer::ProviderWriteDisposition::Stored &&
+                cardputer::classifyProviderAuthorityCommitResult(-1) ==
+                    cardputer::ProviderWriteDisposition::AuthorityUncertain,
+            "Provider authority-commit classification failed");
 }
 
 void testWebSearchRouting()
@@ -244,6 +2365,126 @@ void testOfflineCalculator()
             "Calculator result formatting failed");
 }
 
+void testSshCommandOptions()
+{
+    const auto require = [](bool condition, const char* message) {
+        if (!condition) {
+            throw std::runtime_error(message);
+        }
+    };
+    using cardputer::SshCommandTerminalState;
+    require(cardputer::isValidSshCommandTimeout(1000),
+            "minimum SSH command timeout must be valid");
+    require(cardputer::isValidSshCommandTimeout(60000),
+            "maximum SSH command timeout must be valid");
+    require(!cardputer::isValidSshCommandTimeout(999) &&
+                !cardputer::isValidSshCommandTimeout(60001),
+            "SSH command timeout bounds must be exact");
+    require(cardputer::isValidSshCommandInlineOutputLimit(1) &&
+                cardputer::isValidSshCommandInlineOutputLimit(16384),
+            "SSH command output boundary values must be valid");
+    require(!cardputer::isValidSshCommandInlineOutputLimit(0) &&
+                !cardputer::isValidSshCommandInlineOutputLimit(16385),
+            "SSH command output bounds must be exact");
+    require(cardputer::kDefaultSshCommandTimeoutMs == 60000 &&
+                cardputer::kDefaultSshCommandInlineOutputBytes == 16384,
+            "SSH command defaults must match the public contract");
+
+    constexpr std::uint32_t startedAt = UINT32_MAX - 500U;
+    require(!cardputer::sshCommandDeadlineExpired(startedAt, 498U, 1000U) &&
+                cardputer::sshCommandDeadlineExpired(startedAt, 499U, 1000U),
+            "SSH command deadline must remain correct across millis wraparound");
+    require(cardputer::observeSshCommandTerminalState(
+                SshCommandTerminalState::None, true, startedAt, 499U, 1000U) ==
+                SshCommandTerminalState::UserCancelled,
+            "user cancellation must win when cancellation and timeout are first observed together");
+    require(cardputer::observeSshCommandTerminalState(
+                SshCommandTerminalState::TimedOut, true, startedAt, 499U, 1000U) ==
+                SshCommandTerminalState::TimedOut,
+            "the first observed SSH terminal state must remain latched");
+
+    require(cardputer::sshCommandOutputFits(10000, 6384, 16384),
+            "combined SSH output must fit exactly at the inline limit");
+    require(!cardputer::sshCommandOutputFits(10000, 6385, 16384) &&
+                !cardputer::sshCommandOutputFits(16385, 0, 16384),
+            "combined SSH output must reject overflow without unsigned underflow");
+    std::string output = "abc";
+    require(cardputer::appendSshCommandOutput(output, "de", 2, 5) &&
+                output == "abcde",
+            "SSH output append must preserve combined stream order at the exact cap");
+    require(!cardputer::appendSshCommandOutput(output, "f", 1, 5) &&
+                output.empty(),
+            "SSH output overflow must clear all partial output");
+}
+
+void testWebSessionTiming()
+{
+    using cardputer::WebSessionLifetime;
+    constexpr std::array<WebSessionLifetime, 3> finiteLifetimes = {
+        WebSessionLifetime::Minutes15,
+        WebSessionLifetime::Hour1,
+        WebSessionLifetime::Hours8,
+    };
+    constexpr std::array<std::uint32_t, 3> expectedSeconds = {
+        900U, 3600U, 28800U,
+    };
+    for (std::size_t index = 0; index < finiteLifetimes.size(); ++index) {
+        const cardputer::WebSessionLifetimePolicy policy =
+            cardputer::webSessionLifetimePolicy(finiteLifetimes[index]);
+        require(policy.valid && policy.expires &&
+                    policy.cookieMaxAgeSeconds == expectedSeconds[index] &&
+                    policy.idleMilliseconds == expectedSeconds[index] * 1000U,
+                "Finite Web session policy is incorrect");
+        require(!cardputer::webSessionAuthenticationExpired(
+                    finiteLifetimes[index], 0U,
+                    policy.idleMilliseconds - 1U) &&
+                    cardputer::webSessionAuthenticationExpired(
+                        finiteLifetimes[index], 0U,
+                        policy.idleMilliseconds) &&
+                    cardputer::webSessionAuthenticationExpired(
+                        finiteLifetimes[index], 0U,
+                        policy.idleMilliseconds + 1U),
+                "Finite Web session expiry boundary is incorrect");
+        constexpr std::uint32_t wrapStart = UINT32_MAX - 100U;
+        require(!cardputer::webSessionAuthenticationExpired(
+                    finiteLifetimes[index], wrapStart,
+                    static_cast<std::uint32_t>(
+                        wrapStart + policy.idleMilliseconds - 1U)) &&
+                    cardputer::webSessionAuthenticationExpired(
+                        finiteLifetimes[index], wrapStart,
+                        static_cast<std::uint32_t>(
+                            wrapStart + policy.idleMilliseconds)),
+                "Web session expiry failed across millis wraparound");
+    }
+    const cardputer::WebSessionLifetimePolicy rebootPolicy =
+        cardputer::webSessionLifetimePolicy(
+            WebSessionLifetime::UntilReboot);
+    require(rebootPolicy.valid && !rebootPolicy.expires &&
+                rebootPolicy.cookieMaxAgeSeconds == 0U &&
+                !cardputer::webSessionAuthenticationExpired(
+                    WebSessionLifetime::UntilReboot, UINT32_MAX, UINT32_MAX - 1U),
+            "Until-reboot Web session policy must not timer-expire");
+    require(!cardputer::webSessionLifetimeIsValid(
+                static_cast<WebSessionLifetime>(4U)) &&
+                !cardputer::webSessionLifetimeIsValid(
+                    static_cast<WebSessionLifetime>(255U)) &&
+                !cardputer::webSessionLifetimePolicy(
+                    static_cast<WebSessionLifetime>(4U)).valid,
+            "Invalid Web session lifetime was accepted");
+    require(!cardputer::webBrowserPresenceConnected(false, 0U, 0U) &&
+                cardputer::webBrowserPresenceConnected(true, 0U, 23999U) &&
+                !cardputer::webBrowserPresenceConnected(true, 0U, 24000U),
+            "Web browser presence boundary is incorrect");
+    constexpr std::uint32_t heartbeatAt = UINT32_MAX - 100U;
+    require(cardputer::webBrowserPresenceConnected(
+                true, heartbeatAt,
+                static_cast<std::uint32_t>(heartbeatAt + 23999U)) &&
+                !cardputer::webBrowserPresenceConnected(
+                    true, heartbeatAt,
+                    static_cast<std::uint32_t>(heartbeatAt + 24000U)),
+            "Web browser presence failed across millis wraparound");
+}
+
 }  // namespace
 
 int main()
@@ -254,11 +2495,39 @@ int main()
         testWrapping();
         testSse();
         testUtf8Validation();
+        testJsonStringReader();
         testWavHeader();
         testChatText();
+        testContextWindowBudget();
+        testLargePromptTitle();
+        testInstructionPrecedence();
+        testToolPolicyContracts();
+        testSshProfileCeilings();
+        testToolMessageIntent();
+        testToolMessageIntentCodec();
+        testToolCatalogAndRequestPlan();
+        testPythonRunStageFailureOwnership();
+        testPendingToolPreview();
+        testToolPolicyPrecedence();
+        testToolPolicyRoadmapExamples();
+        testToolPolicyIntentAvailabilityAndErrors();
+        testToolPolicyCodecDefaultsAndLegacyMigration();
+        testToolPolicyCodecRoundTrip();
+        testToolPolicyCodecRejectsMalformedText();
+        testRequestOutputBudget();
+        testProjectRequestPolicy();
+        testContextUsage();
+        testRetryRequestPreparation();
+        testSummarizedChatTail();
+        testContextSummaryPrompt();
         testWorkspaceRouting();
+        testProviderProfileValidationAndIdentity();
+        testProviderProfileCodecs();
+        testProviderProfileAuthorityOutcomes();
         testWebSearchRouting();
         testSshTerminalFiltering();
+        testSshCommandOptions();
+        testWebSessionTiming();
         testDocumentReader();
         testOfflineCalculator();
         std::cout << "host_tests: PASS\n";

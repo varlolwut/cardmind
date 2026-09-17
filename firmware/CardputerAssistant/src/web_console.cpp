@@ -1,16 +1,31 @@
 #include "web_console.h"
 
+#include <base64.h>
+
 #include "api_client.h"
 #include "chat_storage.h"
 #include "crash_journal.h"
 #include "file_workspace.h"
 #include "python_mode.h"
+#include "project_bundle.h"
+#include "instruction_policy.h"
+#include "pending_tool_call.h"
+#include "project_chat_storage.h"
+#include "project_storage.h"
+#include "sd_storage.h"
 #include "storage.h"
 #include "ssh_client.h"
 #include "ssh_tool.h"
 #include "text_utils.h"
+#include "tool_router.h"
+#include "tool_activity.h"
 #include "ui.h"
+#include "web_console_routes.h"
+#include "web_console_metrics.h"
+#include "web_console_state.h"
+#include "web_console_transport.h"
 #include "web_search_client.h"
+#include "wifi_networks.h"
 
 #include <ArduinoJson.h>
 #include <M5Cardputer.h>
@@ -19,38 +34,138 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
+#include <lwip/sockets.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
+#include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cardputer {
 namespace {
 
-constexpr std::uint32_t kSessionIdleMs = 15U * 60U * 1000U;
 constexpr std::uint32_t kLoginLockMs = 30U * 1000U;
 constexpr std::size_t kMaximumLoginFailures = 5;
-constexpr std::size_t kMaximumPromptBytes = 1200;
-constexpr std::size_t kMaximumStateHistoryBytes = 12000;
+constexpr std::uint32_t kWebSftpTransferTimeoutMs = 60000;
+constexpr std::size_t kMaximumPromptBytes = 16384;
+constexpr std::size_t kPromptFramePrefixBytes = 4;
+constexpr std::size_t kMaximumPromptFrameBytes =
+    kPromptFramePrefixBytes + kMaximumRequestInstructionsBytes + kMaximumPromptBytes;
+constexpr const char* kPromptFrameContentType =
+    "application/vnd.cardmind.prompt-v1";
+constexpr const char* kToolIntentHeader = "X-CardMind-Tool-Intent";
+constexpr const char* kToolPolicyHeader = "X-CardMind-Tool-Policy";
+constexpr const char* kSshProfileHeader = "X-CardMind-Ssh-Profile-Encoded";
+constexpr const char* kApiProfileHeader = "X-CardMind-Api-Profile";
 constexpr std::size_t kMaximumWebFileChunkBytes = 12288;
+
+struct RawTextRequestState {
+    std::string body;
+    String error;
+    int errorStatus = 400;
+    bool started = false;
+    bool complete = false;
+};
+
+struct RawTextRequestResult {
+    bool success;
+    std::string body;
+    int errorStatus;
+    String error;
+};
+
+struct WebPromptRequest {
+    bool success;
+    std::string prompt;
+    std::string requestInstructions;
+    ToolMessageIntent intent;
+    int errorStatus;
+    String error;
+};
+
+struct WebContextSummaryResult {
+    bool success;
+    std::string summary;
+    std::uint32_t includedMessages;
+    String error;
+};
+
+struct DecodedHeaderResult {
+    bool success;
+    std::string value;
+    int errorStatus;
+    String error;
+};
+
+struct WebPendingContinuationContext {
+    bool present = false;
+    String pendingId;
+    String projectId;
+    String chatId;
+    ResolvedProjectRequestPolicy requestPolicy = {"", 0, 0, false};
+    ProviderAuthorityIdentity providerAuthority = {
+        ProviderAuthorityKind::None, "", 0};
+    String globalInstructions;
+    std::string requestInstructions;
+    ToolMessageIntent intent = {ToolMessageIntentMode::Auto, 0};
+};
+
+struct WebPendingContinuationInputs {
+    bool success = false;
+    String pendingId;
+    PendingToolConfirmationReason reason =
+        PendingToolConfirmationReason::PolicyAsk;
+    ToolRequestPlan plan = {};
+    Settings requestSettings = {};
+    String error;
+};
 
 WebServer server(80);
 Settings consoleSettings;
+ProviderProfileStore* consoleProviderStore = nullptr;
 ChatDocument activeChat;
+ProjectDocument activeProject;
+std::vector<ProjectSummary> consoleProjects;
 std::vector<ChatSummary> consoleChats;
+std::vector<WorkspaceFile> consoleFiles;
+std::vector<SshProfileSummary> consoleSshProfiles;
+std::size_t consoleSshSelected = 0;
+bool consoleSshConfigured = false;
+bool consoleSshPrivateKeyInstalled = false;
+bool filesIndexReady = false;
+bool sshProfilesReady = false;
+std::uint32_t chatsRevision = 0;
+std::uint32_t chatRevision = 0;
+std::uint32_t projectsRevision = 0;
+std::uint32_t projectRevision = 0;
+std::uint32_t chatsNextOffset = 0;
+bool chatsPageEof = true;
+std::uint32_t filesRevision = 0;
+std::uint32_t sshRevision = 0;
+std::uint32_t settingsRevision = 0;
 String accessPassword;
 String sessionToken;
 String csrfToken;
 String consoleStatus;
 String consoleSerialInput;
-std::string activeResponse;
 std::uint32_t sessionLastActivityAt = 0;
+bool sessionActivityRecordedForRequest = false;
+bool sessionCookieEmittedForRequest = false;
+bool browserPresenceInitialized = false;
+std::uint32_t browserLastHeartbeatAt = 0;
+bool browserPresenceBusy = false;
+bool presentedAuthenticationActive = false;
+WebConsoleBrowserState presentedBrowserState = WebConsoleBrowserState::Waiting;
 std::uint32_t loginLockedUntil = 0;
 std::size_t loginFailures = 0;
 bool exitRequested = false;
 bool routesConfigured = false;
+bool serverStarted = false;
 File uploadFile;
 String uploadName;
 String uploadStorageName;
@@ -58,19 +173,138 @@ String uploadError;
 std::size_t uploadBytes = 0;
 bool uploadCreated = false;
 bool uploadReplacing = false;
-constexpr const char* kWebSaveTemporaryName = "_cardmind-web-save.txt";
+RawTextRequestState rawTextRequest;
+std::string failedWebRequestInstructions;
+String failedWebRequestInstructionsChatId;
+std::uint32_t failedWebRequestOutputTokens = 0;
+ToolMessageIntent failedWebRequestIntent = {
+    ToolMessageIntentMode::Auto, 0};
+WebPendingContinuationContext webPendingContext;
 File sshKeyUploadFile;
 String sshKeyUploadError;
 std::size_t sshKeyUploadBytes = 0;
+std::uint64_t sshKeyUploadProfileId = 0;
 constexpr const char* kSshKeyUploadPath = "/assistant/ssh/upload.tmp";
 SshClient webSshClient;
 SshProfile webSshProfile = {"", "", 22, "", "", SshAuthMode::Password, ""};
+std::uint64_t webSshProfileId = 0;
+String webSshProfileHost;
+std::uint16_t webSshProfilePort = 0;
+enum class WebSshStage : std::uint8_t {
+    Idle,
+    Connecting,
+    AwaitingTrust,
+    Authenticating,
+    Opening,
+    Connected,
+    Stopping,
+    Failed,
+};
+portMUX_TYPE webSshStateMux = portMUX_INITIALIZER_UNLOCKED;
+TaskHandle_t webSshTask = nullptr;
+WebSshStage webSshStage = WebSshStage::Idle;
+bool webSshCancelRequested = false;
+char webSshError[192] = {};
+char webSshFingerprint[96] = {};
+char webSshHostKeyType[32] = {};
+bool webSshHostChanged = false;
+std::uint32_t webSshConnectMs = 0;
+std::uint32_t webSshAuthenticateMs = 0;
+std::uint32_t webSshOpenMs = 0;
+std::uint32_t webSshWorkerStackFree = 0;
 bool webSshAwaitingTrust = false;
 bool webSshTerminalOpen = false;
 bool consoleEscapeConsumed = false;
+std::uint32_t passwordRevealUntil = 0;
 String consoleQrPayload;
 String firmwareVersion;
 bool pythonRestartRequested = false;
+
+ProviderSettingsResult resolveConsoleProvider(const ProjectDocument& project);
+ProviderSettingsResult resolveConsoleProviderId(const String& profileId);
+void sendProviderStoreError(const ProviderStoreResult& result);
+
+const char* webSshStageName(WebSshStage stage)
+{
+    switch (stage) {
+        case WebSshStage::Idle: return "idle";
+        case WebSshStage::Connecting: return "connecting";
+        case WebSshStage::AwaitingTrust: return "awaiting_trust";
+        case WebSshStage::Authenticating: return "authenticating";
+        case WebSshStage::Opening: return "opening";
+        case WebSshStage::Connected: return "connected";
+        case WebSshStage::Stopping: return "stopping";
+        case WebSshStage::Failed: return "failed";
+    }
+    return "failed";
+}
+
+void publishWebSshStage(WebSshStage stage, const String& error)
+{
+    char copiedError[sizeof(webSshError)] = {};
+    std::snprintf(copiedError, sizeof(copiedError), "%s", error.c_str());
+    portENTER_CRITICAL(&webSshStateMux);
+    webSshStage = stage;
+    std::memcpy(webSshError, copiedError, sizeof(webSshError));
+    portEXIT_CRITICAL(&webSshStateMux);
+}
+
+bool webSshTaskIsRunning()
+{
+    portENTER_CRITICAL(&webSshStateMux);
+    const bool running = webSshTask != nullptr;
+    portEXIT_CRITICAL(&webSshStateMux);
+    return running;
+}
+
+bool webSshProfileStateLocked()
+{
+    portENTER_CRITICAL(&webSshStateMux);
+    const bool locked = webSshTask != nullptr || webSshAwaitingTrust ||
+        webSshTerminalOpen || webSshHostChanged;
+    portEXIT_CRITICAL(&webSshStateMux);
+    return locked;
+}
+
+void clearWebSshAuthorityCapture()
+{
+    webSshProfileId = 0;
+    webSshProfileHost = "";
+    webSshProfilePort = 0;
+    portENTER_CRITICAL(&webSshStateMux);
+    webSshHostChanged = false;
+    webSshFingerprint[0] = '\0';
+    webSshHostKeyType[0] = '\0';
+    portEXIT_CRITICAL(&webSshStateMux);
+}
+
+bool webRequestClientDisconnected(NetworkClient& client)
+{
+    const int socket = client.fd();
+    if (socket < 0) {
+        return true;
+    }
+    std::uint8_t byte = 0;
+    errno = 0;
+    const int received = recv(socket, &byte, 1, MSG_DONTWAIT | MSG_PEEK);
+    if (received > 0) {
+        return false;
+    }
+    if (received == 0) {
+        return true;
+    }
+    const int socketError = errno;
+    return socketError != EWOULDBLOCK && socketError != EAGAIN &&
+           socketError != ENOENT;
+}
+
+std::uint32_t remainingWebSftpTransferMs(std::uint32_t startedAt)
+{
+    const std::uint32_t elapsed = millis() - startedAt;
+    return elapsed < kWebSftpTransferTimeoutMs
+        ? kWebSftpTransferTimeoutMs - elapsed
+        : 0;
+}
 
 bool consoleEscapePressed()
 {
@@ -98,6 +332,30 @@ bool parseUnsignedArgument(const String& value, std::uint32_t& result)
     return true;
 }
 
+void clearWebSshConnection()
+{
+    webSshClient.close();
+    webSshAwaitingTrust = false;
+    webSshTerminalOpen = false;
+    webSshProfile.password = String();
+    webSshProfile.privateKeyPassphrase = String();
+}
+
+void closeWebSshConnection()
+{
+    portENTER_CRITICAL(&webSshStateMux);
+    const bool running = webSshTask != nullptr;
+    if (running) {
+        webSshCancelRequested = true;
+        webSshStage = WebSshStage::Stopping;
+    }
+    portEXIT_CRITICAL(&webSshStateMux);
+    if (!running) {
+        clearWebSshConnection();
+        publishWebSshStage(WebSshStage::Idle, "");
+    }
+}
+
 String normalizedBaseUrl(String value)
 {
     value.trim();
@@ -107,29 +365,104 @@ String normalizedBaseUrl(String value)
     return value;
 }
 
-void clearConsoleSecrets()
+void clearWebPendingContext()
 {
-    webSshClient.close();
-    webSshProfile.password = "";
-    webSshProfile.privateKeyPassphrase = "";
-    webSshAwaitingTrust = false;
-    webSshTerminalOpen = false;
+    webPendingContext.present = false;
+    webPendingContext.pendingId = "";
+    webPendingContext.projectId = "";
+    webPendingContext.chatId = "";
+    webPendingContext.requestPolicy = {"", 0, 0, false};
+    webPendingContext.providerAuthority = {
+        ProviderAuthorityKind::None, "", 0};
+    webPendingContext.globalInstructions = "";
+    std::string().swap(webPendingContext.requestInstructions);
+    webPendingContext.intent = {ToolMessageIntentMode::Auto, 0};
+}
+
+void releaseConsoleSessionState()
+{
+    closeWebSshConnection();
+    webSshProfile = SshProfile{"", "", 22, "", "", SshAuthMode::Password, ""};
+    clearWebSshAuthorityCapture();
+    consoleEscapeConsumed = false;
+    passwordRevealUntil = 0;
     if (sshKeyUploadFile) {
         sshKeyUploadFile.close();
     }
-    SD.remove(kSshKeyUploadPath);
-    sshKeyUploadError = "";
+    if (uploadFile) {
+        uploadFile.close();
+    }
+    const bool storageWritable = requireSdWriteAccess(0, 0).success;
+    if (storageWritable && uploadCreated && !uploadStorageName.isEmpty()) {
+        SD.remove(workspaceFilePath(uploadStorageName));
+    }
+    if (storageWritable) {
+        SD.remove(kSshKeyUploadPath);
+    }
+    sshKeyUploadError = String();
     sshKeyUploadBytes = 0;
-    accessPassword = "";
-    sessionToken = "";
-    csrfToken = "";
-    consoleSettings.apiKey = "";
-    consoleSettings.wifiPassword = "";
-    consoleSettings.sttApiKey = "";
-    consoleSettings.webSearchApiKey = "";
-    consoleSettings.ttsApiKey = "";
-    consoleQrPayload = "";
-    firmwareVersion = "";
+    sshKeyUploadProfileId = 0;
+    uploadName = String();
+    uploadStorageName = String();
+    uploadError = String();
+    uploadBytes = 0;
+    uploadCreated = false;
+    uploadReplacing = false;
+    accessPassword = String();
+    sessionToken = String();
+    csrfToken = String();
+    consoleStatus = String();
+    consoleSerialInput = String();
+    consoleQrPayload = String();
+    firmwareVersion = String();
+    sessionLastActivityAt = 0;
+    sessionActivityRecordedForRequest = false;
+    sessionCookieEmittedForRequest = false;
+    browserPresenceInitialized = false;
+    browserLastHeartbeatAt = 0;
+    browserPresenceBusy = false;
+    presentedAuthenticationActive = false;
+    presentedBrowserState = WebConsoleBrowserState::Waiting;
+    loginLockedUntil = 0;
+    loginFailures = 0;
+    exitRequested = false;
+    pythonRestartRequested = false;
+    consoleSettings = Settings{};
+    consoleProviderStore = nullptr;
+    activeChat = ChatDocument{};
+    activeProject = ProjectDocument{};
+    std::vector<ProjectSummary>().swap(consoleProjects);
+    std::vector<ChatSummary>().swap(consoleChats);
+    std::vector<WorkspaceFile>().swap(consoleFiles);
+    std::vector<SshProfileSummary>().swap(consoleSshProfiles);
+    consoleSshSelected = 0;
+    consoleSshConfigured = false;
+    consoleSshPrivateKeyInstalled = false;
+    filesIndexReady = false;
+    sshProfilesReady = false;
+    chatsRevision = 0;
+    chatRevision = 0;
+    projectsRevision = 0;
+    projectRevision = 0;
+    chatsNextOffset = 0;
+    chatsPageEof = true;
+    filesRevision = 0;
+    sshRevision = 0;
+    settingsRevision = 0;
+    std::string().swap(failedWebRequestInstructions);
+    failedWebRequestInstructionsChatId = String();
+    failedWebRequestOutputTokens = 0;
+    failedWebRequestIntent = {ToolMessageIntentMode::Auto, 0};
+    clearWebPendingContext();
+}
+
+void releaseActiveDocuments()
+{
+    ChatDocument releasedChat;
+    ProjectDocument releasedProject;
+    using std::swap;
+    swap(activeChat, releasedChat);
+    swap(activeProject, releasedProject);
 }
 
 void failUpload(const String& error)
@@ -137,7 +470,8 @@ void failUpload(const String& error)
     if (uploadFile) {
         uploadFile.close();
     }
-    if (uploadCreated && !uploadStorageName.isEmpty()) {
+    if (requireSdWriteAccess(0, 0).success && uploadCreated &&
+        !uploadStorageName.isEmpty()) {
         SD.remove(workspaceFilePath(uploadStorageName));
     }
     uploadCreated = false;
@@ -187,42 +521,707 @@ bool constantTimeEquals(const String& left, const String& right)
     return difference == 0;
 }
 
-bool sessionIsActive()
+void renderConsoleScreen();
+void renderConsoleSessionPresentationIfChanged();
+
+WebConsoleBrowserState webConsoleBrowserStateAt(std::uint32_t now)
+{
+    if (browserPresenceBusy) {
+        return WebConsoleBrowserState::Busy;
+    }
+    return webBrowserPresenceConnected(
+        browserPresenceInitialized, browserLastHeartbeatAt, now)
+        ? WebConsoleBrowserState::Connected
+        : WebConsoleBrowserState::Waiting;
+}
+
+const char* webConsoleBrowserStateName(WebConsoleBrowserState state)
+{
+    switch (state) {
+        case WebConsoleBrowserState::Waiting: return "waiting";
+        case WebConsoleBrowserState::Connected: return "connected";
+        case WebConsoleBrowserState::Busy: return "busy";
+    }
+    return "waiting";
+}
+
+void clearBrowserPresence()
+{
+    browserPresenceInitialized = false;
+    browserLastHeartbeatAt = 0;
+    browserPresenceBusy = false;
+}
+
+void clearSessionAuthentication()
+{
+    sessionToken = "";
+    csrfToken = "";
+    sessionLastActivityAt = 0;
+    clearBrowserPresence();
+}
+
+bool sessionAuthenticationActiveAt(std::uint32_t now)
+{
+    return !sessionToken.isEmpty() &&
+           !webSessionAuthenticationExpired(
+               consoleSettings.webSessionLifetime, sessionLastActivityAt, now);
+}
+
+bool expireSessionAuthenticationAt(std::uint32_t now)
 {
     if (sessionToken.isEmpty() ||
-        static_cast<std::uint32_t>(millis() - sessionLastActivityAt) > kSessionIdleMs) {
-        sessionToken = "";
-        csrfToken = "";
+        !webSessionAuthenticationExpired(
+            consoleSettings.webSessionLifetime, sessionLastActivityAt, now)) {
+        return false;
+    }
+    clearSessionAuthentication();
+    return true;
+}
+
+String sessionCookieValue()
+{
+    const WebSessionLifetimePolicy policy =
+        webSessionLifetimePolicy(consoleSettings.webSessionLifetime);
+    String value = "cm_session=" + sessionToken +
+                   "; HttpOnly; SameSite=Strict; Path=/";
+    if (policy.expires) {
+        value += "; Max-Age=";
+        value += String(policy.cookieMaxAgeSeconds);
+    }
+    return value;
+}
+
+void recordSessionActivityForRequest()
+{
+    if (sessionActivityRecordedForRequest) {
+        return;
+    }
+    sessionLastActivityAt = millis();
+    sessionActivityRecordedForRequest = true;
+}
+
+void queueSessionRefreshForManagedResponse()
+{
+    recordSessionActivityForRequest();
+    if (sessionCookieEmittedForRequest) {
+        return;
+    }
+    server.sendHeader("Set-Cookie", sessionCookieValue());
+    sessionCookieEmittedForRequest = true;
+}
+
+bool sessionIsActiveWithoutRefresh()
+{
+    const std::uint32_t now = millis();
+    if (expireSessionAuthenticationAt(now)) {
+        renderConsoleSessionPresentationIfChanged();
         return false;
     }
     const String cookie = server.header("Cookie");
-    const bool authenticated = cookie.indexOf("cm_session=" + sessionToken) >= 0;
-    if (authenticated) {
-        sessionLastActivityAt = millis();
+    return !sessionToken.isEmpty() &&
+           cookie.indexOf("cm_session=" + sessionToken) >= 0;
+}
+
+bool sessionIsActive()
+{
+    if (!sessionIsActiveWithoutRefresh()) {
+        return false;
     }
-    return authenticated;
+    queueSessionRefreshForManagedResponse();
+    return true;
+}
+
+bool requestHasValidCsrfWithoutRefresh()
+{
+    return sessionIsActiveWithoutRefresh() && !csrfToken.isEmpty() &&
+           constantTimeEquals(server.header("X-CardMind-CSRF"), csrfToken);
 }
 
 bool requestHasValidCsrf()
 {
-    return sessionIsActive() && !csrfToken.isEmpty() &&
-           constantTimeEquals(server.header("X-CardMind-CSRF"), csrfToken);
+    if (!requestHasValidCsrfWithoutRefresh()) {
+        return false;
+    }
+    queueSessionRefreshForManagedResponse();
+    return true;
 }
 
-void sendJson(int statusCode, const JsonDocument& document)
+void beginWebConsoleForegroundWork()
 {
-    server.sendHeader("Cache-Control", "no-store");
-    server.setContentLength(measureJson(document));
-    server.send(statusCode, "application/json; charset=utf-8", "");
-    serializeJson(document, server.client());
+    browserPresenceBusy = true;
+    renderConsoleSessionPresentationIfChanged();
 }
 
-void sendJsonError(int statusCode, const String& error)
+void endWebConsoleForegroundWork()
 {
-    JsonDocument document;
-    document["ok"] = false;
-    document["error"] = error;
-    sendJson(statusCode, document);
+    browserPresenceBusy = false;
+    renderConsoleSessionPresentationIfChanged();
+}
+
+enum class WebStorageAccess {
+    None,
+    Read,
+    Write,
+    Cleanup,
+};
+
+WebStorageAccess webStorageAccessForRoute(WebConsoleRouteHandler route)
+{
+    switch (route) {
+        case WebConsoleRouteHandler::State: {
+            const String path = server.uri();
+            return path == "/api/projects" || path == "/api/chats" ||
+                   path == "/api/chat" || path == "/api/files" ||
+                   path == "/api/ssh/state" || path == "/api/activity"
+                ? WebStorageAccess::Read
+                : WebStorageAccess::None;
+        }
+        case WebConsoleRouteHandler::ProjectLinks:
+        case WebConsoleRouteHandler::Pending:
+        case WebConsoleRouteHandler::ArchivedMessages:
+        case WebConsoleRouteHandler::SearchSources:
+        case WebConsoleRouteHandler::SftpUpload:
+        case WebConsoleRouteHandler::QrFile:
+        case WebConsoleRouteHandler::FileRead:
+        case WebConsoleRouteHandler::FileDownload:
+            return WebStorageAccess::Read;
+        case WebConsoleRouteHandler::SelectProject:
+        case WebConsoleRouteHandler::NewProject:
+        case WebConsoleRouteHandler::ProjectSettings:
+        case WebConsoleRouteHandler::ProjectSettingsRawComplete:
+        case WebConsoleRouteHandler::RenameProject:
+        case WebConsoleRouteHandler::DuplicateProject:
+        case WebConsoleRouteHandler::ArchiveProject:
+        case WebConsoleRouteHandler::DeleteProject:
+        case WebConsoleRouteHandler::ProjectLinkUpdate:
+        case WebConsoleRouteHandler::ModelPresetApply:
+        case WebConsoleRouteHandler::Prompt:
+        case WebConsoleRouteHandler::PromptRawComplete:
+        case WebConsoleRouteHandler::PromptRetry:
+        case WebConsoleRouteHandler::PendingAllowOnce:
+        case WebConsoleRouteHandler::PendingAllowChat:
+        case WebConsoleRouteHandler::PendingDeny:
+        case WebConsoleRouteHandler::SelectChat:
+        case WebConsoleRouteHandler::NewChat:
+        case WebConsoleRouteHandler::Instructions:
+        case WebConsoleRouteHandler::InstructionsRawComplete:
+        case WebConsoleRouteHandler::ChatSettings:
+        case WebConsoleRouteHandler::ChatCompact:
+        case WebConsoleRouteHandler::ChatPermissions:
+        case WebConsoleRouteHandler::RenameChat:
+        case WebConsoleRouteHandler::PinChat:
+        case WebConsoleRouteHandler::ArchiveChat:
+        case WebConsoleRouteHandler::DuplicateChat:
+        case WebConsoleRouteHandler::ExportChat:
+        case WebConsoleRouteHandler::ExportChatBundle:
+        case WebConsoleRouteHandler::ImportChatBundle:
+        case WebConsoleRouteHandler::DeleteChat:
+        case WebConsoleRouteHandler::ClearChat:
+        case WebConsoleRouteHandler::SshSettings:
+        case WebConsoleRouteHandler::SshSelect:
+        case WebConsoleRouteHandler::SshDelete:
+        case WebConsoleRouteHandler::SshStart:
+        case WebConsoleRouteHandler::SshTrust:
+        case WebConsoleRouteHandler::SshForget:
+        case WebConsoleRouteHandler::SftpDownload:
+        case WebConsoleRouteHandler::FileSave:
+        case WebConsoleRouteHandler::FileCopy:
+        case WebConsoleRouteHandler::FileRename:
+        case WebConsoleRouteHandler::FileDelete:
+        case WebConsoleRouteHandler::FileUploadComplete:
+            return WebStorageAccess::Write;
+        case WebConsoleRouteHandler::PendingAcknowledge:
+            return WebStorageAccess::Cleanup;
+        default:
+            return WebStorageAccess::None;
+    }
+}
+
+int webStorageErrorStatus(SdStorageState state)
+{
+    switch (state) {
+        case SdStorageState::Full: return 507;
+        case SdStorageState::Replaced: return 409;
+        case SdStorageState::Missing:
+        case SdStorageState::Removed: return 503;
+        case SdStorageState::Ready: return 500;
+    }
+    return 500;
+}
+
+bool allowWebStorageRoute(WebConsoleRouteHandler route)
+{
+    const WebStorageAccess access = webStorageAccessForRoute(route);
+    if (access == WebStorageAccess::None || !sessionIsActiveWithoutRefresh()) {
+        return true;
+    }
+    if ((access == WebStorageAccess::Write ||
+         access == WebStorageAccess::Cleanup) &&
+        !requestHasValidCsrfWithoutRefresh()) {
+        return true;
+    }
+    const OperationResult result = access == WebStorageAccess::Read
+        ? requireSdReadAccess()
+        : (access == WebStorageAccess::Cleanup
+            ? requireSdCleanupAccess()
+            : requireSdWriteAccess(0, kStorageOperationalFloorBytes));
+    if (result.success) {
+        return true;
+    }
+    const SdStorageStatus storage = inspectSdStorage();
+    queueSessionRefreshForManagedResponse();
+    sendWebJsonError(server, webStorageErrorStatus(storage.state), result.error);
+    return false;
+}
+
+void releaseRawTextBody()
+{
+    std::string().swap(rawTextRequest.body);
+}
+
+void resetRawTextRequest()
+{
+    releaseRawTextBody();
+    rawTextRequest.error = "";
+    rawTextRequest.errorStatus = 400;
+    rawTextRequest.started = false;
+    rawTextRequest.complete = false;
+}
+
+void failRawTextRequest(int status, const String& error)
+{
+    if (rawTextRequest.error.isEmpty()) {
+        rawTextRequest.errorStatus = status;
+        rawTextRequest.error = error;
+    }
+}
+
+bool requestHasRawTextContentType()
+{
+    String contentType = server.header("Content-Type");
+    contentType.toLowerCase();
+    return contentType == "text/plain" ||
+           contentType.startsWith("text/plain;");
+}
+
+bool requestHasPromptFrameContentType()
+{
+    String contentType = server.header("Content-Type");
+    contentType.toLowerCase();
+    return contentType == kPromptFrameContentType;
+}
+
+void collectRawRequestBody(std::size_t maximumBytes)
+{
+    HTTPRaw& raw = server.raw();
+    if (raw.status == RAW_START) {
+        resetRawTextRequest();
+        rawTextRequest.started = true;
+        if (!requestHasValidCsrfWithoutRefresh()) {
+            failRawTextRequest(401, "Authentication required");
+            return;
+        }
+        recordSessionActivityForRequest();
+        if (!server.hasHeader("Content-Length") ||
+            !server.header("Transfer-Encoding").isEmpty()) {
+            failRawTextRequest(
+                400, "Raw text requests require a fixed Content-Length");
+            return;
+        }
+        const int contentLength = server.clientContentLength();
+        if (contentLength < 0 ||
+            static_cast<std::size_t>(contentLength) > maximumBytes) {
+            failRawTextRequest(
+                400, "Raw request exceeds its endpoint byte limit");
+            return;
+        }
+        try {
+            rawTextRequest.body.reserve(static_cast<std::size_t>(contentLength));
+        } catch (const std::bad_alloc&) {
+            failRawTextRequest(
+                503, "Not enough contiguous memory to receive the raw text request");
+        }
+        return;
+    }
+    if (raw.status == RAW_ABORTED) {
+        resetRawTextRequest();
+        return;
+    }
+    if (!rawTextRequest.started || !rawTextRequest.error.isEmpty()) {
+        return;
+    }
+    if (raw.status == RAW_WRITE) {
+        if (raw.currentSize > maximumBytes - rawTextRequest.body.size()) {
+            releaseRawTextBody();
+            failRawTextRequest(
+                400, "Raw request exceeds its endpoint byte limit");
+            return;
+        }
+        try {
+            rawTextRequest.body.append(
+                reinterpret_cast<const char*>(raw.buf), raw.currentSize);
+        } catch (const std::bad_alloc&) {
+            releaseRawTextBody();
+            failRawTextRequest(
+                503, "Not enough contiguous memory to receive the raw text request");
+        }
+        return;
+    }
+    if (raw.status == RAW_END) {
+        const int contentLength = server.clientContentLength();
+        if (contentLength < 0 ||
+            rawTextRequest.body.size() != static_cast<std::size_t>(contentLength) ||
+            rawTextRequest.body.size() != raw.totalSize) {
+            releaseRawTextBody();
+            failRawTextRequest(
+                400, "Raw text request ended before its declared byte length");
+            return;
+        }
+        rawTextRequest.complete = true;
+    }
+}
+
+void rejectRawRequestContentType(const String& error)
+{
+    if (!rawTextRequest.started) {
+        resetRawTextRequest();
+        rawTextRequest.started = true;
+        failRawTextRequest(415, error);
+    }
+}
+
+void collectRawTextRequest(std::size_t maximumBytes)
+{
+    if (!requestHasRawTextContentType()) {
+        rejectRawRequestContentType(
+            "Raw text endpoints require Content-Type text/plain");
+        return;
+    }
+    collectRawRequestBody(maximumBytes);
+}
+
+void collectRawPromptRequest()
+{
+    if (requestHasRawTextContentType()) {
+        collectRawRequestBody(kMaximumPromptBytes);
+        return;
+    }
+    if (requestHasPromptFrameContentType()) {
+        collectRawRequestBody(kMaximumPromptFrameBytes);
+        return;
+    }
+    rejectRawRequestContentType(
+        "Raw prompt endpoints require text/plain or application/vnd.cardmind.prompt-v1");
+}
+
+RawTextRequestResult consumeRawTextRequest()
+{
+    if (!rawTextRequest.started) {
+        return {
+            false, {}, 400,
+            "Raw text request did not start correctly"};
+    }
+    if (!rawTextRequest.error.isEmpty()) {
+        RawTextRequestResult result = {
+            false, {}, rawTextRequest.errorStatus, rawTextRequest.error};
+        resetRawTextRequest();
+        return result;
+    }
+    if (!rawTextRequest.complete) {
+        resetRawTextRequest();
+        return {
+            false, {}, 400,
+            "Raw text request did not finish correctly"};
+    }
+    RawTextRequestResult result = {
+        true, std::move(rawTextRequest.body), 200, ""};
+    resetRawTextRequest();
+    return result;
+}
+
+WebPromptRequest parseWebPromptRequest(RawTextRequestResult request,
+                                       bool framed)
+{
+    if (!request.success) {
+        return {
+            false, {}, {}, {ToolMessageIntentMode::Auto, 0},
+            request.errorStatus, request.error};
+    }
+    DecodedToolMessageIntent decodedIntent = {
+        {ToolMessageIntentMode::Auto, 0},
+        ToolMessageIntentCodecError::None};
+    if (server.hasHeader(kToolIntentHeader)) {
+        const String encodedIntent = server.header(kToolIntentHeader);
+        decodedIntent = decodeToolMessageIntent(
+            encodedIntent.c_str(), encodedIntent.length());
+    }
+    if (decodedIntent.error != ToolMessageIntentCodecError::None) {
+        return {
+            false, {}, {}, {ToolMessageIntentMode::Auto, 0}, 400,
+            "Tool intent must be exactly auto, none, or required:[1-9a-f]"};
+    }
+    if (!framed) {
+        return {
+            true, std::move(request.body), {}, decodedIntent.intent, 200, ""};
+    }
+    if (request.body.size() < kPromptFramePrefixBytes) {
+        return {
+            false, {}, {}, decodedIntent.intent, 400,
+            "Framed prompt is missing its four-byte instruction length"};
+    }
+    const auto* prefix = reinterpret_cast<const unsigned char*>(
+        request.body.data());
+    const std::uint32_t instructionBytes =
+        (static_cast<std::uint32_t>(prefix[0]) << 24U) |
+        (static_cast<std::uint32_t>(prefix[1]) << 16U) |
+        (static_cast<std::uint32_t>(prefix[2]) << 8U) |
+        static_cast<std::uint32_t>(prefix[3]);
+    const std::size_t payloadBytes =
+        request.body.size() - kPromptFramePrefixBytes;
+    if (instructionBytes > kMaximumRequestInstructionsBytes) {
+        return {
+            false, {}, {}, decodedIntent.intent, 400,
+            "Request instructions must not exceed 2048 bytes"};
+    }
+    if (instructionBytes > payloadBytes) {
+        return {
+            false, {}, {}, decodedIntent.intent, 400,
+            "Framed prompt instruction length exceeds the received body"};
+    }
+    const std::size_t promptBytes = payloadBytes - instructionBytes;
+    if (promptBytes == 0 || promptBytes > kMaximumPromptBytes) {
+        return {
+            false, {}, {}, decodedIntent.intent, 400,
+            "Framed prompt must contain between 1 and 16384 bytes"};
+    }
+    std::string requestInstructions;
+    try {
+        requestInstructions = request.body.substr(
+            kPromptFramePrefixBytes, instructionBytes);
+    } catch (const std::bad_alloc&) {
+        return {
+            false, {}, {}, decodedIntent.intent, 503,
+            "Not enough contiguous memory to parse request instructions"};
+    }
+    request.body.erase(0, kPromptFramePrefixBytes + instructionBytes);
+    if (!isValidUtf8(requestInstructions) || !isValidUtf8(request.body)) {
+        return {
+            false, {}, {}, decodedIntent.intent, 400,
+            "Prompt and request instructions must contain valid UTF-8"};
+    }
+    return {
+        true, std::move(request.body), std::move(requestInstructions),
+        decodedIntent.intent, 200, ""};
+}
+
+void clearFailedWebRequestInstructions()
+{
+    std::string().swap(failedWebRequestInstructions);
+    failedWebRequestInstructionsChatId = "";
+    failedWebRequestOutputTokens = 0;
+    failedWebRequestIntent = {ToolMessageIntentMode::Auto, 0};
+}
+
+String webToolRequestPlanError(const ToolRequestPlan& plan)
+{
+    if (plan.error != ToolPolicyContractError::None) {
+        return "Selected tool intent is invalid";
+    }
+    if (plan.missingRequiredGroups != 0) {
+        return "A required capability is denied or unavailable";
+    }
+    return "";
+}
+
+bool webPendingContextMatches(const PendingToolCall& pending)
+{
+    return webPendingContext.present &&
+        webPendingContext.pendingId == pending.pendingId &&
+        webPendingContext.projectId == pending.projectId &&
+        webPendingContext.chatId == pending.chatId;
+}
+
+OperationResult captureWebPendingContext(
+    const String& projectId,
+    const String& chatId,
+    const ResolvedProjectRequestPolicy& requestPolicy,
+    const ProviderAuthorityIdentity& providerAuthority,
+    const String& globalInstructions,
+    std::string requestInstructions,
+    const ToolMessageIntent& intent)
+{
+    PendingToolCallResult pending = loadPendingToolCall();
+    if (!pending.success || !pending.found ||
+        pending.pending.state != PendingToolCallState::Awaiting ||
+        pending.pending.projectId != projectId ||
+        pending.pending.chatId != chatId ||
+        !pendingToolCallIsResumableThisBoot(pending.pending.pendingId)) {
+        const String error = pending.success && pending.found
+            ? String("Pending confirmation does not match this request")
+            : (pending.success ? String("Pending confirmation was not saved")
+                               : pending.error);
+        if (pending.success && pending.found) {
+            std::string().swap(pending.pending.continuation.call.arguments);
+        }
+        return {false, error};
+    }
+    const String pendingId = pending.pending.pendingId;
+    std::string().swap(pending.pending.continuation.call.arguments);
+    clearWebPendingContext();
+    webPendingContext.present = true;
+    webPendingContext.pendingId = pendingId;
+    webPendingContext.projectId = projectId;
+    webPendingContext.chatId = chatId;
+    webPendingContext.requestPolicy = requestPolicy;
+    webPendingContext.providerAuthority = providerAuthority;
+    webPendingContext.globalInstructions = globalInstructions;
+    webPendingContext.requestInstructions = std::move(requestInstructions);
+    webPendingContext.intent = intent;
+    return {true, ""};
+}
+
+WebPendingContinuationInputs loadWebPendingContinuationInputs()
+{
+    WebPendingContinuationInputs result;
+    if (!webPendingContext.present) {
+        result.error = "This request was interrupted and cannot be resumed";
+        return result;
+    }
+    PendingToolCallResult pending = loadPendingToolCall();
+    if (!pending.success || !pending.found ||
+        pending.pending.state != PendingToolCallState::Awaiting ||
+        !webPendingContextMatches(pending.pending) ||
+        !pendingToolCallIsResumableThisBoot(pending.pending.pendingId)) {
+        result.error = pending.success
+            ? String("Pending request is no longer resumable") : pending.error;
+        if (pending.success && pending.found) {
+            std::string().swap(pending.pending.continuation.call.arguments);
+        }
+        return result;
+    }
+    result.pendingId = pending.pending.pendingId;
+    result.reason = pending.pending.reason;
+    const ToolCatalogEntry* entry = toolCatalogEntryForName(
+        pending.pending.continuation.call.name);
+    std::string().swap(pending.pending.continuation.call.arguments);
+    const PendingToolPreviewResult preview = loadPendingToolPreview(
+        pending.pending.pendingId);
+    if (!preview.success) {
+        result.success = true;
+        result.error = "Pending request is no longer resumable";
+        return result;
+    }
+    const ProjectDocumentResult project = loadProject(pending.pending.projectId);
+    const ChatDocumentResult chat = loadProjectChatMetadata(
+        pending.pending.projectId, pending.pending.chatId);
+    if (!project.success || !chat.success) {
+        result.error = project.success ? chat.error : project.error;
+        return result;
+    }
+    if (project.project.summary.revision != pending.pending.projectRevision ||
+        chat.chat.summary.revision != pending.pending.chatRevision ||
+        chat.chat.summary.messageCount != pending.pending.chatMessageCount) {
+        result.error = "Pending request is no longer resumable";
+        return result;
+    }
+    ProviderSettingsResult provider = resolveConsoleProvider(project.project);
+    if (!providerStoreResultSucceeded(provider.result)) {
+        result.error = "Pending request API profile is unavailable: " +
+            String(provider.result.message.c_str());
+        return result;
+    }
+    if (!providerAuthorityIdentitiesEqual(
+            provider.authority, webPendingContext.providerAuthority)) {
+        result.error = "Pending request API profile changed";
+        return result;
+    }
+    result.requestSettings = std::move(provider.settings);
+    const SdStorageStatus storage = inspectSdStorage();
+    const bool readable = storage.state == SdStorageState::Ready ||
+                          storage.state == SdStorageState::Full;
+    const bool writable = storage.state == SdStorageState::Ready;
+    result.plan = resolveChatToolRequestPlan(
+        consoleSettings, project.project, chat.chat, webPendingContext.intent,
+        readable, writable, writable,
+        writable && pythonOneShotAvailable(), sshToolAvailableProfileId());
+    result.error = webToolRequestPlanError(result.plan);
+    if (result.error.isEmpty() &&
+        (entry == nullptr ||
+         !toolRequestPlanIncludesSchema(result.plan, entry->schema))) {
+        result.error = "Current policy no longer permits the pending tool";
+    }
+    result.success = true;
+    return result;
+}
+
+std::uint8_t percentEncodedNibble(char value)
+{
+    if (value >= '0' && value <= '9') {
+        return static_cast<std::uint8_t>(value - '0');
+    }
+    if (value >= 'A' && value <= 'F') {
+        return static_cast<std::uint8_t>(value - 'A' + 10);
+    }
+    if (value >= 'a' && value <= 'f') {
+        return static_cast<std::uint8_t>(value - 'a' + 10);
+    }
+    return UINT8_MAX;
+}
+
+DecodedHeaderResult decodePercentEncodedHeader(const String& header,
+                                               std::size_t maximumBytes)
+{
+    if (!header.startsWith("v1:")) {
+        return {false, {}, 400, "Encoded model header is missing or invalid"};
+    }
+    const std::string encoded = header.substring(3).c_str();
+    if (encoded.size() > maximumBytes * 3U) {
+        return {false, {}, 400, "Encoded model header exceeds its byte limit"};
+    }
+    std::string decoded;
+    try {
+        decoded.reserve(std::min(encoded.size(), maximumBytes));
+        for (std::size_t index = 0; index < encoded.size(); ++index) {
+            if (encoded[index] != '%') {
+                decoded.push_back(encoded[index]);
+                continue;
+            }
+            if (index + 2 >= encoded.size()) {
+                return {false, {}, 400, "Encoded model header has an incomplete escape"};
+            }
+            const std::uint8_t high = percentEncodedNibble(encoded[index + 1]);
+            const std::uint8_t low = percentEncodedNibble(encoded[index + 2]);
+            if (high == UINT8_MAX || low == UINT8_MAX) {
+                return {false, {}, 400, "Encoded model header has an invalid escape"};
+            }
+            decoded.push_back(static_cast<char>((high << 4U) | low));
+            index += 2;
+        }
+    } catch (const std::bad_alloc&) {
+        return {false, {}, 503, "Not enough memory to decode the model header"};
+    }
+    if (decoded.size() > maximumBytes || decoded.find('\0') != std::string::npos ||
+        !isValidUtf8(decoded)) {
+        return {false, {}, 400, "Decoded model header is not valid UTF-8"};
+    }
+    return {true, std::move(decoded), 200, ""};
+}
+
+void rejectLegacyRawTextRoute()
+{
+    if (!requestHasValidCsrf()) {
+        resetRawTextRequest();
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const RawTextRequestResult request = consumeRawTextRequest();
+    if (!request.success) {
+        sendWebJsonError(server, request.errorStatus, request.error);
+        return;
+    }
+    sendWebJsonError(
+        server, 415,
+        "Use the corresponding /raw endpoint with Content-Type text/plain");
 }
 
 std::uint64_t currentTimestamp()
@@ -233,201 +1232,454 @@ std::uint64_t currentTimestamp()
 
 OperationResult refreshChats()
 {
-    const ChatsResult result = listChats();
+    const std::uint32_t startedAt = millis();
+    const ProjectChatsPageResult result = listProjectChatsPage(
+        activeProject.summary.id, 0, kMaximumProjectPageEntries);
+    recordWebSdRead(millis() - startedAt);
     if (!result.success) {
         return {false, result.error};
     }
     consoleChats = result.chats;
+    chatsNextOffset = result.nextOffset;
+    chatsPageEof = result.eof;
+    ++chatsRevision;
     return {true, ""};
+}
+
+OperationResult refreshProjects()
+{
+    const std::uint32_t startedAt = millis();
+    const ProjectsPageResult result = listProjectsPage(0, kMaximumProjectPageEntries);
+    recordWebSdRead(millis() - startedAt);
+    if (!result.success) {
+        return {false, result.error};
+    }
+    consoleProjects = result.projects;
+    ++projectsRevision;
+    return {true, ""};
+}
+
+OperationResult refreshFiles()
+{
+    const std::uint32_t startedAt = millis();
+    const WorkspaceFilesPageResult result = listWorkspaceFilesPage(0, 64);
+    recordWebSdRead(millis() - startedAt);
+    if (!result.success) {
+        return {false, result.error};
+    }
+    consoleFiles = result.files;
+    filesIndexReady = true;
+    ++filesRevision;
+    return {true, ""};
+}
+
+OperationResult refreshSshProfiles()
+{
+    const std::uint32_t startedAt = millis();
+    std::vector<SshProfileSummary> profiles;
+    std::size_t selected = 0;
+    OperationResult result = loadSshProfileSummaries(profiles, selected);
+    bool selectedConfigured = false;
+    bool privateKeyInstalled = false;
+    if (result.success && !profiles.empty()) {
+        if (selected >= profiles.size()) {
+            result = {false, "Selected SSH profile index is invalid"};
+        } else {
+            SshProfile selectedProfile = {
+                "", "", 22, "", "", SshAuthMode::Password, ""};
+            std::uint64_t selectedProfileId = 0;
+            result = loadSshProfileWithId(selectedProfile, selectedProfileId);
+            if (result.success && selectedProfileId != profiles[selected].id) {
+                result = {
+                    false,
+                    "Selected SSH profile identity changed while loading state"};
+            }
+            if (result.success) {
+                selectedConfigured = sshProfileIsComplete(selectedProfile);
+                privateKeyInstalled =
+                    sshPrivateKeyIsInstalled(selectedProfile.privateKeyId);
+            }
+            selectedProfile.password = "";
+            selectedProfile.privateKeyPassphrase = "";
+        }
+    }
+    recordWebSdRead(millis() - startedAt);
+    if (!result.success) {
+        return result;
+    }
+    consoleSshProfiles = std::move(profiles);
+    consoleSshSelected = selected;
+    consoleSshConfigured = selectedConfigured;
+    consoleSshPrivateKeyInstalled = privateKeyInstalled;
+    sshProfilesReady = true;
+    ++sshRevision;
+    return {true, ""};
+}
+
+std::size_t activeProjectTailByteBudget()
+{
+    return std::min<std::size_t>(131072, activeProject.contextByteBudget);
 }
 
 OperationResult loadActiveChat(const String& id)
 {
-    const ChatDocumentResult loaded = loadChat(id);
+    const std::uint32_t startedAt = millis();
+    ChatDocumentResult loaded = loadProjectChat(
+        activeProject.summary.id, id, 96, activeProjectTailByteBudget());
+    recordWebSdRead(millis() - startedAt);
     if (!loaded.success) {
         return {false, loaded.error};
     }
-    activeChat = loaded.chat;
-    activeResponse.clear();
+    activeChat = std::move(loaded.chat);
+    ++chatRevision;
     return {true, ""};
 }
 
-void renderConsoleChat()
+OperationResult saveActiveChat()
 {
-    const String state = consoleStatus.isEmpty()
-        ? String("Web console: ") + WiFi.localIP().toString() + "  ESC exits"
-        : consoleStatus;
-    showChat(activeChat.messages, activeResponse, "", KeyboardLayout::English,
-             activeChat.summary.title, state, 0, WiFi.status() == WL_CONNECTED,
-             M5Cardputer.Power.getBatteryLevel(),
-             M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging);
+    const std::uint32_t startedAt = millis();
+    const OperationResult result = saveProjectChatMetadata(activeChat);
+    recordWebSdWrite(millis() - startedAt);
+    if (result.success) {
+        ++chatRevision;
+    }
+    return result;
 }
 
-String loginPage(const String& error)
+OperationResult saveActiveChatSelection(const String& chatId)
+{
+    if (activeProject.activeChatId == chatId) {
+        return {true, ""};
+    }
+    ProjectDocumentResult stored = loadProject(activeProject.summary.id);
+    if (!stored.success) {
+        return {false, stored.error};
+    }
+    stored.project.activeChatId = chatId;
+    const OperationResult result = saveProject(stored.project);
+    if (result.success) {
+        activeProject = std::move(stored.project);
+    }
+    return result;
+}
+
+OperationResult selectActiveProject(const String& id)
+{
+    ProjectDocumentResult loaded = loadProject(id);
+    if (!loaded.success) {
+        return {false, loaded.error};
+    }
+    if (activeProject.summary.id != id) {
+        releaseActiveDocuments();
+    }
+    ProjectStorageManifestResult manifest = loadProjectStorageManifest();
+    if (!manifest.success) {
+        return {false, manifest.error};
+    }
+    OperationResult result = {true, ""};
+    if (manifest.manifest.activeProjectId != id) {
+        manifest.manifest.activeProjectId = id;
+        ++manifest.manifest.revision;
+        result = saveProjectStorageManifest(manifest.manifest);
+        if (!result.success) {
+            return result;
+        }
+    }
+    activeProject = std::move(loaded.project);
+    ++projectRevision;
+    result = refreshChats();
+    if (!result.success) {
+        return result;
+    }
+    if (!activeProject.activeChatId.isEmpty()) {
+        result = loadActiveChat(activeProject.activeChatId);
+    } else if (!consoleChats.empty()) {
+        result = loadActiveChat(consoleChats.front().id);
+    } else {
+        ChatDocumentResult created = createProjectChat(
+            id, "New chat", consoleSettings.newChatToolPolicy);
+        if (!created.success) {
+            return {false, created.error};
+        }
+        const String createdId = created.chat.summary.id;
+        activeChat = std::move(created.chat);
+        result = saveActiveChatSelection(createdId);
+        if (result.success) {
+            ++chatRevision;
+            ++projectRevision;
+            result = refreshChats();
+        }
+    }
+    if (!result.success) {
+        return result;
+    }
+    result = saveActiveChatSelection(activeChat.summary.id);
+    if (result.success) {
+        ++projectRevision;
+    }
+    return result;
+}
+
+OperationResult loadCommittedConsoleStorageReadOnly()
+{
+    const ProjectStorageManifestResult manifest = loadProjectStorageManifest();
+    if (!manifest.success) {
+        return {false, manifest.error};
+    }
+    if (manifest.manifest.activeProjectId.isEmpty()) {
+        return {false, "Active project is missing"};
+    }
+    ProjectDocumentResult project = loadProject(manifest.manifest.activeProjectId);
+    if (!project.success) {
+        return {false, project.error};
+    }
+    activeProject = std::move(project.project);
+    ++projectRevision;
+    OperationResult result = refreshProjects();
+    if (result.success) {
+        result = refreshChats();
+    }
+    if (!result.success) {
+        return result;
+    }
+    if (!activeProject.activeChatId.isEmpty()) {
+        result = loadActiveChat(activeProject.activeChatId);
+    } else {
+        activeChat = ChatDocument{};
+        ++chatRevision;
+    }
+    if (result.success) {
+        result = refreshFiles();
+    }
+    return result;
+}
+
+std::string effectiveProjectChatInstructions(const ProjectDocument& project,
+                                             const ChatDocument& chat,
+                                             const std::string& requestInstructions)
+{
+    return buildScopedInstructions(
+        project.instructions, chat.instructions, requestInstructions,
+        chat.contextSummary);
+}
+
+ProviderSettingsResult resolveConsoleProvider(const ProjectDocument& project)
+{
+    return resolveConsoleProviderId(project.apiProfile);
+}
+
+ProviderSettingsResult resolveConsoleProviderId(const String& profileId)
+{
+    if (consoleProviderStore == nullptr) {
+        return {{ProviderStoreError::Storage, false, false,
+                 "Provider profile storage is unavailable"},
+                consoleSettings,
+                {ProviderAuthorityKind::None, "", 0}};
+    }
+    return consoleProviderStore->resolveSettings(
+        consoleSettings, std::string(profileId.c_str()));
+}
+
+WebContextSummaryResult generateWebContextSummary(
+    const std::string& previousSummary,
+    const std::vector<Message>& messages)
+{
+    if (messages.empty()) {
+        return {false, {}, 0, "No messages are available to summarize"};
+    }
+    constexpr std::size_t kCompactionHeapReserve = 16384;
+    const std::size_t largestBlock =
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (largestBlock <= kCompactionHeapReserve) {
+        return {
+            false, {}, 0,
+            "Context compaction needs a larger contiguous heap block; close SSH and retry"};
+    }
+    ContextSummaryPromptResult prompt = buildContextSummaryPrompt(
+        previousSummary, messages,
+        std::min<std::size_t>(
+            std::min<std::size_t>(activeProject.contextByteBudget, 32768),
+            largestBlock - kCompactionHeapReserve));
+    if (!prompt.success) {
+        return {false, {}, 0, prompt.error.c_str()};
+    }
+    const std::uint32_t includedMessages = prompt.includedMessages;
+    ProviderSettingsResult provider = resolveConsoleProvider(activeProject);
+    if (!providerStoreResultSucceeded(provider.result)) {
+        return {false, {}, 0,
+                "API profile unavailable: " +
+                    String(provider.result.message.c_str())};
+    }
+    Settings summarySettings = std::move(provider.settings);
+    summarySettings.globalInstructions = "";
+    summarySettings.model = resolveProjectRequestPolicy(
+        consoleSettings, activeProject, activeChat, 0).model;
+    std::vector<Message> request;
+    request.push_back({"user", std::move(prompt.prompt)});
+    beginWebConsoleForegroundWork();
+    ChatResult summary = streamChatCompletionWithBudget(
+        summarySettings, request,
+        "This is a context compaction operation, not a user-facing answer.",
+        768, [](const std::string&) {}, []() {
+            M5Cardputer.update();
+            return consoleEscapePressed() || !server.client().connected();
+        });
+    endWebConsoleForegroundWork();
+    if (!summary.success) {
+        return {false, {}, 0, "Context summary failed: " + summary.error};
+    }
+    if (summary.response.empty() || !isValidUtf8(summary.response)) {
+        return {false, {}, 0, "Context summary returned invalid UTF-8 or no content"};
+    }
+    return {true, std::move(summary.response), includedMessages, ""};
+}
+
+OperationResult regenerateWebContextSummary(const std::vector<Message>& omitted)
+{
+    if (omitted.empty()) {
+        return {true, ""};
+    }
+    ChatDocumentResult stored = loadProjectChatMetadata(
+        activeProject.summary.id, activeChat.summary.id);
+    if (!stored.success) {
+        return {false, stored.error};
+    }
+    WebContextSummaryResult generated = generateWebContextSummary(
+        stored.chat.contextSummary, omitted);
+    if (!generated.success) {
+        return {false, generated.error};
+    }
+    stored = loadProjectChatMetadata(activeProject.summary.id, activeChat.summary.id);
+    if (!stored.success) {
+        return {false, stored.error};
+    }
+    stored.chat.contextSummary = std::move(generated.summary);
+    stored.chat.summarizedMessageCount = std::min(
+        stored.chat.summary.messageCount,
+        stored.chat.summarizedMessageCount + generated.includedMessages);
+    return saveProjectChatMetadata(stored.chat);
+}
+
+bool consolePasswordVisible()
+{
+    return static_cast<std::int32_t>(passwordRevealUntil - millis()) > 0;
+}
+
+void renderConsoleScreen()
+{
+    const std::uint32_t now = millis();
+    const bool authenticationActive = sessionAuthenticationActiveAt(now);
+    const WebConsoleBrowserState browserState =
+        webConsoleBrowserStateAt(now);
+    presentedAuthenticationActive = authenticationActive;
+    presentedBrowserState = browserState;
+    if (!consoleQrPayload.isEmpty()) {
+        return;
+    }
+    showWebConsoleAccess("http://" + WiFi.localIP().toString(), accessPassword,
+                         authenticationActive, browserState,
+                         consolePasswordVisible());
+}
+
+void renderConsoleSessionPresentationIfChanged()
+{
+    const std::uint32_t now = millis();
+    const bool authenticationActive = sessionAuthenticationActiveAt(now);
+    const WebConsoleBrowserState browserState =
+        webConsoleBrowserStateAt(now);
+    if (authenticationActive != presentedAuthenticationActive ||
+        browserState != presentedBrowserState) {
+        renderConsoleScreen();
+    }
+}
+
+bool requestHasPythonReconnectReturn()
+{
+    return server.hasArg("python_run_return") ||
+        server.arg("return") == "python" ||
+        server.arg("reconnect_return") == "python";
+}
+
+String loginPage(const String& error, const bool reconnectReturn)
 {
     String page =
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>CardMind Login</title><style>"
-        ":root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;font:15px system-ui;background:radial-gradient(circle at 50% 0,#143550,#050b12 38rem);color:#f3f7fb;display:grid;place-items:center;min-height:100vh;padding:18px}"
-        ".card{width:min(420px,100%);background:linear-gradient(145deg,#101e2d,#0a1521);border:1px solid #294158;padding:26px;border-radius:20px;box-shadow:0 24px 80px #0009}.brand{display:flex;align-items:center;gap:12px;margin-bottom:26px}.mark{width:44px;height:44px;display:grid;place-items:center;border:1px solid #65f2cc66;border-radius:14px;background:#15343d;color:#65f2cc;font-weight:900}.brand b{letter-spacing:.12em}.badge{margin-left:auto;padding:6px 9px;border:1px solid #294158;border-radius:999px;color:#91a9be;font-size:11px}"
-        "h1{font-size:24px;margin:0 0 7px}p{color:#9eb1c4;line-height:1.5;margin:0 0 18px}label{display:block;color:#c8d5e2;font-weight:700;font-size:12px}input,button{box-sizing:border-box;width:100%;padding:12px;margin-top:8px;border-radius:10px;font:inherit}input{background:#07111c;color:#fff;border:1px solid #39536e;outline:none}input:focus{border-color:#65f2cc;box-shadow:0 0 0 3px #65f2cc18}button{border:0;background:#65f2cc;color:#052019;font-weight:850;cursor:pointer;margin-top:14px}.hint{margin:17px 0 0;padding-top:15px;border-top:1px solid #203247;color:#8197aa;font-size:12px}.error{padding:10px;border:1px solid #713544;border-radius:10px;background:#351722;color:#ffc6ce}</style></head><body><form class='card' method='post' action='/login'>"
+        ":root{color-scheme:light;--canvas:#aaa49a;--paper:#ded8ce;--text:#242622;--muted:#59564f;--line:#746f66;--signal:#c77d24;--select:#e6c89c;--danger:#922f27;--danger-bg:#f0d2ca;--instrument:#242724;--instrument-text:#f3eee4}*{box-sizing:border-box}body{margin:0;font:15px/1.45 Arial,Helvetica,sans-serif;background:var(--canvas);color:var(--text);display:grid;place-items:center;min-height:100vh;padding:18px}"
+        ".card{width:min(420px,100%);background:var(--paper);border:1px solid var(--line);padding:26px;border-radius:2px}.brand{display:flex;align-items:center;gap:12px;margin-bottom:26px;padding-bottom:16px;border-bottom:1px solid var(--line)}.mark{width:44px;height:44px;display:grid;place-items:center;border:1px solid var(--signal);border-radius:2px;background:var(--instrument);color:#e2a34f;font-weight:800}.brand b{letter-spacing:.1em}.badge{margin-left:auto;padding:6px 9px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:11px}"
+        "h1{font-size:24px;font-weight:500;margin:0 0 7px}p{color:var(--muted);line-height:1.5;margin:0 0 18px}label{display:block;color:var(--text);font-weight:600;font-size:12px}input,button{box-sizing:border-box;width:100%;min-height:44px;padding:10px 12px;margin-top:8px;border-radius:2px;font:inherit}input{background:var(--paper);color:var(--text);border:1px solid var(--line);outline:none}input:focus{border-color:#a85f12;outline:2px solid #a85f12;outline-offset:2px}button{border:1px solid var(--signal);background:var(--signal);color:#1f211f;font-weight:700;cursor:pointer;margin-top:14px}button:focus-visible{outline:2px solid #a85f12;outline-offset:2px}.hint{margin:17px 0 0;padding-top:15px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}.error{padding:10px;border-left:3px solid var(--danger);background:var(--danger-bg);color:var(--danger)}</style></head><body><form class='card' method='post' action='/login'>"
         "<div class='brand'><div class='mark'>CM</div><div><b>CARDMIND</b><br><small>Device console</small></div><span class='badge'>LOCAL</span></div><h1>Connect to CardMind</h1><p>Use the installation password displayed on your Cardputer.</p>";
     if (!error.isEmpty()) {
         page += "<p class='error'>" + htmlEscape(error) + "</p>";
+    }
+    if (reconnectReturn) {
+        page += "<input type='hidden' name='reconnect_return' value='python'>";
     }
     page += "<label for='password'>Installation password</label><input id='password' name='password' type='password' required autocomplete='current-password' autofocus>"
             "<button type='submit'>Open device console</button><p class='hint'>Keep this page on the same trusted Wi-Fi network as the Cardputer.</p></form></body></html>";
     return page;
 }
 
-void sendConsolePage()
-{
-    static const char pageStart[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CardMind Console</title><style>
-:root{color-scheme:dark;--bg:#0a0c12;--sidebar:#0a0c12;--surface:#11141d;--raised:#151a22;--line:#292e3d;--line2:#394640;--text:#eef1ff;--muted:#87958f;--accent:#ff6b45;--blue:#8fa3ff;--mint:#61e6b5;--warn:#ffd36a;--danger:#ff9189;--shadow:0 18px 55px #0005}
-*{box-sizing:border-box}html,body{min-height:100%;background:var(--bg)}body{margin:0;font:14px Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);letter-spacing:.005em}button,input,textarea,select{font:inherit}button{touch-action:manipulation}
-.app{min-height:100vh;display:grid;grid-template-columns:214px minmax(0,1fr);background:radial-gradient(ellipse at 65% 20%,#26305226 0,transparent 45%),var(--bg)}.sidebar{position:sticky;top:0;height:100vh;padding:22px 14px 16px;display:flex;flex-direction:column;border-right:1px solid var(--line);background:#0a0c12dc;backdrop-filter:blur(18px)}
-.brand{display:flex;align-items:center;gap:11px;padding:0 8px 24px}.brand-mark{width:36px;height:36px;border:1px solid var(--accent);border-radius:3px;display:grid;place-items:center;background:#27150f;color:var(--accent);font-weight:900}.brand strong{display:block;font-size:14px;letter-spacing:.15em}.brand small{color:var(--muted);font:10px ui-monospace,Consolas,monospace}.nav-caption,.page-kicker{padding:0 10px 9px;color:var(--accent);font:700 10px ui-monospace,Consolas,monospace;letter-spacing:.14em}.page-kicker{padding:0;margin-bottom:3px}.side-bottom{margin-top:auto;display:grid;gap:10px}
-.nav{display:grid;gap:5px}.tab{width:100%;display:flex;align-items:center;gap:9px;min-height:44px;padding:8px 10px;border:1px solid transparent;border-radius:3px;background:transparent;color:#aebbb6;text-align:left;cursor:pointer;font-weight:700}.tab:hover{background:#171f1d;color:var(--text)}.tab.active{background:linear-gradient(100deg,#6c82ff2e,#61e6b514);border-color:#405149;color:var(--text);box-shadow:inset 3px 0 #6c82ff}.nav-glyph{width:27px;height:auto;border:0;border-radius:0;display:block;font:700 10px ui-monospace,Consolas,monospace;letter-spacing:.04em;color:var(--accent)}
-.side-status{padding:12px;border:1px solid #34413c;border-radius:3px;background:#11141dcc}.online{display:flex;align-items:center;gap:8px;font-weight:700}.online-dot{width:7px;height:7px;border-radius:0;background:var(--mint);box-shadow:0 0 10px #61e6b580}.device-pill{display:block;margin-top:5px;color:var(--muted);font:11px ui-monospace,Consolas,monospace}.workspace{min-width:0}.topbar{min-height:68px;padding:10px 22px;display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--line);box-shadow:inset 0 -2px #6c82ff2e;background:#0c0f17d9;backdrop-filter:blur(18px);position:sticky;top:0;z-index:5}.page-title{font-size:clamp(20px,2.4vw,28px);line-height:1;font-weight:800;letter-spacing:-.04em}.page-subtitle{color:var(--muted);font-size:11px;margin-top:4px}.spacer{flex:1}
-.shell{padding:14px 18px 22px;max-width:none;margin:0}.panel{display:none;animation:panel-in .2s ease}.panel.active{display:block}.card{background:#11141dc9;border:1px solid #303c37;border-radius:4px;box-shadow:var(--shadow);backdrop-filter:blur(16px)}.card-pad{padding:15px}.section-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:14px}.section-head h2{margin:0;font-size:14px}.section-head p{margin:3px 0 0;color:var(--muted);font-size:11px}.section-actions{margin-left:auto;display:flex;gap:7px;flex-wrap:wrap}@keyframes panel-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-.chat-layout{display:grid;grid-template-columns:250px minmax(360px,1fr);gap:14px;height:calc(100vh - 105px);min-height:520px}.chat-rail{padding:13px;min-height:0;overflow:hidden}.chat-rail select{height:calc(100% - 58px);min-height:300px}.chat-main{display:flex;flex-direction:column;min-height:0;overflow:hidden}.chat-main .section-head{padding:12px 14px;margin:0;border-bottom:1px solid var(--line)}
-#messages{flex:1;min-height:0;overflow:auto;padding:0 16px;scrollbar-color:#394640 transparent}.message{white-space:pre-wrap;max-width:none;padding:15px 0;border-radius:0;margin:0;line-height:1.58;border:0;border-bottom:1px solid #25302b}.user{margin:0;background:transparent;color:#dfe7e3}.assistant{background:transparent;color:#eef1ff}.assistant::first-line{color:var(--blue)}.stream{color:var(--warn)}.composer{margin:10px;padding:0;border:1px solid #3b4943;border-radius:3px;background:#101815}.composer textarea{min-height:82px;max-height:180px;border:0;background:transparent;box-shadow:none}.composer-bar{display:flex;align-items:center;gap:8px;padding:8px;border-top:1px solid #29342f;margin:0}.shortcut{color:var(--muted);font-size:11px;margin-right:auto}.intent-row{display:flex;align-items:center;gap:6px;padding:8px 10px 0}.intent-row>span{color:#7f879c;font:700 9px ui-monospace,Consolas,monospace;letter-spacing:.12em}.intent{min-height:28px;padding:0 9px;border:1px solid #5367bf;border-radius:14px;background:#6c82ff18;color:#aeb9ff;font-size:10px}
-textarea,input,select{box-sizing:border-box;width:100%;min-width:0;background:#0d1412;color:var(--text);border:1px solid var(--line2);border-radius:7px;padding:10px 11px;outline:none}textarea:focus,input:focus,select:focus{border-color:#ffd36a;box-shadow:0 0 0 2px #ffd36a33}textarea{min-height:96px;resize:vertical}button{min-width:0;min-height:38px;border:1px solid #ff8060;border-radius:7px;padding:8px 12px;cursor:pointer;background:#ff6b45;color:#1c0e09;font-weight:800;line-height:1.2;white-space:normal}button:hover{background:#ff8060}button:focus-visible{outline:2px solid #ffd36a;outline-offset:2px}button:disabled{opacity:.45;cursor:not-allowed}.secondary{background:#18211f;color:#e5eee9;border-color:#46534e}.secondary:hover{background:#202c29}.ghost{background:#11141d;color:#b9c6c0;border:1px solid #3b4642}.ghost:hover{background:#1a211f;color:#f0f5f2}.danger{background:#3d2222;color:#ffb0aa;border-color:#754542}.danger:hover{background:#502928}.icon-button{min-width:38px;padding:7px 10px}
-.field-label{display:block;color:#b9cada;font-size:12px;font-weight:700;margin:13px 0 6px}.stack{display:grid;gap:9px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:stretch}.row>*{flex:1 1 150px;min-width:0}.compact>*{flex:0 1 auto}.full{width:100%}small,.muted{color:var(--muted)}details{margin-top:12px;border-top:1px solid var(--line);padding-top:8px}summary{cursor:pointer;color:#b9cada;padding:7px 0;font-weight:700}.qr-card{margin-top:16px}.qr-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,.55fr);gap:16px}.qr-actions{display:flex;gap:8px;flex-wrap:wrap}.qr-actions button{flex:1 1 150px}.permission{display:flex;align-items:flex-start;gap:10px;padding:11px;border:1px solid #46534e;border-radius:7px;background:#101815}.permission input{width:18px;height:18px;flex:0 0 auto;margin:1px 0 0}.permission span{line-height:1.4}.permission small{display:block;margin-top:3px}
-.split-layout{display:grid;grid-template-columns:minmax(250px,.72fr) minmax(0,1.55fr);gap:16px}.file-editor{min-height:58vh;font:13px ui-monospace,SFMono-Regular,Consolas,monospace;line-height:1.55}.terminal-layout{display:grid;grid-template-columns:320px minmax(0,1fr);gap:16px}.terminal{margin:0;background:#02060b;color:#c8ffe8;border:1px solid #274158;border-radius:12px;padding:14px;min-height:55vh;max-height:68vh;overflow:auto;white-space:pre-wrap;font:13px ui-monospace,SFMono-Regular,Consolas,monospace;line-height:1.48;outline:none}.terminal:focus{border-color:var(--accent);box-shadow:0 0 0 3px #65f2cc16}.terminal-card{padding:16px}.terminal-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}.terminal-state{margin-right:auto;color:var(--muted);font-size:12px}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.metric{background:#081522;border:1px solid var(--line);border-radius:12px;padding:13px}.metric b{display:block;color:var(--accent);font-size:20px}.metric span{color:var(--muted);font-size:11px}.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.settings-card h2{margin:0}.settings-card>p{margin:5px 0 10px;color:var(--muted);line-height:1.45}.checkline{display:flex;align-items:flex-start;gap:9px;margin-top:10px;color:#c8d5d0}.checkline input{width:18px;height:18px;flex:0 0 auto;margin:1px 0}.key-state{display:block;margin-top:5px;color:var(--mint);font:10px ui-monospace,Consolas,monospace}.settings-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px}.settings-actions>*{flex:1 1 150px}.python-state{margin:12px 0;padding:11px;border:1px solid var(--line2);background:#0d1412;color:var(--muted);white-space:pre-wrap}.browser-pref{display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #25302b}.browser-pref:last-child{border-bottom:0}.browser-pref input{width:18px;height:18px}
-.statusbar{position:fixed;right:22px;bottom:22px;z-index:80;max-width:min(430px,calc(100vw - 28px));padding:10px 13px;border:1px solid #765d28;border-radius:7px;background:#271f0ef2;color:var(--warn);box-shadow:var(--shadow)}.statusbar:empty{display:none}.mobile-nav{display:none}.dialog{width:min(430px,calc(100vw - 28px));padding:0;border:1px solid var(--line2);border-radius:9px;background:#11141d;color:var(--text);box-shadow:0 25px 80px #000b}.dialog::backdrop{background:#01050acc;backdrop-filter:blur(4px)}.dialog-body{padding:20px}.dialog h2{margin:0 0 7px}.dialog p{color:var(--muted);white-space:pre-wrap}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:16px}#saveSettings{margin:13px 0 9px}#saveSettings+small{display:block;line-height:1.45}.chat-details{position:fixed;z-index:70;top:78px;right:22px;bottom:22px;width:min(360px,calc(100vw - 44px));overflow:auto;opacity:0;pointer-events:none;transform:translateX(22px);transition:opacity .16s ease,transform .2s ease;box-shadow:0 28px 90px #0008}.chat-details.open{opacity:1;pointer-events:auto;transform:none}.details-head{display:flex;justify-content:space-between;gap:10px;padding:13px;border-bottom:1px solid var(--line)}.details-head h2{margin:0;font-size:14px}.details-head p{margin:3px 0 0;color:var(--muted);font-size:11px}.details-section{padding:13px;border-bottom:1px solid var(--line)}.details-section h3{color:var(--muted);font:700 10px ui-monospace,Consolas,monospace;letter-spacing:.12em}.action-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px}#chats option,#workspaceFiles option{padding:8px 7px;background:#0d1412;color:var(--text)}#chats option:checked,#workspaceFiles option:checked{background:linear-gradient(90deg,#6c82ff42,#61e6b518)}[data-view="files"] .split-layout{min-height:500px}[data-view="files"] .card{min-height:0;overflow:auto}[data-view="files"] .card:last-child{display:flex;flex-direction:column}[data-view="files"] .file-editor{flex:1;min-height:58vh;resize:vertical}[data-view="files"] #workspaceFiles{height:220px;min-height:145px}.chat-layout{height:calc(100vh - 119px)}
-body.surface-solid .card,body.surface-solid .sidebar,body.surface-solid .topbar{backdrop-filter:none;background:#11141d}body.surface-contrast{--bg:#000;--surface:#070707;--raised:#101010;--line:#5c5c5c;--line2:#858585;--text:#fff;--muted:#c8c8c8;--accent:#ff835f;--mint:#75ffd0}body.compact .card-pad{padding:11px}body.compact .field-label{margin-top:8px}body.compact button{min-height:34px;padding:6px 10px}body.reduce-motion *,body.reduce-motion *::before,body.reduce-motion *::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
-@media(max-width:960px){.app{grid-template-columns:86px minmax(0,1fr)}.brand{justify-content:center;padding-inline:0}.brand-copy,.nav-label,.side-status{display:none}.tab{justify-content:center;padding:10px}.chat-layout{grid-template-columns:230px minmax(0,1fr)}.terminal-layout{grid-template-columns:270px minmax(0,1fr)}}
-@media(max-width:720px){body{padding-bottom:96px}.app{display:block}.sidebar{display:none}.topbar{min-height:62px;height:auto;padding:10px 12px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.topbar>div:first-child{grid-column:1/-1}.topbar>.spacer{display:none}.topbar>button{width:100%;padding-inline:5px;font-size:11px}.shell{padding:13px 10px 104px}.page-subtitle{display:none}.mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(4,1fr);left:8px;right:8px;bottom:8px;z-index:40;padding:6px;border:1px solid var(--line2);border-radius:15px;background:#091521f5;box-shadow:var(--shadow);backdrop-filter:blur(16px)}.mobile-nav .tab{display:grid;gap:2px;min-height:48px;padding:6px 3px;font-size:10px;justify-items:center}.mobile-nav .tab.active{box-shadow:none;background:#17323b}.mobile-nav .nav-glyph{width:24px;height:24px}.chat-layout,.split-layout,.terminal-layout,.settings-grid,.qr-layout{grid-template-columns:1fr}.chat-main{min-height:calc(100vh - 154px)}#messages{max-height:none;min-height:44vh;padding:13px}.message{max-width:92%}.chat-rail{order:2}.terminal-card{order:-1}[data-view="files"] .split-layout{height:auto;min-height:0}[data-view="files"] .card{overflow:visible}[data-view="files"] #workspaceFiles{height:180px;min-height:145px}[data-view="files"] .file-editor{min-height:44vh}.terminal{min-height:50vh}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.section-head{flex-wrap:wrap}.section-actions{width:100%;margin-left:0}.section-actions button{flex:1 1 120px}.composer-bar{flex-wrap:wrap}.composer-bar button{flex:1 1 90px}.statusbar{right:14px;bottom:88px}.shortcut{display:none}}
-</style></head><body>
-<div class="app"><aside class="sidebar"><div class="brand"><div class="brand-mark">CM</div><div class="brand-copy"><strong>CARDMIND</strong><small>Field console</small></div></div><div class="nav-caption">WORKBENCH</div><nav class="nav" aria-label="Console sections"><button class="tab active" data-panel="chat"><span class="nav-glyph">01</span><span class="nav-label">Chat log</span></button><button class="tab" data-panel="files"><span class="nav-glyph">02</span><span class="nav-label">Workspace</span></button><button class="tab" data-panel="ssh"><span class="nav-glyph">03</span><span class="nav-label">Terminal</span></button></nav><div class="side-bottom"><button class="tab" data-panel="settings"><span class="nav-glyph">04</span><span class="nav-label">Settings</span></button><div class="side-status"><span class="online"><span class="online-dot"></span>Cardputer online</span><span class="device-pill" id="device"></span></div></div></aside>
-<section class="workspace"><header class="topbar"><div><div class="page-kicker">WORKBENCH / <span id="pageKicker">CHAT</span></div><div class="page-title" id="pageTitle">Chat log</div><div class="page-subtitle" id="pageSubtitle">Continue a conversation on your Cardputer</div></div><span class="spacer"></span><button class="ghost" id="refresh">Refresh</button><button class="secondary" id="endConsole">End session</button><button class="secondary" id="logout">Lock</button></header><div class="shell"><main>
-<section class="panel active" data-view="chat"><div class="chat-layout"><aside class="card chat-rail"><div class="section-head"><div><h2>Chat log</h2><p>microSD journal</p></div><button class="icon-button" id="newChat" title="New chat">＋</button></div><select id="chats" size="12" aria-label="Chat"></select></aside>
-<section class="card chat-main"><div class="section-head"><div><h2 id="activeChatTitle">Conversation</h2><p><span id="activeModel">Model</span> · <span id="contextMeter">context</span></p></div><div class="section-actions"><button class="ghost" id="loadOlder">Load archived</button><button class="ghost" id="retry">Retry last</button><button class="ghost" id="openChatDetails" aria-controls="chatDetails" aria-expanded="false">Details</button></div></div><div id="messages" aria-live="polite"></div><div class="composer"><div class="intent-row"><span>INTENT</span><button type="button" class="intent" data-intent="/search ">Research</button><button type="button" class="intent" data-intent="/file ">Work with file</button></div><textarea id="prompt" maxlength="1200" placeholder="Ask CardMind... /search and /file are available"></textarea><div class="composer-bar"><span class="shortcut">Ctrl/⌘ + Enter to send</span><button class="danger" id="stop">Stop</button><button id="send">Send ↗</button></div></div></section></div></section>
-<section class="panel" data-view="files"><div class="section-head"><div><h2>microSD workspace</h2><p>Open, edit and save complete documents up to 480 KiB</p></div></div><div class="split-layout"><section class="card card-pad"><label class="field-label" for="workspaceFiles">Workspace files</label><select id="workspaceFiles" size="12"></select><div class="stack"><div class="row"><button id="openFile">Open</button><button class="secondary" id="downloadFile">Download</button></div><input id="uploadInput" type="file" accept=".txt,.md,.json,.jsonl,.csv,.html,.svg,.py"><button id="uploadFile">Upload new file</button><button class="ghost" id="importChat">Import selected chat bundle</button><div class="row"><button class="ghost" id="renameFile">Rename</button><button class="danger" id="deleteFile">Delete</button></div></div></section><section class="card card-pad"><div class="section-head"><div><h2 id="fileEditorTitle">File editor</h2><p id="filePosition">Select a file to begin</p></div><div class="section-actions"><button id="saveFile">Save file</button></div></div><textarea class="file-editor" id="fileContent" placeholder="File content appears here" spellcheck="false"></textarea></section></div><section class="card card-pad qr-card"><div class="qr-layout"><div><div class="section-head"><div><h2>QR display</h2><p>Show text or a small file directly on the Cardputer screen</p></div></div><textarea id="qrContent" maxlength="320" placeholder="URL, Wi-Fi details, token, or other text"></textarea><small id="qrCount">0 / 320 bytes</small></div><div class="stack"><p class="muted">QR payloads are limited to 320 UTF-8 bytes so the code remains scannable on the 240×135 display.</p><div class="qr-actions"><button id="showQr">Show on Cardputer</button><button class="secondary" id="qrFromFile">Use selected file</button><button class="ghost" id="closeQr">Restore console screen</button></div></div></div></section></section>
-<section class="panel" data-view="ssh"><div class="section-head"><div><h2>Remote terminal</h2><p>Interactive SSH and microSD-backed SFTP transfers</p></div></div><div class="terminal-layout"><aside class="stack"><section class="card card-pad"><div class="section-head"><div><h2>Connection</h2><p>Saved profiles stay on-device</p></div><button class="icon-button" id="newSsh" title="New profile">＋</button></div><select id="sshProfiles"></select><label class="field-label" for="sshName">Profile name</label><input id="sshName" maxlength="32" placeholder="Server"><div class="row"><input id="sshHost" maxlength="253" placeholder="Host"><input id="sshPort" type="number" min="1" max="65535" placeholder="Port"></div><input id="sshUser" maxlength="64" placeholder="Username"><select id="sshAuth"><option value="password">Password</option><option value="key">Private key</option></select><input id="sshPassword" type="password" maxlength="192" placeholder="New password (blank keeps current)"><input id="sshPassphrase" type="password" maxlength="192" placeholder="New key passphrase (blank keeps current)"><div class="row"><button id="saveSsh">Save profile</button><button class="danger" id="deleteSsh">Delete</button></div><input id="sshKeyInput" type="file" accept=".pem,.key"><button class="ghost" id="uploadSshKey">Install private key</button><small>Secrets are write-only. New host fingerprints require confirmation.</small></section><section class="card card-pad"><h2>SFTP</h2><div class="row"><input id="sftpPath" value="/" maxlength="511"><button id="listSftp">List</button></div><select id="sftpEntries" size="7"></select><div class="row"><button class="ghost" id="sftpOpen">Open directory</button><button id="sftpDownload">Download to SD</button></div><label class="field-label" for="sftpLocal">Workspace file to upload</label><div class="row"><select id="sftpLocal"></select><button id="sftpUpload">Upload</button></div></section></aside><section class="card terminal-card"><div class="terminal-toolbar"><span class="terminal-state" id="terminalState">Disconnected</span><button id="connectSsh">Connect</button><button id="disconnectSsh" class="danger">Disconnect</button><button class="ghost" id="clearSsh">Clear</button><button class="ghost" id="fullSsh">Fullscreen</button></div><pre id="sshTerminal" class="terminal" tabindex="0">Choose a profile and connect. Click here to type directly.</pre><div class="row"><input id="sshInput" maxlength="512" placeholder="Command for touch keyboards"><button id="sendSshInput">Send</button></div></section></div></section>
-<section class="panel" data-view="settings"><div class="section-head"><div><h2>Device & console</h2><p>Connections, optional services, device preferences and diagnostics</p></div><div class="section-actions"><button id="saveSettings">Save all settings</button></div></div><div class="settings-grid">
-<section class="card card-pad settings-card"><h2>Wi-Fi & LLM</h2><p>Secrets are write-only. Leave a secret blank to keep its saved value.</p><label class="field-label" for="wifiSsid">2.4 GHz Wi-Fi SSID</label><input id="wifiSsid" maxlength="32" autocomplete="off"><label class="field-label" for="wifiPassword">New Wi-Fi password</label><input id="wifiPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Blank keeps current password"><label class="field-label" for="apiBaseUrl">OpenAI-compatible base URL</label><input id="apiBaseUrl" maxlength="180"><label class="field-label" for="apiKey">New API key</label><input id="apiKey" type="password" maxlength="192" autocomplete="new-password" placeholder="Blank keeps current key"><small class="key-state" id="apiKeyState"></small><label class="field-label" for="model">Model</label><input id="model" maxlength="120" list="modelOptions"><datalist id="modelOptions"></datalist><div class="settings-actions"><button class="secondary" id="refreshModels">Refresh models / test</button></div></section>
-<section class="card card-pad settings-card"><h2>Voice & web search</h2><p>Optional services may use independent compatible providers.</p><details open><summary>Speech to text</summary><input id="sttBaseUrl" maxlength="180" placeholder="STT base URL"><input id="sttModel" maxlength="80" placeholder="STT model"><input id="sttApiKey" type="password" maxlength="192" autocomplete="new-password" data-1p-ignore data-lpignore="true" placeholder="New STT key"><small class="key-state" id="sttKeyState"></small><label class="checkline"><input id="clearSttKey" type="checkbox">Remove saved STT key</label></details><details><summary>Web search</summary><input id="searchBaseUrl" maxlength="180" placeholder="Search base URL"><input id="searchApiKey" type="password" maxlength="192" autocomplete="new-password" data-1p-ignore data-lpignore="true" placeholder="New search key"><small class="key-state" id="searchKeyState"></small><label class="checkline"><input id="clearSearchKey" type="checkbox">Remove saved search key</label></details><details><summary>Text to speech</summary><input id="ttsBaseUrl" maxlength="180" placeholder="TTS base URL"><div class="row"><input id="ttsModel" maxlength="80" placeholder="TTS model"><input id="ttsVoice" maxlength="80" placeholder="Voice"></div><input id="ttsApiKey" type="password" maxlength="192" autocomplete="new-password" data-1p-ignore data-lpignore="true" placeholder="New TTS key"><small class="key-state" id="ttsKeyState"></small><label class="checkline"><input id="clearTtsKey" type="checkbox">Remove saved TTS key</label><label class="checkline"><input id="ttsAutoPlay" type="checkbox">Speak new replies automatically</label><label class="field-label" for="ttsVolume">Speaker volume</label><input id="ttsVolume" type="range" min="0" max="255" step="1"></details></section>
-<section class="card card-pad settings-card"><h2>Device preferences</h2><p>Display and performance changes are applied after the console closes.</p><label class="field-label" for="displayBrightness">Display brightness</label><input id="displayBrightness" type="range" min="32" max="255" step="1"><label class="field-label" for="screenSleep">Screen sleep</label><select id="screenSleep"><option value="0">Off</option><option value="1">1 minute</option><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="30">30 minutes</option></select><label class="field-label" for="keyboardRepeat">Keyboard repeat</label><select id="keyboardRepeat"><option value="0">Off</option><option value="200">Slow · 200 ms</option><option value="125">Normal · 125 ms</option><option value="75">Fast · 75 ms</option></select><label class="field-label" for="powerProfile">Power profile</label><select id="powerProfile"><option value="0">Performance</option><option value="1">Balanced</option><option value="2">Saver</option></select></section>
-<section class="card card-pad settings-card"><h2>Python workspace</h2><p>Restart into isolated MicroPython and use the same browser address, password and microSD files.</p><div class="python-state" id="pythonState">Checking installation…</div><button id="startPython">Start Python workspace</button><small>A restart ends this Web Console session. Return to CardMind from the Python page.</small></section>
-<section class="card card-pad settings-card"><h2>Browser interface</h2><p>These preferences stay in this browser and never use device NVS.</p><label class="field-label" for="surfaceStyle">Surface style</label><select id="surfaceStyle"><option value="soft">Soft depth</option><option value="solid">Solid</option><option value="contrast">High contrast</option></select><label class="browser-pref"><span>Compact density</span><input id="compactDensity" type="checkbox"></label><label class="browser-pref"><span>Reduce motion</span><input id="reduceMotion" type="checkbox"></label><label class="browser-pref"><span>Keep SSH terminal awake</span><input id="keepAwake" type="checkbox"></label></section>
-<section class="card card-pad settings-card"><div class="section-head"><div><h2>Live diagnostics</h2><p>Secret-free health snapshot</p></div><button class="ghost" id="exportDiagnostics">Export</button></div><div id="diagnostics" class="metrics"></div></section>
-</div></section>
-</main></div></section></div><aside class="chat-details card" id="chatDetails" aria-hidden="true"><div class="details-head"><div><h2>Thread details</h2><p>Context, permissions and actions</p></div><button class="ghost" id="closeChatDetails" aria-label="Close thread details">×</button></div><section class="details-section"><label class="field-label" for="instructions">Instructions</label><textarea id="instructions" maxlength="2048" placeholder="For example: answer briefly and in Russian"></textarea><button class="full" id="saveInstructions">Save instructions</button></section><section class="details-section"><h3>Model permissions</h3><label class="permission" for="sshToolsEnabled"><input id="sshToolsEnabled" type="checkbox"><span>Allow SSH commands<small>The model may execute commands through the selected, already-trusted SSH profile. Disabled by default for every chat.</small></span></label><button class="secondary full" id="savePermissions">Save permissions</button></section><section class="details-section"><h3>Chat actions</h3><div class="action-grid"><button class="secondary" id="renameChat">Rename</button><button class="ghost" id="pinChat">Pin</button><button class="ghost" id="archiveChat">Archive</button><button class="ghost" id="duplicateChat">Duplicate</button><button class="ghost" id="exportChat">Export .md</button><button class="ghost" id="exportBundle">Bundle</button></div><button class="danger full" id="clearChat">Clear messages</button><button class="danger full" id="deleteChat">Delete chat</button></section></aside><nav class="mobile-nav" aria-label="Mobile console sections"><button class="tab active" data-panel="chat"><span class="nav-glyph">01</span>Chat log</button><button class="tab" data-panel="files"><span class="nav-glyph">02</span>Workspace</button><button class="tab" data-panel="ssh"><span class="nav-glyph">03</span>Terminal</button><button class="tab" data-panel="settings"><span class="nav-glyph">04</span>Settings</button></nav><p id="status" class="statusbar" role="status"></p>
-<dialog class="dialog" id="actionDialog"><form method="dialog" class="dialog-body"><h2 id="dialogTitle">Confirm action</h2><p id="dialogMessage"></p><input id="dialogInput"><div class="dialog-actions"><button class="ghost" value="cancel">Cancel</button><button id="dialogConfirm" value="confirm">Confirm</button></div></form></dialog>
-<script>)HTML";
-    static const char pageEnd[] PROGMEM = R"HTML(
-const q=s=>document.querySelector(s);history.scrollRestoration='manual';let state=null,fileName='',fileBytes=0,activeRequest=null,lastPrompt='',sshConnected=false,sshPoll=null,sftpState=[],sshCreating=false,wakeLock=null,archiveOffset=0;
-const panelCopy={chat:['Chat log','Continue a conversation on your Cardputer'],files:['Workspace','Open and edit complete microSD documents'],ssh:['Terminal','SSH and SFTP on remote machines'],settings:['Settings','Connection details and device health']};
-function closeChatDetails(){q('#chatDetails').classList.remove('open');q('#chatDetails').setAttribute('aria-hidden','true');q('#openChatDetails').setAttribute('aria-expanded','false')}
-function showPanel(name){const target=panelCopy[name]?name:'chat';closeChatDetails();for(const p of document.querySelectorAll('.panel'))p.classList.toggle('active',p.dataset.view===target);for(const b of document.querySelectorAll('.tab'))b.classList.toggle('active',b.dataset.panel===target);q('#pageTitle').textContent=panelCopy[target][0];q('#pageSubtitle').textContent=panelCopy[target][1];q('#pageKicker').textContent=target.toUpperCase();history.replaceState(null,'','#'+target);window.scrollTo(0,0)}
-for(const b of document.querySelectorAll('.tab'))b.onclick=()=>showPanel(b.dataset.panel);showPanel(location.hash.slice(1)||'chat');
-let statusTimer=null;function showStatus(message){clearTimeout(statusTimer);q('#status').textContent=message||'';if(message)statusTimer=setTimeout(()=>q('#status').textContent='',5000)}function showError(error){showStatus(error instanceof Error?error.message:String(error))}
-window.addEventListener('unhandledrejection',event=>{showError(event.reason);event.preventDefault()});
-q('#prompt').addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();q('#send').click()}});
-function askDialog(title,message,value,confirmLabel,danger,inputVisible){const dialog=q('#actionDialog');q('#dialogTitle').textContent=title;q('#dialogMessage').textContent=message;q('#dialogInput').value=value||'';q('#dialogInput').hidden=!inputVisible;q('#dialogConfirm').textContent=confirmLabel;q('#dialogConfirm').className=danger?'danger':'';dialog.showModal();if(inputVisible)q('#dialogInput').focus();return new Promise(resolve=>dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'?(inputVisible?q('#dialogInput').value:true):null),{once:true}))}
-const askText=(title,value)=>askDialog(title,'Enter a new value.',value,'Save',false,true);const askConfirm=(title,message,label)=>askDialog(title,message,'',label,true,false);
-q('#dialogInput').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();q('#actionDialog').close('confirm')}};
-const secretFields=['wifiPassword','apiKey','sttApiKey','searchApiKey','ttsApiKey'];const changedSecrets=new Set();for(const id of secretFields)q('#'+id).addEventListener('input',event=>{if(event.isTrusted)changedSecrets.add(id)});
-async function request(path,options={}){options.headers={...(options.headers||{}),'X-CardMind-CSRF':csrf};const r=await fetch(path,options);if(r.status===401){location='/';throw new Error('Session expired')}if(!r.ok){let message=`HTTP ${r.status}`;try{message=(await r.json()).error||message}catch{}throw new Error(message)}return r}
-function render(s){state=s;q('#device').textContent=`${s.ip} · ${s.battery}%`;if(s.status)showStatus(s.status);
-q('#chats').innerHTML='';for(const c of s.chats){const o=document.createElement('option');o.value=c.id;o.textContent=`${c.pinned?'📌 ':c.archived?'📦 ':''}${c.title} · ${c.total_messages}`;o.selected=c.id===s.active_chat_id;q('#chats').append(o)}
-archiveOffset=0;q('#messages').innerHTML='';for(const m of s.messages){const d=document.createElement('div');d.className='message '+m.role;d.textContent=(m.role==='user'?'You: ':'AI: ')+m.content;q('#messages').append(d)}q('#loadOlder').hidden=!s.archived_messages;q('#loadOlder').disabled=!s.archived_messages;q('#loadOlder').textContent=s.archived_messages?`Load archived · ${s.archived_messages}`:'No archive';
-q('#activeChatTitle').textContent=s.active_chat_title||'Conversation';q('#activeModel').textContent=s.model||'Model';const contextPercent=Math.min(100,Math.round(100*(s.active_context_bytes||0)/(s.maximum_context_bytes||1)));q('#contextMeter').textContent=`${s.active_context_messages}/${s.maximum_context_messages} messages · ${contextPercent}% bytes`;q('#instructions').value=s.instructions||'';q('#sshToolsEnabled').checked=s.ssh_tools_enabled===true;q('#wifiSsid').value=s.wifi_ssid||'';q('#apiBaseUrl').value=s.api_base_url||'';q('#model').value=s.model||'';q('#sttBaseUrl').value=s.stt_base_url||'';q('#sttModel').value=s.stt_model||'';q('#searchBaseUrl').value=s.search_base_url||'';q('#ttsBaseUrl').value=s.tts_base_url||'';q('#ttsModel').value=s.tts_model||'';q('#ttsVoice').value=s.tts_voice||'';q('#ttsAutoPlay').checked=!!s.tts_auto_play;q('#ttsVolume').value=s.tts_volume;q('#displayBrightness').value=s.display_brightness;q('#screenSleep').value=String(s.screen_sleep_minutes);q('#keyboardRepeat').value=String(s.keyboard_repeat_ms);q('#powerProfile').value=String(s.power_profile);q('#apiKeyState').textContent=s.api_key_configured?'SAVED KEY PRESENT':'KEY MISSING';q('#sttKeyState').textContent=s.stt_key_configured?'SAVED KEY PRESENT':'NOT CONFIGURED';q('#searchKeyState').textContent=s.search_key_configured?'SAVED KEY PRESENT':'NOT CONFIGURED';q('#ttsKeyState').textContent=s.tts_key_configured?'SAVED KEY PRESENT':'NOT CONFIGURED';q('#pythonState').textContent=s.python_layout_ready&&s.python_image_ready?`Ready · firmware ${s.firmware_version}`:(s.python_runtime_error||s.python_error||'MicroPython is not installed');q('#startPython').disabled=!(s.python_layout_ready&&s.python_image_ready);
-q('#sshProfiles').innerHTML='';for(const [i,p] of (s.ssh_profiles||[]).entries()){const o=document.createElement('option');o.value=i;o.textContent=`${i===s.ssh_selected?'★ ':''}${p.name} · ${p.username}@${p.host}`;o.selected=i===s.ssh_selected;q('#sshProfiles').append(o)}
-q('#sshName').value=s.ssh_name||'';q('#sshHost').value=s.ssh_host||'';q('#sshPort').value=s.ssh_port||22;q('#sshUser').value=s.ssh_username||'';q('#sshAuth').value=s.ssh_auth_mode||'password';sshConnected=!!s.ssh_terminal_open;q('#terminalState').textContent=sshConnected?'Connected':'Disconnected';
-const metrics=[['Battery',`${s.battery}%`],['Wi-Fi',`${s.wifi_rssi} dBm`],['Free heap',`${Math.round(s.free_heap/1024)} KiB`],['Min heap',`${Math.round(s.minimum_heap/1024)} KiB`],['Largest block',`${Math.round(s.largest_heap/1024)} KiB`],['Stack free',`${s.stack_free}`],['CPU',`${s.cpu_mhz} MHz`],['Uptime',`${Math.floor(s.uptime_ms/60000)} min`],['Reset',`${s.reset_reason}`],['microSD used',`${Math.round(s.sd_used_bytes/1048576)} MiB`],['microSD total',`${Math.round(s.sd_total_bytes/1048576)} MiB`],['Firmware',s.firmware_version]];q('#diagnostics').textContent='';for(const [label,value] of metrics){const d=document.createElement('div'),b=document.createElement('b'),span=document.createElement('span');d.className='metric';b.textContent=value;span.textContent=label;d.append(b,span);q('#diagnostics').append(d)}
-const selected=q('#workspaceFiles').value;q('#workspaceFiles').innerHTML='';q('#sftpLocal').innerHTML='';for(const f of s.files){const o=document.createElement('option');o.value=f.name;o.textContent=`${f.name} · ${f.size} B`;o.selected=f.name===selected;q('#workspaceFiles').append(o);q('#sftpLocal').append(o.cloneNode(true))}q('#messages').scrollTop=q('#messages').scrollHeight;updateWakeLock()}
-async function refresh(){const r=await request('/api/state');render(await r.json())}
-async function post(path,values){return request(path,{method:'POST',body:new URLSearchParams(values)})}
-const formatBytes=value=>value<1024?`${value} B`:`${(value/1024).toFixed(value<10240?1:0)} KiB`;
-async function openFile(){const selected=q('#workspaceFiles').value;if(!selected)return;fileName=selected;fileBytes=0;q('#fileEditorTitle').textContent=selected;q('#fileContent').value='';q('#fileContent').disabled=true;q('#saveFile').disabled=true;let offset=0,content='',total=0;do{q('#filePosition').textContent=`Opening ${formatBytes(offset)}...`;const r=await request(`/api/file?name=${encodeURIComponent(selected)}&offset=${offset}`),f=await r.json();if(f.offset!==offset)throw new Error(`File read resumed at ${f.offset}, expected ${offset}`);content+=f.content;offset=f.next_offset;total=f.total_bytes;if(f.eof)break;if(f.next_offset<=f.offset)throw new Error('File read did not advance')}while(offset<total);fileBytes=new Blob([content]).size;if(fileBytes!==total)throw new Error(`Decoded file has ${fileBytes} bytes, expected ${total}`);q('#fileContent').value=content;q('#fileContent').disabled=false;q('#saveFile').disabled=false;q('#filePosition').textContent=`${formatBytes(fileBytes)} · UTF-8 · Ready`}
-q('#refresh').onclick=refresh;q('#chats').onchange=async()=>{await request('/api/chat/select',{method:'POST',body:new URLSearchParams({id:q('#chats').value})});await refresh()};
-q('#newChat').onclick=async()=>{await request('/api/chat/new',{method:'POST'});await refresh()};
-q('#renameChat').onclick=async()=>{const title=await askText('Rename chat',state.active_chat_title);if(title){await post('/api/chat/rename',{title});await refresh()}};
-q('#pinChat').onclick=async()=>{await post('/api/chat/pin',{});await refresh()};q('#archiveChat').onclick=async()=>{await post('/api/chat/archive',{});await refresh()};
-q('#duplicateChat').onclick=async()=>{await post('/api/chat/duplicate',{});await refresh()};q('#exportChat').onclick=async()=>{await post('/api/chat/export',{});await refresh()};q('#exportBundle').onclick=async()=>{await post('/api/chat/export-bundle',{});await refresh()};
-q('#loadOlder').onclick=async()=>{const r=await request(`/api/chat/archived?offset=${archiveOffset}`),x=await r.json();const active=q('#messages').querySelector('.message:not(.archived)');for(const m of x.messages){const d=document.createElement('div');d.className='message archived '+m.role;d.textContent=(m.role==='user'?'You · archived: ':'AI · archived: ')+m.content;if(active)q('#messages').insertBefore(d,active);else q('#messages').append(d)}archiveOffset=x.next_offset;q('#loadOlder').disabled=x.eof;q('#loadOlder').textContent=x.eof?'Archive loaded':'Load more archived'};
-q('#clearChat').onclick=async()=>{if(await askConfirm('Clear messages','Remove active and archived messages while keeping this chat and its instructions?','Clear messages')){await post('/api/chat/clear',{});closeChatDetails();await refresh()}};
-q('#deleteChat').onclick=async()=>{if(await askConfirm('Delete chat',`"${state.active_chat_title}" and its history will be removed from microSD.`,'Delete')){await post('/api/chat/delete',{});await refresh()}};
-q('#saveInstructions').onclick=async()=>{await request('/api/chat/instructions',{method:'POST',body:new URLSearchParams({instructions:q('#instructions').value})});await refresh()};
-q('#savePermissions').onclick=async()=>{if(q('#sshToolsEnabled').checked&&!state.ssh_configured)throw new Error('Configure a complete SSH profile before granting model access');await post('/api/chat/permissions',{ssh_tools_enabled:q('#sshToolsEnabled').checked?'1':'0'});await refresh()};
-q('#openChatDetails').onclick=()=>{const open=!q('#chatDetails').classList.contains('open');q('#chatDetails').classList.toggle('open',open);q('#chatDetails').setAttribute('aria-hidden',open?'false':'true');q('#openChatDetails').setAttribute('aria-expanded',open?'true':'false')};q('#closeChatDetails').onclick=closeChatDetails;document.addEventListener('keydown',event=>{if(event.key==='Escape'&&q('#chatDetails').classList.contains('open'))closeChatDetails()});for(const button of document.querySelectorAll('.intent'))button.onclick=()=>{q('#prompt').value=button.dataset.intent;q('#prompt').focus()};
-q('#saveSettings').onclick=async()=>{const secret=id=>changedSecrets.has(id)?q('#'+id).value:'';await post('/api/settings',{wifi_ssid:q('#wifiSsid').value,wifi_password:secret('wifiPassword'),api_base_url:q('#apiBaseUrl').value,api_key:secret('apiKey'),model:q('#model').value,stt_base_url:q('#sttBaseUrl').value,stt_model:q('#sttModel').value,stt_api_key:secret('sttApiKey'),clear_stt_key:q('#clearSttKey').checked?'1':'0',search_base_url:q('#searchBaseUrl').value,search_api_key:secret('searchApiKey'),clear_search_key:q('#clearSearchKey').checked?'1':'0',tts_base_url:q('#ttsBaseUrl').value,tts_model:q('#ttsModel').value,tts_voice:q('#ttsVoice').value,tts_api_key:secret('ttsApiKey'),clear_tts_key:q('#clearTtsKey').checked?'1':'0',tts_auto_play:q('#ttsAutoPlay').checked?'1':'0',tts_volume:q('#ttsVolume').value,display_brightness:q('#displayBrightness').value,screen_sleep_minutes:q('#screenSleep').value,keyboard_repeat_ms:q('#keyboardRepeat').value,power_profile:q('#powerProfile').value});for(const id of secretFields){q('#'+id).value='';changedSecrets.delete(id)}for(const id of ['clearSttKey','clearSearchKey','clearTtsKey'])q('#'+id).checked=false;await refresh()};
-q('#refreshModels').onclick=async()=>{showStatus('Checking model endpoint…');const r=await request('/api/models'),x=await r.json();q('#modelOptions').textContent='';for(const name of x.models){const o=document.createElement('option');o.value=name;q('#modelOptions').append(o)}showStatus(`Connection OK · ${x.models.length} models found`)};
-q('#startPython').onclick=async()=>{if(!await askConfirm('Start Python workspace','CardMind will restart and reopen the Python workspace automatically.','Restart into Python'))return;const r=await post('/api/python/start',{}),x=await r.json(),handoff=x.address+'handoff?token='+encodeURIComponent(x.handoff_token);document.body.innerHTML='<main style="padding:3rem;color:#eef1ff;background:#0a0c12;min-height:100vh"><h1>Restarting into Python workspace…</h1><p id="pythonHandoff">Waiting for '+x.address+'</p></main>';let attempts=0;const enter=async()=>{attempts++;try{const next=await fetch(handoff,{cache:'no-store'});if(next.ok){location=x.address;return}}catch(error){q('#pythonHandoff').textContent='Waiting for '+x.address+' · '+error.message}if(attempts>=30){q('#pythonHandoff').textContent='Python workspace did not answer at '+x.address+'. Restart CardMind and try again.';return}setTimeout(enter,1000)};setTimeout(enter,1500)};
-q('#exportDiagnostics').onclick=()=>{location='/api/diagnostics'};
-q('#saveSsh').onclick=async()=>{const password=q('#sshPassword').value,passphrase=q('#sshPassphrase').value;await post('/api/ssh/settings',{name:q('#sshName').value,host:q('#sshHost').value,port:q('#sshPort').value,username:q('#sshUser').value,auth_mode:q('#sshAuth').value,password,replace_password:password?'1':'0',key_passphrase:passphrase,replace_key_passphrase:passphrase?'1':'0',create:sshCreating?'1':'0'});sshCreating=false;q('#sshPassword').value='';q('#sshPassphrase').value='';await refresh()};
-q('#sshProfiles').onchange=async()=>{sshCreating=false;await post('/api/ssh/select',{index:q('#sshProfiles').value});await refresh()};
-q('#newSsh').onclick=()=>{sshCreating=true;q('#sshName').value='Server';q('#sshHost').value='';q('#sshPort').value=22;q('#sshUser').value='';q('#sshPassword').value='';q('#sshPassphrase').value=''};
-q('#deleteSsh').onclick=async()=>{if(await askConfirm('Delete SSH profile','The saved host and credentials for this profile will be removed.','Delete')){await post('/api/ssh/delete',{index:q('#sshProfiles').value});await refresh()}};
-q('#uploadSshKey').onclick=async()=>{const file=q('#sshKeyInput').files[0];if(!file)return;const data=new FormData();data.append('file',file,file.name);await request('/api/ssh/key',{method:'POST',body:data});q('#sshKeyInput').value='';await refresh()};
-function cleanSsh(v){return v.replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g,'').replace(/\r(?!\n)/g,'')}
-async function sendTerminal(data){if(!sshConnected)return;await post('/api/ssh/input',{data})}
-async function pollSsh(){if(!sshConnected)return;try{const r=await request('/api/ssh/output');const x=await r.json();if(x.output){const t=q('#sshTerminal');t.textContent+=cleanSsh(x.output);if(t.textContent.length>131072)t.textContent=t.textContent.slice(-98304);t.scrollTop=t.scrollHeight}sshConnected=x.open;if(!x.open)await refresh()}catch(e){sshConnected=false;q('#status').textContent=e.message}}
-q('#connectSsh').onclick=async()=>{const r=await request('/api/ssh/start',{method:'POST'}),x=await r.json();if(x.trust_required){if(!await askConfirm('Trust SSH host?',`${x.host}:${x.port}\n${x.key_type}\n${x.fingerprint}`,'Trust host'))return;const t=await post('/api/ssh/trust',{fingerprint:x.fingerprint}),y=await t.json();sshConnected=y.open}else sshConnected=x.open;q('#sshTerminal').textContent='';q('#sshTerminal').focus();if(!sshPoll)sshPoll=setInterval(pollSsh,300);await refresh()};
-q('#disconnectSsh').onclick=async()=>{await post('/api/ssh/stop',{});sshConnected=false;await refresh()};q('#clearSsh').onclick=()=>q('#sshTerminal').textContent='';q('#fullSsh').onclick=()=>q('#sshTerminal').requestFullscreen();
-q('#sendSshInput').onclick=async()=>{const v=q('#sshInput').value;if(v){await sendTerminal(v+'\r');q('#sshInput').value='';q('#sshTerminal').focus()}};q('#sshInput').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();q('#sendSshInput').click()}};
-q('#sshTerminal').onkeydown=async e=>{let d='';if(e.ctrlKey&&e.key.length===1)d=String.fromCharCode(e.key.toUpperCase().charCodeAt(0)&31);else if(e.key==='Enter')d='\r';else if(e.key==='Backspace')d='\x7f';else if(e.key==='Tab')d='\t';else if(e.key==='ArrowUp')d='\x1b[A';else if(e.key==='ArrowDown')d='\x1b[B';else if(e.key==='ArrowRight')d='\x1b[C';else if(e.key==='ArrowLeft')d='\x1b[D';else if(e.key.length===1&&!e.metaKey&&!e.altKey)d=e.key;if(d){e.preventDefault();await sendTerminal(d)}};
-q('#listSftp').onclick=async()=>{const r=await request(`/api/ssh/sftp/list?path=${encodeURIComponent(q('#sftpPath').value)}`),x=await r.json();sftpState=x.entries;q('#sftpEntries').innerHTML='';for(const [i,e] of x.entries.entries()){const o=document.createElement('option');o.value=i;o.textContent=`${e.directory?'📁':'📄'} ${e.name}${e.directory?'':` · ${e.size} B`}`;q('#sftpEntries').append(o)}};
-q('#sftpOpen').onclick=()=>{const e=sftpState[Number(q('#sftpEntries').value)];if(e&&e.directory){const p=q('#sftpPath').value;q('#sftpPath').value=(p==='/'?'':p)+'/'+e.name;q('#listSftp').click()}};
-q('#sftpDownload').onclick=async()=>{const e=sftpState[Number(q('#sftpEntries').value)];if(!e||e.directory)return;const name=await askText('Workspace filename',e.name);if(name){await post('/api/ssh/sftp/download',{path:(q('#sftpPath').value==='/'?'':q('#sftpPath').value)+'/'+e.name,name});await refresh()}};
-q('#sftpUpload').onclick=async()=>{const name=q('#sftpLocal').value;if(name){const remote=await askText('Remote filename',name);if(remote){await post('/api/ssh/sftp/upload',{name,path:(q('#sftpPath').value==='/'?'':q('#sftpPath').value)+'/'+remote});q('#listSftp').click()}}};
-q('#openFile').onclick=openFile;
-q('#saveFile').onclick=async()=>{if(!fileName)return;const blob=new Blob([q('#fileContent').value],{type:'text/plain;charset=utf-8'});if(blob.size>491520)throw new Error(`File is ${blob.size} bytes; the limit is 491520 bytes`);q('#saveFile').disabled=true;q('#filePosition').textContent=`Saving ${formatBytes(blob.size)}...`;try{const data=new FormData();data.append('file',blob,fileName);await request(`/api/file/upload?replace=1&name=${encodeURIComponent(fileName)}`,{method:'POST',body:data});fileBytes=blob.size;q('#filePosition').textContent=`${formatBytes(fileBytes)} · UTF-8 · Saved`;await refresh()}finally{q('#saveFile').disabled=false}};
-q('#downloadFile').onclick=()=>{const name=q('#workspaceFiles').value;if(name)location=`/api/file/download?name=${encodeURIComponent(name)}`};
-q('#uploadFile').onclick=async()=>{const file=q('#uploadInput').files[0];if(!file)return;const data=new FormData();data.append('file',file,file.name);await request('/api/file/upload',{method:'POST',body:data});q('#uploadInput').value='';await refresh()};
-q('#importChat').onclick=async()=>{const name=q('#workspaceFiles').value;if(name){await post('/api/chat/import',{name});await refresh()}};
-q('#renameFile').onclick=async()=>{const name=q('#workspaceFiles').value,newName=await askText('Rename file',name);if(newName&&newName!==name){await post('/api/file/rename',{name,new_name:newName});fileName='';q('#fileEditorTitle').textContent='File editor';q('#fileContent').value='';q('#filePosition').textContent='Select a file to begin';await refresh()}};
-q('#deleteFile').onclick=async()=>{const name=q('#workspaceFiles').value;if(name&&await askConfirm('Delete file',`${name} will be removed from the microSD workspace.`,'Delete')){await post('/api/file/delete',{name});fileName='';q('#fileEditorTitle').textContent='File editor';q('#fileContent').value='';q('#filePosition').textContent='Select a file to begin';await refresh()}};
-function updateQrCount(){const bytes=new TextEncoder().encode(q('#qrContent').value).length;q('#qrCount').textContent=`${bytes} / 320 bytes`;q('#showQr').disabled=bytes===0||bytes>320}
-q('#qrContent').oninput=updateQrCount;updateQrCount();
-q('#showQr').onclick=async()=>{await post('/api/qr/show',{content:q('#qrContent').value});showStatus('QR is now visible on the Cardputer')};
-q('#qrFromFile').onclick=async()=>{const name=q('#workspaceFiles').value;if(!name)throw new Error('Select a workspace file first');const r=await request(`/api/qr/file?name=${encodeURIComponent(name)}`),x=await r.json();q('#qrContent').value=x.content;updateQrCount();showStatus(`Loaded ${name} into the QR display`)};
-q('#closeQr').onclick=async()=>{await post('/api/qr/close',{});showStatus('Cardputer console access screen restored')};
-async function sendPrompt(){const prompt=q('#prompt').value.trim();if(!prompt)return;lastPrompt=prompt;q('#send').disabled=true;q('#status').textContent='Streaming...';activeRequest=new AbortController();
-const d=document.createElement('div');d.className='message assistant stream';d.textContent='AI: ';q('#messages').append(d);
-try{const r=await request('/api/prompt',{method:'POST',body:new URLSearchParams({prompt}),signal:activeRequest.signal});const reader=r.body.getReader(),decoder=new TextDecoder();let buffer='';
-while(true){const x=await reader.read();if(x.done)break;buffer+=decoder.decode(x.value,{stream:true});const events=buffer.split('\n\n');buffer=events.pop();for(const e of events){if(!e.startsWith('data:'))continue;const v=JSON.parse(e.slice(5));if(v.delta)d.textContent+=v.delta;if(v.error)q('#status').textContent=v.error}}
-q('#prompt').value=''}catch(e){if(e.name==='AbortError')q('#status').textContent='Canceled';else throw e}finally{activeRequest=null;q('#send').disabled=false;await refresh()}}
-q('#send').onclick=sendPrompt;q('#stop').onclick=()=>{if(activeRequest)activeRequest.abort()};q('#retry').onclick=()=>{if(lastPrompt){q('#prompt').value=lastPrompt;sendPrompt()}};
-const prefIds=['surfaceStyle','compactDensity','reduceMotion','keepAwake'];function applyPreferences(){const style=q('#surfaceStyle').value;document.body.classList.toggle('surface-solid',style==='solid');document.body.classList.toggle('surface-contrast',style==='contrast');document.body.classList.toggle('compact',q('#compactDensity').checked);document.body.classList.toggle('reduce-motion',q('#reduceMotion').checked);for(const id of prefIds)localStorage.setItem('cardmind_'+id,q('#'+id).type==='checkbox'?(q('#'+id).checked?'1':'0'):q('#'+id).value);updateWakeLock()}async function updateWakeLock(){const wanted=q('#keepAwake').checked&&sshConnected&&document.visibilityState==='visible';if(wanted&&!wakeLock&&navigator.wakeLock){try{wakeLock=await navigator.wakeLock.request('screen');wakeLock.addEventListener('release',()=>wakeLock=null)}catch(e){showStatus(`Wake lock unavailable: ${e.message}`)}}else if(!wanted&&wakeLock){await wakeLock.release();wakeLock=null}}for(const id of prefIds){const element=q('#'+id),saved=localStorage.getItem('cardmind_'+id);if(saved!==null){if(element.type==='checkbox')element.checked=saved==='1';else element.value=saved}element.onchange=applyPreferences}document.addEventListener('visibilitychange',updateWakeLock);applyPreferences();
-q('#endConsole').onclick=async()=>{if(!await askConfirm('End Web Console','Browser and SSH sessions will close. Saved Wi-Fi and device changes will then be applied.','End session'))return;await post('/api/console/close',{});document.body.innerHTML='<main style="padding:3rem;color:#eef1ff;background:#0a0c12;min-height:100vh"><h1>Web Console closed</h1><p>You may close this browser tab. CardMind is applying saved settings.</p></main>'};
-q('#logout').onclick=async()=>{await request('/logout',{method:'POST'});location='/'};refresh();
-</script></body></html>)HTML";
-    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-    server.send(200, "text/html; charset=utf-8", "");
-    server.sendContent_P(pageStart);
-    server.sendContent("const csrf='" + csrfToken + "';\n");
-    server.sendContent_P(pageEnd);
-    server.sendContent("", 0);
-}
-
-void sendLoginPage()
+void sendLoginPage(const bool reconnectReturn)
 {
     server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "text/html; charset=utf-8", loginPage(""));
+    server.send(200, "text/html; charset=utf-8", loginPage("", reconnectReturn));
 }
 
 void sendRoot()
 {
     if (!sessionIsActive()) {
-        sendLoginPage();
+        sendLoginPage(requestHasPythonReconnectReturn());
         return;
     }
     server.sendHeader("Cache-Control", "no-store");
-    sendConsolePage();
+    sendWebConsolePage(server);
+}
+
+void handleSession()
+{
+    if (!sessionIsActive()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["csrf"] = csrfToken;
+    document["authenticated"] = true;
+    document["session_lifetime"] =
+        webSessionLifetimePolicy(consoleSettings.webSessionLifetime).value;
+    document["browser_presence"] =
+        webConsoleBrowserStateName(webConsoleBrowserStateAt(millis()));
+    sendWebJson(server, 200, document);
+}
+
+void handleSessionHeartbeat()
+{
+    if (!requestHasValidCsrfWithoutRefresh()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const String transferEncoding = server.header("Transfer-Encoding");
+    const String contentLength = server.header("Content-Length");
+    if (!transferEncoding.isEmpty() ||
+        (!contentLength.isEmpty() && contentLength != "0") ||
+        server.args() != 0) {
+        sendWebJsonError(server, 400, "Session heartbeat body must be empty");
+        return;
+    }
+    browserPresenceInitialized = true;
+    browserLastHeartbeatAt = millis();
+    renderConsoleSessionPresentationIfChanged();
+    server.send(204, "text/plain", "");
 }
 
 void handleLogin()
 {
+    const bool reconnectReturn = requestHasPythonReconnectReturn();
     if (static_cast<std::int32_t>(millis() - loginLockedUntil) < 0) {
         server.send(429, "text/html; charset=utf-8",
-                    loginPage("Too many attempts; wait 30 seconds"));
+                    loginPage("Too many attempts; wait 30 seconds", reconnectReturn));
         return;
     }
     if (!constantTimeEquals(server.arg("password"), accessPassword)) {
@@ -437,267 +1689,484 @@ void handleLogin()
             loginLockedUntil = millis() + kLoginLockMs;
         }
         delay(250);
-        server.send(401, "text/html; charset=utf-8", loginPage("Invalid password"));
+        server.send(401, "text/html; charset=utf-8",
+                    loginPage("Invalid password", reconnectReturn));
         return;
     }
     loginFailures = 0;
-    sessionToken = randomHexToken();
-    csrfToken = randomHexToken();
+    const bool existingSession = !sessionToken.isEmpty() &&
+        !webSessionAuthenticationExpired(
+            consoleSettings.webSessionLifetime, sessionLastActivityAt, millis());
+    if (!existingSession) {
+        clearSessionAuthentication();
+        sessionToken = randomHexToken();
+        csrfToken = randomHexToken();
+    }
     sessionLastActivityAt = millis();
-    server.sendHeader("Set-Cookie", "cm_session=" + sessionToken +
-                      "; HttpOnly; SameSite=Strict; Path=/; Max-Age=900");
-    server.sendHeader("Location", "/");
+    sessionActivityRecordedForRequest = true;
+    server.sendHeader("Set-Cookie", sessionCookieValue());
+    sessionCookieEmittedForRequest = true;
+    server.sendHeader("Location", reconnectReturn ? "/?return=python" : "/");
     server.send(303, "text/plain", "Authenticated");
-    renderConsoleChat();
+    passwordRevealUntil = 0;
+    renderConsoleScreen();
 }
 
 void handleLogout()
 {
-    if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+    if (!requestHasValidCsrfWithoutRefresh()) {
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    sessionToken = "";
-    csrfToken = "";
+    clearFailedWebRequestInstructions();
+    clearSessionAuthentication();
     server.sendHeader("Set-Cookie", "cm_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
+    renderConsoleScreen();
 }
 
 void handleCloseConsole()
 {
-    if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+    if (!requestHasValidCsrfWithoutRefresh()) {
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     JsonDocument document;
     document["ok"] = true;
     document["message"] = "Web Console is closing";
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
+    clearFailedWebRequestInstructions();
+    clearSessionAuthentication();
     exitRequested = true;
+}
+
+void handleStorageConfirm()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const SdStorageStatus before = inspectSdStorage();
+    if (before.state != SdStorageState::Replaced) {
+        sendWebJsonError(server, 409,
+                         "microSD replacement confirmation is not currently required");
+        return;
+    }
+    const OperationResult result = confirmSdStorageReplacement();
+    if (!result.success) {
+        const SdStorageStatus storage = inspectSdStorage();
+        sendWebJsonError(server, webStorageErrorStatus(storage.state), result.error);
+        return;
+    }
+    clearFailedWebRequestInstructions();
+    JsonDocument document;
+    document["ok"] = true;
+    document["message"] =
+        "microSD replacement confirmed; restart CardMind to initialize the workspace";
+    sendWebJson(server, 200, document);
+    exitRequested = true;
+}
+
+const char* webPendingStateName(PendingToolCallState state)
+{
+    switch (state) {
+        case PendingToolCallState::Awaiting: return "awaiting";
+        case PendingToolCallState::ClaimedApprove: return "claimed_approve";
+        case PendingToolCallState::Denied: return "denied";
+    }
+    return "";
+}
+
+const char* webPendingReasonName(PendingToolConfirmationReason reason)
+{
+    return reason == PendingToolConfirmationReason::Mandatory
+        ? "mandatory" : "policy_ask";
+}
+
+const char* webPendingPreviewKindName(PendingToolPreviewKind kind)
+{
+    switch (kind) {
+        case PendingToolPreviewKind::Generic: return "generic";
+        case PendingToolPreviewKind::FileReplacement: return "file_replacement";
+        case PendingToolPreviewKind::SshCommand: return "ssh_command";
+        case PendingToolPreviewKind::PythonSource: return "python_source";
+    }
+    return "generic";
+}
+
+void handlePending()
+{
+    if (!sessionIsActive()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    PendingToolCallResult pending = loadPendingToolCall();
+    if (!pending.success) {
+        sendWebJsonError(server, 500, pending.error);
+        return;
+    }
+    JsonDocument document;
+    document["present"] = pending.found;
+    document["pending_id"] = "";
+    document["state"] = "";
+    document["reason"] = "";
+    document["kind"] = "generic";
+    document["tool"] = "";
+    document["target"] = "";
+    document["current_bytes"] = 0;
+    document["proposed_bytes"] = 0;
+    document["body"] = "";
+    document["truncated"] = false;
+    document["can_allow_once"] = false;
+    document["can_allow_chat"] = false;
+    document["can_deny"] = false;
+    document["can_acknowledge"] = false;
+    document["message"] = pending.found
+        ? String("") : String("No pending tool request");
+    if (!pending.found) {
+        sendWebJson(server, 200, document);
+        return;
+    }
+    document["pending_id"] = pending.pending.pendingId;
+    document["state"] = webPendingStateName(pending.pending.state);
+    document["reason"] = webPendingReasonName(pending.pending.reason);
+    document["tool"] = pending.pending.continuation.call.name;
+    const ToolCatalogEntry* entry = toolCatalogEntryForName(
+        pending.pending.continuation.call.name);
+    const bool pythonClaimed =
+        pending.pending.state == PendingToolCallState::ClaimedApprove &&
+        entry != nullptr && entry->schema == ToolSchemaId::PythonRun;
+    std::string().swap(pending.pending.continuation.call.arguments);
+    if (pending.pending.state == PendingToolCallState::Awaiting) {
+        const WebPendingContinuationInputs inputs =
+            loadWebPendingContinuationInputs();
+        const PendingToolPreviewResult preview = loadPendingToolPreview(
+            pending.pending.pendingId);
+        const bool resumable = preview.success && inputs.success &&
+                               inputs.error.isEmpty();
+        if (preview.success) {
+            document["kind"] = webPendingPreviewKindName(preview.preview.kind);
+            document["tool"] = preview.preview.toolName;
+            document["target"] = preview.preview.targetName;
+            document["current_bytes"] = preview.preview.currentBytes;
+            document["proposed_bytes"] = preview.preview.proposedBytes;
+            document["body"] = preview.preview.body;
+            document["truncated"] = preview.preview.truncated;
+        }
+        document["can_allow_once"] = resumable;
+        document["can_allow_chat"] = resumable &&
+            pending.pending.reason == PendingToolConfirmationReason::PolicyAsk;
+        document["can_deny"] = resumable;
+        document["can_acknowledge"] = !resumable;
+        document["message"] = resumable
+            ? String("Confirmation required")
+            : String("Request interrupted; execution is disabled");
+    } else {
+        document["can_acknowledge"] = !pythonClaimed;
+        document["message"] = pythonClaimed
+            ? String("Python run recovery is pending; acknowledgement is disabled")
+            : pending.pending.state == PendingToolCallState::ClaimedApprove
+            ? String("Tool outcome is unknown; acknowledge to clear")
+            : String("Response continuation was interrupted; acknowledge to clear");
+    }
+    sendWebJson(server, 200, document);
 }
 
 void handleState()
 {
     if (!sessionIsActive()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     JsonDocument document;
-    document["ok"] = true;
-    document["ip"] = WiFi.localIP().toString();
-    document["battery"] = M5Cardputer.Power.getBatteryLevel();
-    document["free_heap"] = ESP.getFreeHeap();
-    document["largest_heap"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    document["wifi_rssi"] = WiFi.RSSI();
-    document["sd_total_bytes"] = SD.totalBytes();
-    document["sd_used_bytes"] = SD.usedBytes();
-    document["active_chat_id"] = activeChat.summary.id;
-    document["active_chat_title"] = activeChat.summary.title;
-    document["active_context_messages"] = activeChat.summary.messageCount;
-    document["archived_messages"] = activeChat.summary.archivedMessageCount;
-    std::size_t activeContextBytes = 0;
-    for (const auto& message : activeChat.messages) {
-        activeContextBytes += message.content.size();
-    }
-    document["active_context_bytes"] = activeContextBytes;
-    document["maximum_context_messages"] = kMaximumStoredMessages;
-    document["maximum_context_bytes"] = kMaximumStoredHistoryBytes;
-    document["instructions"] = activeChat.instructions;
-    document["ssh_tools_enabled"] = activeChat.sshToolsEnabled;
-    document["status"] = consoleStatus;
-    document["firmware_version"] = firmwareVersion;
-    document["uptime_ms"] = millis();
-    document["minimum_heap"] = ESP.getMinFreeHeap();
-    document["stack_free"] = uxTaskGetStackHighWaterMark(nullptr);
-    document["cpu_mhz"] = getCpuFrequencyMhz();
-    document["reset_reason"] = static_cast<int>(esp_reset_reason());
-    document["wifi_ssid"] = consoleSettings.wifiSsid;
-    document["model"] = consoleSettings.model;
-    document["api_base_url"] = consoleSettings.apiBaseUrl;
-    document["api_key_configured"] = consoleSettings.apiKey.length() >= 8;
-    document["stt_base_url"] = consoleSettings.sttBaseUrl;
-    document["stt_model"] = consoleSettings.sttModel;
-    document["stt_key_configured"] = consoleSettings.sttApiKey.length() >= 8;
-    document["search_base_url"] = consoleSettings.webSearchBaseUrl;
-    document["search_key_configured"] = consoleSettings.webSearchApiKey.length() >= 8;
-    document["tts_base_url"] = consoleSettings.ttsBaseUrl;
-    document["tts_model"] = consoleSettings.ttsModel;
-    document["tts_voice"] = consoleSettings.ttsVoice;
-    document["tts_key_configured"] = consoleSettings.ttsApiKey.length() >= 8;
-    document["tts_auto_play"] = consoleSettings.ttsAutoPlay;
-    document["tts_volume"] = consoleSettings.ttsVolume;
-    document["display_brightness"] = consoleSettings.displayBrightness;
-    document["screen_sleep_minutes"] = consoleSettings.screenSleepMinutes;
-    document["keyboard_repeat_ms"] = consoleSettings.keyboardRepeatMs;
-    document["power_profile"] = consoleSettings.powerProfile;
-    const PythonModeStatus python = inspectPythonMode();
-    document["python_layout_ready"] = python.partitionLayoutReady;
-    document["python_image_ready"] = python.pythonImageReady;
-    document["python_error"] = python.error;
-    document["python_runtime_error"] = python.lastRuntimeError;
-    std::vector<SshProfile> sshProfiles;
-    std::size_t sshSelected = 0;
-    const OperationResult sshProfileResult = loadSshProfiles(sshProfiles, sshSelected);
-    if (!sshProfileResult.success) {
-        sendJsonError(500, sshProfileResult.error);
-        return;
-    }
-    const SshProfile sshProfile = sshProfiles.empty()
-        ? SshProfile{"", "", 22, "", "", SshAuthMode::Password, ""}
-        : sshProfiles[sshSelected];
-    document["ssh_name"] = sshProfile.name;
-    document["ssh_host"] = sshProfile.host;
-    document["ssh_port"] = sshProfile.port;
-    document["ssh_username"] = sshProfile.username;
-    document["ssh_auth_mode"] = sshProfile.authMode == SshAuthMode::PrivateKey ? "key" : "password";
-    document["ssh_selected"] = sshSelected;
-    document["ssh_terminal_open"] = webSshTerminalOpen && webSshClient.isOpen();
-    JsonArray sshProfileItems = document["ssh_profiles"].to<JsonArray>();
-    for (const auto& item : sshProfiles) {
-        JsonObject profileItem = sshProfileItems.add<JsonObject>();
-        profileItem["name"] = item.name;
-        profileItem["host"] = item.host;
-        profileItem["port"] = item.port;
-        profileItem["username"] = item.username;
-        profileItem["auth_mode"] = item.authMode == SshAuthMode::PrivateKey ? "key" : "password";
-    }
-    document["ssh_key_installed"] = sshPrivateKeyIsInstalled();
-    document["ssh_configured"] = sshProfileIsComplete(sshProfile);
-    JsonArray chats = document["chats"].to<JsonArray>();
-    for (const auto& chat : consoleChats) {
-        JsonObject item = chats.add<JsonObject>();
-        item["id"] = chat.id;
-        item["title"] = chat.title;
-        item["pinned"] = chat.pinned;
-        item["archived"] = chat.archived;
-        item["total_messages"] = chat.messageCount + chat.archivedMessageCount;
-    }
-    std::size_t firstMessage = activeChat.messages.size();
-    std::size_t includedBytes = 0;
-    while (firstMessage > 0) {
-        const std::size_t messageBytes = activeChat.messages[firstMessage - 1].content.size();
-        if (includedBytes + messageBytes > kMaximumStateHistoryBytes) {
-            break;
+    const WebConsoleRuntimeState runtime = {
+        consoleStatus,
+        firmwareVersion,
+        webSshTerminalOpen && webSshClient.isOpen(),
+    };
+    String view = server.arg("view");
+    const String path = server.uri();
+    if (path == "/api/status") view = "status";
+    else if (path == "/api/projects") view = "projects";
+    else if (path == "/api/chats") view = "chats";
+    else if (path == "/api/chat") view = "chat";
+    else if (path == "/api/files") view = "files";
+    else if (path == "/api/ssh/state") view = "ssh";
+    else if (path == "/api/settings") view = "settings";
+    else if (path == "/api/activity") view = "activity";
+    if (view == "status") {
+        buildWebConsoleStatusState(runtime, webDiagnosticsEnabled(), document);
+    } else if (view == "projects") {
+        std::uint32_t offset = 0;
+        if (!server.arg("offset").isEmpty() &&
+            !parseUnsignedArgument(server.arg("offset"), offset)) {
+            sendWebJsonError(server, 400, "Project offset must be an unsigned integer");
+            return;
         }
-        includedBytes += messageBytes;
-        --firstMessage;
-    }
-    JsonArray messages = document["messages"].to<JsonArray>();
-    for (std::size_t index = firstMessage; index < activeChat.messages.size(); ++index) {
-        JsonObject item = messages.add<JsonObject>();
-        item["role"] = activeChat.messages[index].role;
-        item["content"] = activeChat.messages[index].content;
-    }
-    const WorkspaceFilesResult workspace = listWorkspaceFiles();
-    if (!workspace.success) {
-        sendJsonError(500, workspace.error);
-        return;
-    }
-    JsonArray files = document["files"].to<JsonArray>();
-    for (const auto& file : workspace.files) {
-        JsonObject item = files.add<JsonObject>();
-        item["name"] = file.name;
-        item["size"] = file.size;
-    }
-    sendJson(200, document);
-}
-
-ToolExecutionResult executeConsoleTool(const ToolCall& call,
-                                       const CancelCallback& isCancelled)
-{
-    if (isWebSearchToolName(call.name)) {
-        return executeWebSearchTool(consoleSettings, call, isCancelled);
-    }
-    if (isWebFetchToolName(call.name)) {
-        return executeWebFetchTool(consoleSettings, call, isCancelled);
-    }
-    if (call.name == "list_files" || call.name == "read_file" ||
-        call.name == "write_file" || call.name == "append_file") {
-        return executeWorkspaceTool(call);
-    }
-    if (isSshToolName(call.name)) {
-        if (!activeChat.sshToolsEnabled) {
-            return {false, "{\"ok\":false,\"error\":\"permission denied\"}",
-                    "SSH tool access is disabled for this chat"};
+        const ProjectsPageResult page = listProjectsPage(
+            offset, kMaximumProjectPageEntries);
+        if (!page.success) {
+            sendWebJsonError(server, 500, page.error);
+            return;
         }
-        return executeSshTool(call, isCancelled);
-    }
-    return {false, "{\"ok\":false,\"error\":\"unsupported tool\"}",
-            "API requested unsupported tool '" + String(call.name.c_str()) + "'"};
-}
-
-void sendSse(const char* type, const std::string& delta, const String& error)
-{
-    JsonDocument document;
-    document["type"] = type;
-    if (!delta.empty()) {
-        document["delta"] = delta;
-    }
-    if (!error.isEmpty()) {
-        document["error"] = error;
-    }
-    String output;
-    serializeJson(document, output);
-    server.sendContent("data:" + output + "\n\n");
-}
-
-void handlePrompt()
-{
-    if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        document["ok"] = true;
+        document["projects_revision"] = projectsRevision;
+        document["active_project_id"] = activeProject.summary.id;
+        document["active_project_title"] = activeProject.summary.title;
+        document["next_offset"] = page.nextOffset;
+        document["eof"] = page.eof;
+        JsonArray projects = document["projects"].to<JsonArray>();
+        for (const ProjectSummary& project : page.projects) {
+            JsonObject item = projects.add<JsonObject>();
+            item["id"] = project.id;
+            item["title"] = project.title;
+            item["chat_count"] = project.chatCount;
+            item["archived"] = project.archived;
+        }
+    } else if (view == "chats") {
+        std::uint32_t offset = 0;
+        if (!server.arg("offset").isEmpty() &&
+            !parseUnsignedArgument(server.arg("offset"), offset)) {
+            sendWebJsonError(server, 400, "Chat offset must be an unsigned integer");
+            return;
+        }
+        const ProjectChatsPageResult page = listProjectChatsPage(
+            activeProject.summary.id, offset, kMaximumProjectPageEntries);
+        if (!page.success) {
+            sendWebJsonError(server, 500, page.error);
+            return;
+        }
+        buildWebConsoleChatsState(page.chats, chatsRevision, document);
+        document["project_id"] = activeProject.summary.id;
+        document["active_chat_id"] = activeChat.summary.id;
+        document["active_chat_title"] = activeChat.summary.title;
+        document["next_offset"] = page.nextOffset;
+        document["eof"] = page.eof;
+    } else if (view == "chat") {
+        Settings requestSettings = consoleSettings;
+        requestSettings.model = resolveProjectRequestPolicy(
+            consoleSettings, activeProject, activeChat, 0).model;
+        const SdStorageStatus storage = inspectSdStorage();
+        const bool readable = storage.state == SdStorageState::Ready ||
+                              storage.state == SdStorageState::Full;
+        const bool writable = storage.state == SdStorageState::Ready;
+        const std::uint64_t availableSshProfileId =
+            sshToolAvailableProfileId();
+        const ToolPolicyResolutionResult toolPermissions =
+            resolveChatToolPermissions(
+                consoleSettings, activeProject, activeChat,
+                {ToolMessageIntentMode::Auto, 0}, readable, writable,
+                writable, writable && pythonOneShotAvailable(),
+                availableSshProfileId);
+        const OperationResult built = buildWebConsoleChatState(
+            requestSettings, activeProject, activeChat, toolPermissions,
+            availableSshProfileId, activeProject.contextByteBudget,
+            chatRevision, document);
+        if (!built.success) {
+            sendWebJsonError(server, 500, built.error);
+            return;
+        }
+        document["project_id"] = activeProject.summary.id;
+        document["project_title"] = activeProject.summary.title;
+        document["project_archived"] = activeProject.summary.archived;
+        document["project_model"] = activeProject.model;
+        document["project_api_profile_id"] = activeProject.apiProfile;
+        const ProviderSettingsResult provider =
+            resolveConsoleProvider(activeProject);
+        document["api_profile_available"] =
+            providerStoreResultSucceeded(provider.result);
+        document["effective_api_profile_id"] = provider.authority.profileId;
+        document["api_profile_error"] =
+            providerStoreResultSucceeded(provider.result)
+                ? String() : String(provider.result.message.c_str());
+        document["project_instructions"] = activeProject.instructions;
+        document["context_byte_budget"] = activeProject.contextByteBudget;
+        document["maximum_output_tokens"] = activeProject.maximumOutputTokens;
+        document["automatic_compaction"] = activeProject.automaticCompaction;
+        document["context_summary"] = activeChat.contextSummary;
+        document["summarized_messages"] = activeChat.summarizedMessageCount;
+        document["total_messages"] = activeChat.summary.messageCount;
+        const std::uint32_t displayedMessages =
+            document["messages"].as<JsonArrayConst>().size();
+        const std::uint32_t historyBeforeMessages =
+            activeChat.summary.messageCount > displayedMessages
+            ? activeChat.summary.messageCount - displayedMessages
+            : 0;
+        document["history_before_offset"] = historyBeforeMessages;
+        document["history_before_messages"] = historyBeforeMessages;
+    } else if (view == "files") {
+        std::uint32_t offset = 0;
+        if (!server.arg("offset").isEmpty() &&
+            !parseUnsignedArgument(server.arg("offset"), offset)) {
+            sendWebJsonError(server, 400, "File offset must be an unsigned integer");
+            return;
+        }
+        const WorkspaceFilesPageResult page = listWorkspaceFilesPage(offset, 64);
+        if (!page.success) {
+            sendWebJsonError(server, 500, page.error);
+            return;
+        }
+        buildWebConsoleFilesState(page.files, SD.totalBytes(), SD.usedBytes(),
+                                  filesRevision, document);
+        document["next_offset"] = page.nextOffset;
+        document["eof"] = page.eof;
+    } else if (view == "ssh") {
+        if (!sshProfilesReady) {
+            const OperationResult refreshed = refreshSshProfiles();
+            if (!refreshed.success) {
+                sendWebJsonError(server, 500, refreshed.error);
+                return;
+            }
+        }
+        const OperationResult built = buildWebConsoleSshState(
+            consoleSshProfiles, consoleSshSelected, consoleSshConfigured,
+            consoleSshPrivateKeyInstalled, runtime, sshRevision, document);
+        if (!built.success) {
+            sendWebJsonError(server, 500, built.error);
+            return;
+        }
+        char error[sizeof(webSshError)] = {};
+        char fingerprint[sizeof(webSshFingerprint)] = {};
+        char keyType[sizeof(webSshHostKeyType)] = {};
+        WebSshStage stage = WebSshStage::Idle;
+        bool hostChanged = false;
+        std::uint32_t connectMs = 0;
+        std::uint32_t authenticateMs = 0;
+        std::uint32_t openMs = 0;
+        std::uint32_t workerStackFree = 0;
+        portENTER_CRITICAL(&webSshStateMux);
+        stage = webSshStage;
+        std::memcpy(error, webSshError, sizeof(error));
+        std::memcpy(fingerprint, webSshFingerprint, sizeof(fingerprint));
+        std::memcpy(keyType, webSshHostKeyType, sizeof(keyType));
+        hostChanged = webSshHostChanged;
+        connectMs = webSshConnectMs;
+        authenticateMs = webSshAuthenticateMs;
+        openMs = webSshOpenMs;
+        workerStackFree = webSshWorkerStackFree;
+        portEXIT_CRITICAL(&webSshStateMux);
+        document["ssh_stage"] = webSshStageName(stage);
+        document["ssh_error"] = error;
+        document["ssh_fingerprint"] = fingerprint;
+        document["ssh_key_type"] = keyType;
+        document["ssh_host_changed"] = hostChanged;
+        document["ssh_connect_ms"] = connectMs;
+        document["ssh_authenticate_ms"] = authenticateMs;
+        document["ssh_open_ms"] = openMs;
+        document["ssh_worker_stack_free"] = workerStackFree;
+    } else if (view == "settings") {
+        if (consoleProviderStore == nullptr) {
+            sendWebJsonError(server, 500,
+                             "Provider profile storage is unavailable");
+            return;
+        }
+        WebConsoleProviderState providerState = {
+            consoleProviderStore->state(),
+            consoleProviderStore->stateMessage(),
+            {}, "", {},
+        };
+        if (providerState.state == ProviderStoreState::Ready) {
+            ApiProfilesResult profiles = consoleProviderStore->listProfiles();
+            ModelPresetsResult presets =
+                providerStoreResultSucceeded(profiles.result)
+                    ? consoleProviderStore->listModelPresets()
+                    : ModelPresetsResult{profiles.result, {}};
+            if (!providerStoreResultSucceeded(profiles.result) ||
+                !providerStoreResultSucceeded(presets.result)) {
+                sendProviderStoreError(
+                    providerStoreResultSucceeded(profiles.result)
+                        ? presets.result : profiles.result);
+                return;
+            }
+            providerState.profiles = std::move(profiles.profiles);
+            providerState.defaultProfileId =
+                std::move(profiles.defaultProfileId);
+            providerState.presets = std::move(presets.presets);
+        }
+        const OperationResult built = buildWebConsoleSettingsState(
+            consoleSettings, providerState, runtime, settingsRevision,
+            document);
+        if (!built.success) {
+            sendWebJsonError(server, 500, built.error);
+            return;
+        }
+    } else if (view == "activity") {
+        const ToolActivitiesResult loaded = loadRecentToolActivities();
+        if (!loaded.success) {
+            sendWebJsonError(server, 500, loaded.error);
+            return;
+        }
+        document["ok"] = true;
+        JsonArray activities = document["activities"].to<JsonArray>();
+        for (const ToolActivityRecord& activity : loaded.activities) {
+            JsonObject item = activities.add<JsonObject>();
+            item["tool"] = activity.tool;
+            item["target"] = toolActivityTargetName(activity.target);
+            item["status"] = toolActivityStatusName(activity.status);
+            item["duration_ms"] = activity.durationMs;
+            item["output_bytes"] = activity.outputBytes;
+            if (activity.exitStatus.present) {
+                item["exit_status"] = activity.exitStatus.value;
+            } else {
+                item["exit_status"] = nullptr;
+            }
+        }
+    } else {
+        sendWebJsonError(server, 400, "Use a specialized state endpoint");
         return;
     }
-    const String promptValue = server.arg("prompt");
-    const std::string prompt = promptValue.c_str();
-    if (prompt.empty() || prompt.size() > kMaximumPromptBytes || !isValidUtf8(prompt)) {
-        sendJsonError(400, "Prompt must be valid UTF-8 between 1 and 1200 bytes");
+    sendWebJson(server, 200, document);
+}
+
+void streamStoredWebPrompt(const ChatDocument& storedChat,
+                           std::vector<Message> requestMessages,
+                           std::uint32_t requestOutputTokens,
+                           const std::string& requestInstructions,
+                           const ToolRequestPlan& toolPlan)
+{
+    const ResolvedProjectRequestPolicy requestPolicy = resolveProjectRequestPolicy(
+        consoleSettings, activeProject, storedChat, requestOutputTokens);
+    ProviderSettingsResult provider = resolveConsoleProvider(activeProject);
+    if (!providerStoreResultSucceeded(provider.result)) {
+        sendWebJsonError(
+            server, 409,
+            "API profile unavailable: " +
+                String(provider.result.message.c_str()));
         return;
+    }
+    ContextWindowResult requestFit = fitOwnedMessagesToByteBudget(
+        std::move(requestMessages), requestPolicy.contextByteBudget);
+    if (requestFit.retained.empty() ||
+        requestFit.retained.back().role != "user") {
+        sendWebJsonError(server, 500, "Prompt request context lost its user message");
+        return;
+    }
+    const bool sshWasOpen = webSshTerminalOpen || webSshAwaitingTrust;
+    if (sshWasOpen) {
+        closeWebSshConnection();
     }
     server.sendHeader("Cache-Control", "no-store");
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, "text/event-stream; charset=utf-8", "");
-    std::vector<Message> pending = activeChat.messages;
-    pending.push_back({"user", prompt});
-    HistoryFitResult pendingFit = fitHistoryToActiveContext(pending);
-    if (!pendingFit.archived.empty()) {
-        const OperationResult archived = archiveChatMessages(
-            activeChat.summary.id, pendingFit.archived);
-        if (!archived.success) {
-            sendSse("error", "", archived.error);
-            return;
-        }
-        activeChat.summary.archivedMessageCount += pendingFit.archived.size();
+    if (sshWasOpen) {
+        sendWebSse(server, "notice", "",
+                   "SSH terminal was disconnected to free memory for the AI request");
     }
-    activeChat.messages = std::move(pendingFit.retained);
-    activeChat.draft.clear();
-    if (activeChat.summary.messageCount == 0) {
-        activeChat.summary.title = makeChatTitle(prompt, kMaximumChatTitleCells).c_str();
-    }
-    activeChat.summary.messageCount = activeChat.messages.size();
-    activeChat.summary.updatedAt = currentTimestamp();
-    OperationResult saved = saveChat(activeChat);
-    if (!saved.success) {
-        sendSse("error", "", saved.error);
-        return;
-    }
-    activeResponse.clear();
     consoleStatus = "Streaming from web console...";
-    renderConsoleChat();
-    std::uint32_t lastRenderAt = 0;
-    const ChatTextCallback onText = [&lastRenderAt](const std::string& text) {
-        activeResponse += text;
-        sendSse("delta", text, "");
-        const std::uint32_t now = millis();
-        if (lastRenderAt == 0 || now - lastRenderAt >= 120) {
-            renderConsoleChat();
-            lastRenderAt = now;
-        }
+    renderConsoleScreen();
+    const ChatTextCallback onText = [](const std::string& text) {
+        sendWebSse(server, "delta", text, "");
     };
-    const bool useWorkspace = requestsWorkspaceAccess(prompt);
-    const bool useSearch = webSearchSettingsAreComplete(consoleSettings);
-    const bool useSsh = activeChat.sshToolsEnabled && sshToolIsAvailable();
+    Settings requestSettings = std::move(provider.settings);
+    requestSettings.model = requestPolicy.model;
+    const std::string effectiveInstructions = effectiveProjectChatInstructions(
+        activeProject, storedChat, requestInstructions);
+    failedWebRequestInstructions = requestInstructions;
+    failedWebRequestInstructionsChatId = activeChat.summary.id;
+    failedWebRequestOutputTokens = requestPolicy.maximumOutputTokens;
+    failedWebRequestIntent = toolPlan.intent;
     const CancelCallback isCancelled = []() {
         M5Cardputer.update();
         if (consoleEscapePressed()) {
@@ -706,375 +2175,2101 @@ void handlePrompt()
         }
         return !server.client().connected();
     };
-    markOperation(useWorkspace || useSearch || useSsh
+    markOperation(toolPlan.schemas != 0
         ? "web_console_tools" : "web_console_chat");
-    const ChatResult result = useWorkspace || useSearch || useSsh
-        ? streamChatCompletionWithTools(consoleSettings, activeChat.messages,
-                                        activeChat.instructions, useSsh, onText,
-                                        [&isCancelled](const ToolCall& call) {
-                                            return executeConsoleTool(call, isCancelled);
-                                        },
-                                        isCancelled)
-        : streamChatCompletion(consoleSettings, activeChat.messages,
-                               activeChat.instructions, onText, isCancelled);
+    bool workspaceFilesChanged = false;
+    const String requestProjectId = activeProject.summary.id;
+    const String requestChatId = activeChat.summary.id;
+    beginWebConsoleForegroundWork();
+    const ChatResult result = toolPlan.schemas != 0
+        ? streamChatCompletionWithToolsAndBudget(
+              requestSettings, requestFit.retained, effectiveInstructions,
+              toolPlan, requestPolicy.maximumOutputTokens, onText,
+              [&toolPlan, &isCancelled, requestProjectId,
+               &workspaceFilesChanged](const ToolCall& call) {
+                  ToolExecutionResult executed = routeProjectToolCall(
+                      consoleSettings, toolPlan, requestProjectId, call,
+                      isCancelled);
+                  if (executed.success &&
+                      (call.name == "write_file" || call.name == "append_file")) {
+                      workspaceFilesChanged = true;
+                  }
+                  return executed;
+              },
+              [&toolPlan, requestProjectId, requestChatId](
+                  const PendingToolContinuation& continuation) {
+                  return savePendingToolCall(
+                      toolPlan, requestProjectId, requestChatId, continuation);
+              }, isCancelled)
+        : streamChatCompletionWithBudget(
+              requestSettings, requestFit.retained, effectiveInstructions,
+              requestPolicy.maximumOutputTokens, onText, isCancelled);
+    endWebConsoleForegroundWork();
     markOperation("idle");
-    if (!result.success) {
-        consoleStatus = result.error;
-        activeResponse = result.response;
-        sendSse("error", "", result.error);
-        renderConsoleChat();
+    if (workspaceFilesChanged) {
+        filesIndexReady = false;
+        ++filesRevision;
+    }
+    if (result.outcome == ChatCompletionOutcome::AwaitingConfirmation) {
+        const OperationResult captured = captureWebPendingContext(
+            requestProjectId, requestChatId, requestPolicy,
+            provider.authority, consoleSettings.globalInstructions,
+            requestInstructions,
+            toolPlan.intent);
+        clearFailedWebRequestInstructions();
+        consoleStatus = captured.success
+            ? String("Waiting for confirmation: ") + result.error
+            : captured.error;
+        sendWebSse(
+            server, captured.success ? "pending" : "error", "",
+            consoleStatus);
+        renderConsoleScreen();
         return;
     }
-    activeChat.messages.push_back({"assistant", result.response});
-    HistoryFitResult finalFit = fitHistoryToActiveContext(activeChat.messages);
-    if (!finalFit.archived.empty()) {
-        const OperationResult archived = archiveChatMessages(
-            activeChat.summary.id, finalFit.archived);
-        if (!archived.success) {
-            activeResponse.clear();
-            consoleStatus = archived.error;
-            sendSse("error", "", archived.error);
-            renderConsoleChat();
-            return;
+    if (!result.success) {
+        consoleStatus = result.error;
+        const OperationResult reloaded = loadActiveChat(activeChat.summary.id);
+        if (reloaded.success) {
+            refreshChats();
         }
-        activeChat.summary.archivedMessageCount += finalFit.archived.size();
+        sendWebSse(server, "error", "", result.error);
+        renderConsoleScreen();
+        return;
     }
-    activeChat.messages = std::move(finalFit.retained);
-    activeChat.summary.messageCount = activeChat.messages.size();
-    activeChat.summary.updatedAt = currentTimestamp();
-    saved = saveChat(activeChat);
-    activeResponse.clear();
+    clearFailedWebRequestInstructions();
+    std::vector<Message> finalMessages = std::move(requestFit.retained);
+    finalMessages.push_back({"assistant", result.response});
+    std::vector<Message> omitted = takeMessagesDroppedToByteBudget(
+        std::move(finalMessages), requestPolicy.contextByteBudget);
+    OperationResult saved = appendProjectChatMessages(
+        activeProject.summary.id, activeChat.summary.id,
+        {{"assistant", result.response}}, currentTimestamp(),
+        consoleSettings.projectChatHistoryQuotaBytes);
+    if (saved.success && shouldAutomaticallyCompactRequest(
+            requestPolicy, static_cast<std::uint32_t>(omitted.size()))) {
+        const OperationResult compacted = regenerateWebContextSummary(omitted);
+        if (!compacted.success) {
+            consoleStatus = compacted.error;
+            sendWebSse(server, "notice", "", compacted.error);
+        } else {
+            sendWebSse(
+                server, "notice", "",
+                "Context summary updated automatically; raw history was preserved");
+        }
+    }
+    if (saved.success) {
+        saved = loadActiveChat(activeChat.summary.id);
+    }
     consoleStatus = saved.success ? String("Saved") : saved.error;
     if (saved.success) {
-        refreshChats();
-        sendSse("done", "", "");
-    } else {
-        sendSse("error", "", saved.error);
+        saved = refreshChats();
     }
-    renderConsoleChat();
+    if (saved.success) {
+        sendWebSse(server, "done", "", "");
+    } else {
+        sendWebSse(server, "error", "", saved.error);
+    }
+    renderConsoleScreen();
+}
+
+struct RequestOutputBudgetResult {
+    bool success;
+    std::uint32_t tokens;
+    String error;
+};
+
+RequestOutputBudgetResult resolveWebRequestOutputBudget(
+    const String& value, std::uint32_t projectTokens)
+{
+    std::uint32_t requestedTokens = projectTokens;
+    if (!value.isEmpty() &&
+        (!parseUnsignedArgument(value, requestedTokens) ||
+         requestedTokens < 128 || requestedTokens > 16384)) {
+        return {
+            false, 0,
+            "Request output tokens must be an integer between 128 and 16384"};
+    }
+    return {
+        true,
+        resolveRequestOutputTokens(
+            projectTokens, value.isEmpty() ? 0 : requestedTokens),
+        ""};
+}
+
+void handlePrompt()
+{
+    rejectLegacyRawTextRoute();
+}
+
+RequestOutputBudgetResult resolveRawWebRequestOutputBudget(
+    const String& value, std::uint32_t projectTokens)
+{
+    std::uint32_t requestedTokens = 0;
+    if (!parseUnsignedArgument(value, requestedTokens) ||
+        (requestedTokens != 0 &&
+         (requestedTokens < 128 || requestedTokens > 16384))) {
+        return {
+            false, 0,
+            "Raw prompt output tokens must be 0 or an integer between 128 and 16384"};
+    }
+    return {
+        true,
+        resolveRequestOutputTokens(projectTokens, requestedTokens),
+        ""};
+}
+
+void processWebPrompt(std::string prompt,
+                      std::string requestInstructions,
+                      const String& outputTokenValue,
+                      const ToolMessageIntent& intent)
+{
+    if (webSshTaskIsRunning()) {
+        sendWebJsonError(
+            server, 409,
+            "Wait for the background SSH connection attempt to finish or stop it");
+        return;
+    }
+    if (prompt.empty() || prompt.size() > kMaximumPromptBytes || !isValidUtf8(prompt)) {
+        sendWebJsonError(server, 400, "Prompt must be valid UTF-8 between 1 and 16384 bytes");
+        return;
+    }
+    const RequestOutputBudgetResult outputBudget = resolveRawWebRequestOutputBudget(
+        outputTokenValue, activeProject.maximumOutputTokens);
+    if (!outputBudget.success) {
+        sendWebJsonError(server, 400, outputBudget.error);
+        return;
+    }
+    PendingToolCallResult existingPending = loadPendingToolCall();
+    if (!existingPending.success) {
+        sendWebJsonError(server, 500, existingPending.error);
+        return;
+    }
+    if (existingPending.found) {
+        std::string().swap(
+            existingPending.pending.continuation.call.arguments);
+        sendWebJsonError(
+            server, 409,
+            "Resolve or acknowledge the pending tool request before sending a new prompt");
+        return;
+    }
+    ChatDocumentResult storedChat = loadProjectChat(
+        activeProject.summary.id, activeChat.summary.id, 96,
+        activeProjectTailByteBudget());
+    if (!storedChat.success) {
+        sendWebJsonError(server, 500, storedChat.error);
+        return;
+    }
+    const SdStorageStatus toolStorage = inspectSdStorage();
+    const bool toolStorageReadable =
+        toolStorage.state == SdStorageState::Ready ||
+        toolStorage.state == SdStorageState::Full;
+    const bool toolStorageWritable =
+        toolStorage.state == SdStorageState::Ready;
+    const ToolRequestPlan toolPlan = resolveChatToolRequestPlan(
+        consoleSettings, activeProject, storedChat.chat, intent,
+        toolStorageReadable, toolStorageWritable, toolStorageWritable,
+        toolStorageWritable && pythonOneShotAvailable(),
+        sshToolAvailableProfileId());
+    if (toolPlan.error != ToolPolicyContractError::None) {
+        sendWebJsonError(server, 500, "Tool permission policy could not be resolved");
+        return;
+    }
+    if (toolPlan.missingRequiredGroups != 0) {
+        sendWebJsonError(
+            server, 409,
+            "A required tool capability is denied or unavailable");
+        return;
+    }
+    std::vector<Message> submittedMessages;
+    submittedMessages.reserve(1);
+    submittedMessages.push_back({"user", std::move(prompt)});
+    std::vector<Message> requestMessages = unsummarizedChatTail(storedChat.chat);
+    const std::uint32_t previousMessageCount =
+        storedChat.chat.summary.messageCount;
+    storedChat.chat = ChatDocument{};
+    OperationResult saved = appendProjectChatMessages(
+        activeProject.summary.id, activeChat.summary.id,
+        submittedMessages, currentTimestamp(),
+        consoleSettings.projectChatHistoryQuotaBytes);
+    if (!saved.success) {
+        sendWebJsonError(server, 500, saved.error);
+        return;
+    }
+    const ResolvedProjectRequestPolicy submittedPolicy = resolveProjectRequestPolicy(
+        consoleSettings, activeProject, activeChat, outputBudget.tokens);
+    failedWebRequestInstructions = std::move(requestInstructions);
+    failedWebRequestInstructionsChatId = activeChat.summary.id;
+    failedWebRequestOutputTokens = submittedPolicy.maximumOutputTokens;
+    failedWebRequestIntent = intent;
+    const std::string& submittedPrompt = submittedMessages.front().content;
+    if (previousMessageCount == 0) {
+        activeChat.summary.messageCount = 1;
+        activeChat.summary.updatedAt = currentTimestamp();
+        activeChat.summary.title = makeChatTitle(
+            submittedPrompt, kMaximumChatTitleCells).c_str();
+        saved = saveProjectChatMetadata(activeChat);
+        if (!saved.success) {
+            loadActiveChat(activeChat.summary.id);
+            server.sendHeader("Cache-Control", "no-store");
+            server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+            server.send(200, "text/event-stream; charset=utf-8", "");
+            sendWebSse(server, "error", "", saved.error);
+            return;
+        }
+    }
+    requestMessages.reserve(requestMessages.size() + 1);
+    requestMessages.push_back(std::move(submittedMessages.front()));
+    streamStoredWebPrompt(
+        activeChat, std::move(requestMessages), outputBudget.tokens,
+        failedWebRequestInstructions, toolPlan);
+}
+
+void handlePromptRawData()
+{
+    collectRawPromptRequest();
+}
+
+void handlePromptRawComplete()
+{
+    if (!requestHasValidCsrf()) {
+        resetRawTextRequest();
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    WebPromptRequest request = parseWebPromptRequest(
+        consumeRawTextRequest(), requestHasPromptFrameContentType());
+    if (!request.success) {
+        sendWebJsonError(server, request.errorStatus, request.error);
+        return;
+    }
+    processWebPrompt(
+        std::move(request.prompt), std::move(request.requestInstructions),
+        server.header("X-CardMind-Output-Tokens"), request.intent);
+}
+
+void handlePromptRetry()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    if (webSshTaskIsRunning()) {
+        sendWebJsonError(
+            server, 409,
+            "Wait for the background SSH connection attempt to finish or stop it");
+        return;
+    }
+    const String requestedOutputTokens = server.arg("maximum_output_tokens");
+    const bool retryMatchesFailedRequest =
+        failedWebRequestInstructionsChatId == activeChat.summary.id;
+    RequestOutputBudgetResult outputBudget = resolveWebRequestOutputBudget(
+        requestedOutputTokens, activeProject.maximumOutputTokens);
+    if (requestedOutputTokens.isEmpty() && retryMatchesFailedRequest &&
+        failedWebRequestOutputTokens != 0) {
+        outputBudget = {true, failedWebRequestOutputTokens, ""};
+    }
+    if (!outputBudget.success) {
+        sendWebJsonError(server, 400, outputBudget.error);
+        return;
+    }
+    PendingToolCallResult existingPending = loadPendingToolCall();
+    if (!existingPending.success) {
+        sendWebJsonError(server, 500, existingPending.error);
+        return;
+    }
+    if (existingPending.found) {
+        std::string().swap(
+            existingPending.pending.continuation.call.arguments);
+        sendWebJsonError(
+            server, 409,
+            "Resolve or acknowledge the pending tool request before retrying");
+        return;
+    }
+    const ChatDocumentResult stored = loadProjectChat(
+        activeProject.summary.id, activeChat.summary.id, 96,
+        activeProjectTailByteBudget());
+    if (!stored.success) {
+        sendWebJsonError(server, 500, stored.error);
+        return;
+    }
+    const ToolMessageIntent retryIntent = retryMatchesFailedRequest
+        ? failedWebRequestIntent
+        : ToolMessageIntent{ToolMessageIntentMode::Auto, 0};
+    const SdStorageStatus toolStorage = inspectSdStorage();
+    const bool toolStorageReadable =
+        toolStorage.state == SdStorageState::Ready ||
+        toolStorage.state == SdStorageState::Full;
+    const bool toolStorageWritable =
+        toolStorage.state == SdStorageState::Ready;
+    const ToolRequestPlan toolPlan = resolveChatToolRequestPlan(
+        consoleSettings, activeProject, stored.chat, retryIntent,
+        toolStorageReadable, toolStorageWritable, toolStorageWritable,
+        toolStorageWritable && pythonOneShotAvailable(),
+        sshToolAvailableProfileId());
+    if (toolPlan.error != ToolPolicyContractError::None) {
+        sendWebJsonError(server, 500, "Tool permission policy could not be resolved");
+        return;
+    }
+    if (toolPlan.missingRequiredGroups != 0) {
+        sendWebJsonError(
+            server, 409,
+            "A required tool capability is denied or unavailable");
+        return;
+    }
+    const ResolvedProjectRequestPolicy requestPolicy = resolveProjectRequestPolicy(
+        consoleSettings, activeProject, stored.chat, outputBudget.tokens);
+    RetryRequestResult retry = prepareRetryRequest(
+        unsummarizedChatTail(stored.chat), requestPolicy.contextByteBudget);
+    if (!retry.success) {
+        sendWebJsonError(server, 409, retry.error.c_str());
+        return;
+    }
+    const std::string emptyRequestInstructions;
+    const std::string& requestInstructions = retryMatchesFailedRequest
+        ? failedWebRequestInstructions : emptyRequestInstructions;
+    streamStoredWebPrompt(
+        stored.chat, std::move(retry.messages), outputBudget.tokens,
+        requestInstructions, toolPlan);
+}
+
+bool validatePendingActionRequest(String& pendingId)
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return false;
+    }
+    pendingId = server.arg("pending_id");
+    if (pendingId.isEmpty() ||
+        pendingId.length() > kMaximumPendingToolCallIdBytes) {
+        sendWebJsonError(server, 400, "A valid pending_id is required");
+        return false;
+    }
+    return true;
+}
+
+void continueWebPendingDecision(
+    PendingToolDecisionResult decision,
+    Settings requestSettings,
+    const ToolRequestPlan& continuationPlan,
+    const String& warning)
+{
+    const String oldPendingId = decision.pending.pendingId;
+    const PendingToolCallState terminalState = decision.pending.state;
+    const String projectId = decision.pending.projectId;
+    const String chatId = decision.pending.chatId;
+    const bool ownerIsActive = projectId == activeProject.summary.id &&
+                               chatId == activeChat.summary.id;
+    const std::uint32_t contextBudget =
+        webPendingContext.requestPolicy.contextByteBudget;
+    ProjectDocumentResult project = loadProject(projectId);
+    ChatDocumentResult stored = project.success
+        ? loadProjectChat(
+              projectId, chatId, 64,
+              std::min<std::size_t>(contextBudget, 65536))
+        : ChatDocumentResult{false, {}, project.error};
+    String historyError;
+    std::vector<Message> continuationMessages;
+    std::string scopedInstructions;
+    if (!stored.success) {
+        historyError = stored.error;
+    } else if (stored.chat.summary.messageCount !=
+               decision.pending.chatMessageCount) {
+        historyError = "Pending continuation chat history changed";
+    } else {
+        scopedInstructions = effectiveProjectChatInstructions(
+            project.project, stored.chat,
+            webPendingContext.requestInstructions);
+        ContextWindowResult fitted = fitOwnedMessagesToByteBudget(
+            takeUnsummarizedChatTail(std::move(stored.chat)), contextBudget);
+        if (fitted.retained.empty() ||
+            fitted.retained.back().role != "user") {
+            historyError = "Pending continuation lost its final user message";
+        } else {
+            continuationMessages = std::move(fitted.retained);
+        }
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/event-stream; charset=utf-8", "");
+    if (!warning.isEmpty()) {
+        sendWebSse(server, "notice", "", warning);
+    }
+    if (!historyError.isEmpty()) {
+        std::string().swap(decision.pending.continuation.call.arguments);
+        clearWebPendingContext();
+        consoleStatus = "Tool decision recorded; response was not continued: " +
+                        historyError;
+        sendWebSse(server, "error", "", consoleStatus);
+        renderConsoleScreen();
+        return;
+    }
+    consoleStatus = "Continuing response...";
+    renderConsoleScreen();
+    const ChatTextCallback onText = [](const std::string& text) {
+        sendWebSse(server, "delta", text, "");
+    };
+    const CancelCallback isCancelled = []() {
+        M5Cardputer.update();
+        if (consoleEscapePressed()) {
+            consoleEscapeConsumed = true;
+            return true;
+        }
+        return !server.client().connected();
+    };
+    bool workspaceFilesChanged = decision.toolResult.success &&
+        (decision.pending.continuation.call.name == "write_file" ||
+         decision.pending.continuation.call.name == "append_file");
+    requestSettings.model = webPendingContext.requestPolicy.model;
+    requestSettings.globalInstructions = webPendingContext.globalInstructions;
+    markOperation("web_console_tools");
+    beginWebConsoleForegroundWork();
+    const ChatResult result = continueChatCompletionAfterPendingToolResult(
+        requestSettings, continuationMessages, scopedInstructions,
+        continuationPlan,
+        webPendingContext.requestPolicy.maximumOutputTokens,
+        std::move(decision.pending.continuation),
+        std::move(decision.toolResult), onText,
+        [&continuationPlan, &isCancelled, projectId,
+         &workspaceFilesChanged](const ToolCall& call) {
+            ToolExecutionResult executed = routeProjectToolCall(
+                consoleSettings, continuationPlan, projectId, call,
+                isCancelled);
+            if (executed.success &&
+                (call.name == "write_file" || call.name == "append_file")) {
+                workspaceFilesChanged = true;
+            }
+            return executed;
+        },
+        [&continuationPlan, oldPendingId, terminalState, projectId, chatId](
+            const PendingToolContinuation& continuation) {
+            return replaceTerminalPendingToolCall(
+                oldPendingId, terminalState, continuationPlan, projectId,
+                chatId, continuation);
+        },
+        isCancelled);
+    endWebConsoleForegroundWork();
+    markOperation("idle");
+    if (workspaceFilesChanged) {
+        filesIndexReady = false;
+        ++filesRevision;
+    }
+    if (result.outcome == ChatCompletionOutcome::AwaitingConfirmation) {
+        PendingToolCallResult next = loadPendingToolCall();
+        if (!next.success || !next.found ||
+            next.pending.state != PendingToolCallState::Awaiting ||
+            next.pending.projectId != projectId ||
+            next.pending.chatId != chatId ||
+            !pendingToolCallIsResumableThisBoot(next.pending.pendingId)) {
+            clearWebPendingContext();
+            consoleStatus = next.success
+                ? String("Next confirmation could not be recovered")
+                : next.error;
+            if (next.success && next.found) {
+                std::string().swap(
+                    next.pending.continuation.call.arguments);
+            }
+            sendWebSse(server, "error", "", consoleStatus);
+            renderConsoleScreen();
+            return;
+        }
+        webPendingContext.pendingId = next.pending.pendingId;
+        std::string().swap(next.pending.continuation.call.arguments);
+        consoleStatus = "Waiting for confirmation: " + result.error;
+        sendWebSse(server, "pending", "", consoleStatus);
+        renderConsoleScreen();
+        return;
+    }
+    if (!result.success) {
+        clearWebPendingContext();
+        consoleStatus = result.error;
+        sendWebSse(server, "error", "", result.error);
+        renderConsoleScreen();
+        return;
+    }
+    OperationResult saved = appendProjectChatMessages(
+        projectId, chatId, {{"assistant", result.response}},
+        currentTimestamp(), consoleSettings.projectChatHistoryQuotaBytes);
+    if (!saved.success) {
+        clearWebPendingContext();
+        consoleStatus = "Response received but chat save failed: " + saved.error;
+        sendWebSse(server, "error", "", consoleStatus);
+        renderConsoleScreen();
+        return;
+    }
+    const OperationResult cleared = clearPendingToolCall(
+        oldPendingId, terminalState);
+    clearWebPendingContext();
+    OperationResult refreshed = {true, ""};
+    if (ownerIsActive) {
+        refreshed = loadActiveChat(chatId);
+        if (refreshed.success) {
+            refreshed = refreshChats();
+        }
+    }
+    consoleStatus = "Saved";
+    if (!cleared.success) {
+        consoleStatus = "Response saved; pending cleanup failed: " +
+                        cleared.error;
+        sendWebSse(server, "notice", "", consoleStatus);
+    }
+    if (!refreshed.success) {
+        consoleStatus = "Response saved; chat refresh failed: " +
+                        refreshed.error;
+        sendWebSse(server, "notice", "", consoleStatus);
+    }
+    sendWebSse(server, "done", "", "");
+    renderConsoleScreen();
+}
+
+void handlePendingAllowOnce()
+{
+    String requestedId;
+    if (!validatePendingActionRequest(requestedId)) return;
+    WebPendingContinuationInputs inputs =
+        loadWebPendingContinuationInputs();
+    if (!inputs.success || !inputs.error.isEmpty() ||
+        inputs.pendingId != requestedId) {
+        sendWebJsonError(
+            server, 409,
+            inputs.error.isEmpty()
+                ? String("Pending request is no longer resumable")
+                : inputs.error);
+        return;
+    }
+    const CancelCallback isCancelled = []() {
+        M5Cardputer.update();
+        return consoleEscapePressed() || !server.client().connected();
+    };
+    beginWebConsoleForegroundWork();
+    PendingToolDecisionResult decision = approvePendingProjectToolCall(
+        consoleSettings, inputs.plan, inputs.pendingId,
+        PythonRunReturnSurface::Web, isCancelled);
+    endWebConsoleForegroundWork();
+    if (!decision.success) {
+        sendWebJsonError(server, 409, decision.error);
+        return;
+    }
+    if (decision.pythonHandoff) {
+        clearWebPendingContext();
+        consoleStatus = "Approved Python run is restarting the device";
+        server.sendHeader("Cache-Control", "no-store");
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "text/event-stream; charset=utf-8", "");
+        sendWebSse(server, "handoff", "", consoleStatus);
+        clearSessionAuthentication();
+        pythonRestartRequested = true;
+        return;
+    }
+    const ToolRequestPlan continuationPlan = inputs.plan;
+    continueWebPendingDecision(
+        std::move(decision), std::move(inputs.requestSettings),
+        continuationPlan, "");
+}
+
+void handlePendingAllowChat()
+{
+    String requestedId;
+    if (!validatePendingActionRequest(requestedId)) return;
+    WebPendingContinuationInputs inputs =
+        loadWebPendingContinuationInputs();
+    if (!inputs.success || !inputs.error.isEmpty() ||
+        inputs.pendingId != requestedId) {
+        sendWebJsonError(
+            server, 409,
+            inputs.error.isEmpty()
+                ? String("Pending request is no longer resumable")
+                : inputs.error);
+        return;
+    }
+    if (inputs.reason != PendingToolConfirmationReason::PolicyAsk) {
+        sendWebJsonError(
+            server, 409,
+            "Mandatory confirmation cannot be saved for chat");
+        return;
+    }
+    const CancelCallback isCancelled = []() {
+        M5Cardputer.update();
+        return consoleEscapePressed() || !server.client().connected();
+    };
+    beginWebConsoleForegroundWork();
+    PendingToolDecisionResult decision = approvePendingProjectToolCall(
+        consoleSettings, inputs.plan, inputs.pendingId,
+        PythonRunReturnSurface::Web, isCancelled);
+    endWebConsoleForegroundWork();
+    if (!decision.success) {
+        sendWebJsonError(server, 409, decision.error);
+        return;
+    }
+    ToolRequestPlan continuationPlan = inputs.plan;
+    String warning;
+    const ToolCatalogEntry* entry = toolCatalogEntryForName(
+        decision.pending.continuation.call.name);
+    ChatDocumentResult chat = loadProjectChatMetadata(
+        decision.pending.projectId, decision.pending.chatId);
+    if (entry == nullptr || !chat.success) {
+        warning = entry == nullptr
+            ? String("Tool ran, but its chat permission was not saved")
+            : "Tool ran, but chat permission save failed: " + chat.error;
+    } else {
+        chat.chat.toolPolicy[static_cast<std::size_t>(entry->capability)] =
+            ScopedToolPermission::Allow;
+        chat.chat.summary.updatedAt = currentTimestamp();
+        const OperationResult saved = saveProjectChatMetadata(chat.chat);
+        if (!saved.success) {
+            warning = "Tool ran, but chat permission save failed: " + saved.error;
+        } else {
+            if (decision.pending.projectId == activeProject.summary.id &&
+                decision.pending.chatId == activeChat.summary.id) {
+                activeChat.toolPolicy = chat.chat.toolPolicy;
+                ++chatRevision;
+            }
+            const ProjectDocumentResult project = loadProject(
+                decision.pending.projectId);
+            const ChatDocumentResult updatedChat = loadProjectChatMetadata(
+                decision.pending.projectId, decision.pending.chatId);
+            if (!project.success || !updatedChat.success) {
+                warning = "Tool ran; saved permission could not be reloaded";
+            } else {
+                const SdStorageStatus storage = inspectSdStorage();
+                const bool readable = storage.state == SdStorageState::Ready ||
+                                      storage.state == SdStorageState::Full;
+                const bool writable = storage.state == SdStorageState::Ready;
+                const ToolRequestPlan updatedPlan = resolveChatToolRequestPlan(
+                    consoleSettings, project.project, updatedChat.chat,
+                    webPendingContext.intent, readable, writable, writable,
+                    writable && pythonOneShotAvailable(),
+                    sshToolAvailableProfileId());
+                if (webToolRequestPlanError(updatedPlan).isEmpty() &&
+                    entry != nullptr &&
+                    toolRequestPlanIncludesSchema(updatedPlan, entry->schema)) {
+                    continuationPlan = updatedPlan;
+                } else {
+                    warning =
+                        "Tool ran; continuing with the original bounded policy";
+                }
+            }
+        }
+    }
+    continueWebPendingDecision(
+        std::move(decision), std::move(inputs.requestSettings),
+        continuationPlan, warning);
+}
+
+void handlePendingDeny()
+{
+    String requestedId;
+    if (!validatePendingActionRequest(requestedId)) return;
+    WebPendingContinuationInputs inputs =
+        loadWebPendingContinuationInputs();
+    if (!inputs.success || !inputs.error.isEmpty() ||
+        inputs.pendingId != requestedId) {
+        sendWebJsonError(
+            server, 409,
+            inputs.error.isEmpty()
+                ? String("Pending request is no longer resumable")
+                : inputs.error);
+        return;
+    }
+    PendingToolDecisionResult decision = denyPendingProjectToolCall(
+        inputs.pendingId);
+    if (!decision.success) {
+        sendWebJsonError(server, 409, decision.error);
+        return;
+    }
+    const ToolRequestPlan continuationPlan = inputs.plan;
+    continueWebPendingDecision(
+        std::move(decision), std::move(inputs.requestSettings),
+        continuationPlan, "");
+}
+
+void handlePendingAcknowledge()
+{
+    String requestedId;
+    if (!validatePendingActionRequest(requestedId)) return;
+    PendingToolCallResult pending = loadPendingToolCall();
+    if (!pending.success) {
+        sendWebJsonError(server, 500, pending.error);
+        return;
+    }
+    if (!pending.found || pending.pending.pendingId != requestedId) {
+        if (pending.found) {
+            std::string().swap(
+                pending.pending.continuation.call.arguments);
+        }
+        sendWebJsonError(server, 409, "Pending request no longer matches");
+        return;
+    }
+    const ToolCatalogEntry* entry = toolCatalogEntryForName(
+        pending.pending.continuation.call.name);
+    if (pending.pending.state == PendingToolCallState::ClaimedApprove &&
+        entry != nullptr && entry->schema == ToolSchemaId::PythonRun) {
+        std::string().swap(
+            pending.pending.continuation.call.arguments);
+        sendWebJsonError(
+            server, 409,
+            "Python run recovery must complete before pending cleanup");
+        return;
+    }
+    const bool contextMatches = webPendingContextMatches(pending.pending);
+    const PendingToolCallState state = pending.pending.state;
+    const String pendingId = pending.pending.pendingId;
+    std::string().swap(pending.pending.continuation.call.arguments);
+    bool resumable = false;
+    if (state == PendingToolCallState::Awaiting) {
+        const WebPendingContinuationInputs inputs =
+            loadWebPendingContinuationInputs();
+        resumable = inputs.success && inputs.error.isEmpty();
+    }
+    if (resumable) {
+        sendWebJsonError(
+            server, 409,
+            "A resumable request must be allowed or denied, not acknowledged");
+        return;
+    }
+    const OperationResult cleared = clearPendingToolCall(pendingId, state);
+    if (!cleared.success) {
+        sendWebJsonError(server, 409, cleared.error);
+        return;
+    }
+    if (contextMatches) {
+        clearWebPendingContext();
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    sendWebJson(server, 200, document);
+}
+
+void handleSelectProject()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    OperationResult result = selectActiveProject(server.arg("id"));
+    if (result.success) result = refreshProjects();
+    if (!result.success) {
+        sendWebJsonError(server, 400, result.error);
+        return;
+    }
+    clearFailedWebRequestInstructions();
+    consoleStatus = "Project selected";
+    JsonDocument document;
+    document["ok"] = true;
+    document["project_id"] = activeProject.summary.id;
+    sendWebJson(server, 200, document);
+}
+
+void handleNewProject()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    std::string title = server.arg("title").c_str();
+    if (title.empty()) title = "New project";
+    if (title.size() > kMaximumProjectTitleBytes || !isValidUtf8(title)) {
+        sendWebJsonError(server, 400,
+                         "Project title must be valid UTF-8 up to 120 bytes");
+        return;
+    }
+    String createdId;
+    {
+        const ProjectDocumentResult created = createProject(title.c_str());
+        if (!created.success) {
+            sendWebJsonError(server, 500, created.error);
+            return;
+        }
+        createdId = created.project.summary.id;
+    }
+    OperationResult result = refreshProjects();
+    if (result.success) result = selectActiveProject(createdId);
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    clearFailedWebRequestInstructions();
+    consoleStatus = "Project created";
+    JsonDocument document;
+    document["ok"] = true;
+    document["project_id"] = activeProject.summary.id;
+    sendWebJson(server, 200, document);
+}
+
+void handleProjectSettings()
+{
+    rejectLegacyRawTextRoute();
+}
+
+void handleProjectSettingsRawData()
+{
+    collectRawTextRequest(kMaximumProjectInstructionsBytes);
+}
+
+void handleProjectSettingsRawComplete()
+{
+    if (!requestHasValidCsrf()) {
+        resetRawTextRequest();
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    RawTextRequestResult request = consumeRawTextRequest();
+    if (!request.success) {
+        sendWebJsonError(server, request.errorStatus, request.error);
+        return;
+    }
+    ProjectDocumentResult canonical =
+        loadProject(activeProject.summary.id);
+    if (!canonical.success) {
+        sendWebJsonError(server, 500, canonical.error);
+        return;
+    }
+    ProjectDocument updated = std::move(canonical.project);
+    const DecodedHeaderResult decodedModel = decodePercentEncodedHeader(
+        server.header("X-CardMind-Model-Encoded"), 120);
+    if (!decodedModel.success) {
+        sendWebJsonError(server, decodedModel.errorStatus, decodedModel.error);
+        return;
+    }
+    String model = decodedModel.value.c_str();
+    model.trim();
+    const String encodedToolPolicy = server.header(kToolPolicyHeader);
+    const bool toolPolicyProvided = server.hasHeader(kToolPolicyHeader);
+    const ScopedToolPermissionPolicyDecodeResult decodedToolPolicy =
+        toolPolicyProvided
+        ? decodeScopedToolPermissionPolicy(
+              encodedToolPolicy.c_str(), encodedToolPolicy.length())
+        : ScopedToolPermissionPolicyDecodeResult{
+              updated.toolPolicy, ToolPolicyCodecError::None};
+    if (decodedToolPolicy.error != ToolPolicyCodecError::None) {
+        sendWebJsonError(server, 400, "Project tool policy is invalid");
+        return;
+    }
+    const bool sshProfileProvided = server.hasHeader(kSshProfileHeader);
+    String requestedSshProfile = updated.sshProfile;
+    if (sshProfileProvided) {
+        const String encodedSshProfile = server.header(kSshProfileHeader);
+        if (!encodedSshProfile.startsWith("v1:")) {
+            sendWebJsonError(server, 400, "Project SSH profile ID is invalid");
+            return;
+        }
+        requestedSshProfile = encodedSshProfile.substring(3);
+    }
+    if (!isValidSshProfileCeiling(
+            requestedSshProfile.c_str(), requestedSshProfile.length())) {
+        sendWebJsonError(server, 400, "Project SSH profile ID is invalid");
+        return;
+    }
+    const bool apiProfileProvided = server.hasHeader(kApiProfileHeader);
+    String requestedApiProfile = updated.apiProfile;
+    if (apiProfileProvided) {
+        requestedApiProfile = server.header(kApiProfileHeader);
+        if (requestedApiProfile == "inherit") {
+            requestedApiProfile = "";
+        } else if (!isValidProviderStableId(
+                       std::string(requestedApiProfile.c_str()))) {
+            sendWebJsonError(server, 400, "Project API profile ID is invalid");
+            return;
+        } else if (consoleProviderStore == nullptr) {
+            sendWebJsonError(server, 500,
+                             "Provider profile storage is unavailable");
+            return;
+        } else {
+            const ApiProfilesResult profiles =
+                consoleProviderStore->listProfiles();
+            if (!providerStoreResultSucceeded(profiles.result)) {
+                sendProviderStoreError(profiles.result);
+                return;
+            }
+            const bool found = std::any_of(
+                profiles.profiles.begin(), profiles.profiles.end(),
+                [&requestedApiProfile](const ApiProfileSummary& profile) {
+                    return profile.id == requestedApiProfile.c_str();
+                });
+            if (!found) {
+                sendWebJsonError(server, 409,
+                                 "Project API profile is unavailable");
+                return;
+            }
+        }
+    }
+    std::uint32_t contextBytes = 0;
+    std::uint32_t outputTokens = 0;
+    const String automaticCompaction = server.header("X-CardMind-Auto-Compact");
+    if (request.body.size() > kMaximumProjectInstructionsBytes ||
+        !isValidUtf8(request.body) || model.length() > 120 ||
+        !parseUnsignedArgument(server.header("X-CardMind-Context-Bytes"), contextBytes) ||
+        contextBytes < 8192 || contextBytes > 262144 ||
+        !parseUnsignedArgument(server.header("X-CardMind-Output-Tokens"), outputTokens) ||
+        outputTokens < 128 || outputTokens > 8192 ||
+        (automaticCompaction != "0" && automaticCompaction != "1")) {
+        sendWebJsonError(server, 400,
+                         "Project settings contain invalid instructions, model or budgets");
+        return;
+    }
+    updated.instructions = std::move(request.body);
+    updated.model = model;
+    updated.contextByteBudget = contextBytes;
+    updated.maximumOutputTokens = outputTokens;
+    updated.automaticCompaction = automaticCompaction == "1";
+    updated.toolPolicy = decodedToolPolicy.policy;
+    updated.sshProfile = requestedSshProfile;
+    updated.apiProfile = requestedApiProfile;
+    OperationResult result = saveProject(updated);
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    ProjectDocumentResult stored = loadProject(updated.summary.id);
+    if (!stored.success) {
+        sendWebJsonError(server, 500, stored.error);
+        return;
+    }
+    activeProject = std::move(stored.project);
+    result = refreshProjects();
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    ++projectRevision;
+    ++chatRevision;
+    consoleStatus = "Project settings saved";
+    JsonDocument document;
+    document["ok"] = true;
+    sendWebJson(server, 200, document);
+}
+
+void handleRenameProject()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    OperationResult result = renameProject(
+        activeProject.summary.id, server.arg("title"));
+    if (result.success) {
+        ProjectDocumentResult loaded = loadProject(activeProject.summary.id);
+        result = loaded.success ? OperationResult{true, ""}
+                                : OperationResult{false, loaded.error};
+        if (loaded.success) activeProject = std::move(loaded.project);
+    }
+    if (result.success) result = refreshProjects();
+    if (!result.success) {
+        sendWebJsonError(server, 400, result.error);
+        return;
+    }
+    ++projectRevision;
+    JsonDocument document;
+    document["ok"] = true;
+    sendWebJson(server, 200, document);
+}
+
+void handleDuplicateProject()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    String title = server.arg("title");
+    if (title.isEmpty()) title = activeProject.summary.title + " copy";
+    String duplicatedId;
+    {
+        beginWebConsoleForegroundWork();
+        const ProjectDocumentResult duplicated = duplicateProject(
+            activeProject.summary.id, title);
+        endWebConsoleForegroundWork();
+        if (!duplicated.success) {
+            sendWebJsonError(server, 500, duplicated.error);
+            return;
+        }
+        duplicatedId = duplicated.project.summary.id;
+    }
+    OperationResult result = refreshProjects();
+    if (result.success) result = selectActiveProject(duplicatedId);
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    clearFailedWebRequestInstructions();
+    JsonDocument document;
+    document["ok"] = true;
+    document["project_id"] = activeProject.summary.id;
+    sendWebJson(server, 200, document);
+}
+
+void handleArchiveProject()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const bool archived = server.arg("archived") == "1";
+    OperationResult result = setProjectArchived(activeProject.summary.id, archived);
+    if (result.success) {
+        ProjectDocumentResult loaded = loadProject(activeProject.summary.id);
+        result = loaded.success ? OperationResult{true, ""}
+                                : OperationResult{false, loaded.error};
+        if (loaded.success) activeProject = std::move(loaded.project);
+    }
+    if (result.success) result = refreshProjects();
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    ++projectRevision;
+    JsonDocument document;
+    document["ok"] = true;
+    sendWebJson(server, 200, document);
+}
+
+void handleDeleteProject()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const String deletedId = activeProject.summary.id;
+    OperationResult result = deleteProject(deletedId);
+    if (result.success) result = refreshProjects();
+    if (result.success && consoleProjects.empty()) {
+        const ProjectDocumentResult created = createProject("Default");
+        result = created.success ? OperationResult{true, ""}
+                                 : OperationResult{false, created.error};
+        if (created.success) result = refreshProjects();
+    }
+    if (result.success) result = selectActiveProject(consoleProjects.front().id);
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    clearFailedWebRequestInstructions();
+    JsonDocument document;
+    document["ok"] = true;
+    document["project_id"] = activeProject.summary.id;
+    sendWebJson(server, 200, document);
+}
+
+void handleProjectLinks()
+{
+    if (!sessionIsActive()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    std::uint32_t offset = 0;
+    if (!server.arg("offset").isEmpty() &&
+        !parseUnsignedArgument(server.arg("offset"), offset)) {
+        sendWebJsonError(server, 400, "Link offset must be an unsigned integer");
+        return;
+    }
+    const SharedFileLinksPageResult page = listProjectSharedLinksPage(
+        activeProject.summary.id, offset, kMaximumProjectPageEntries);
+    if (!page.success) {
+        sendWebJsonError(server, 500, page.error);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["next_offset"] = page.nextOffset;
+    document["eof"] = page.eof;
+    JsonArray links = document["links"].to<JsonArray>();
+    for (const SharedFileLink& link : page.links) links.add(link.path);
+    sendWebJson(server, 200, document);
+}
+
+void handleProjectLinkUpdate()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const String path = server.arg("path");
+    const bool linked = server.arg("linked") == "1";
+    const OperationResult result = linked
+        ? linkSharedFileToProject(activeProject.summary.id, path)
+        : unlinkSharedFileFromProject(activeProject.summary.id, path);
+    if (!result.success) {
+        sendWebJsonError(server, 400, result.error);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    sendWebJson(server, 200, document);
 }
 
 void handleSelectChat()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     const String id = server.arg("id");
     const OperationResult result = loadActiveChat(id);
     if (!result.success) {
-        sendJsonError(400, result.error);
+        sendWebJsonError(server, 400, result.error);
         return;
     }
+    const OperationResult selected = saveActiveChatSelection(id);
+    if (!selected.success) {
+        sendWebJsonError(server, 500, selected.error);
+        return;
+    }
+    clearFailedWebRequestInstructions();
+    ++projectRevision;
     consoleStatus = "Chat selected";
-    renderConsoleChat();
+    renderConsoleScreen();
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleNewChat()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    const ChatDocumentResult created = createChat("New chat");
+    const std::uint32_t startedAt = millis();
+    ChatDocumentResult created = createProjectChat(
+        activeProject.summary.id, "New chat", consoleSettings.newChatToolPolicy);
+    recordWebSdWrite(millis() - startedAt);
     if (!created.success) {
-        sendJsonError(400, created.error);
+        sendWebJsonError(server, 400, created.error);
         return;
     }
-    activeChat = created.chat;
-    OperationResult result = refreshChats();
+    const String createdId = created.chat.summary.id;
+    activeChat = std::move(created.chat);
+    OperationResult result = saveActiveChatSelection(createdId);
     if (!result.success) {
-        sendJsonError(500, result.error);
+        sendWebJsonError(server, 500, result.error);
         return;
     }
+    ++projectRevision;
+    ++chatRevision;
+    result = refreshChats();
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    clearFailedWebRequestInstructions();
     consoleStatus = "New chat created";
-    renderConsoleChat();
+    renderConsoleScreen();
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleInstructions()
 {
+    rejectLegacyRawTextRoute();
+}
+
+void handleInstructionsRawData()
+{
+    collectRawTextRequest(kMaximumProjectChatInstructionsBytes);
+}
+
+void handleInstructionsRawComplete()
+{
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        resetRawTextRequest();
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    const String value = server.arg("instructions");
-    const std::string instructions = value.c_str();
-    if (instructions.size() > kMaximumChatInstructionsBytes || !isValidUtf8(instructions)) {
-        sendJsonError(400, "Instructions must be valid UTF-8 up to 2048 bytes");
+    RawTextRequestResult request = consumeRawTextRequest();
+    if (!request.success) {
+        sendWebJsonError(server, request.errorStatus, request.error);
         return;
     }
-    activeChat.instructions = instructions;
+    if (request.body.size() > kMaximumProjectChatInstructionsBytes ||
+        !isValidUtf8(request.body)) {
+        sendWebJsonError(server, 400, "Instructions must be valid UTF-8 up to 16384 bytes");
+        return;
+    }
+    std::string previousInstructions = std::move(activeChat.instructions);
+    const std::uint64_t previousUpdatedAt = activeChat.summary.updatedAt;
+    activeChat.instructions = std::move(request.body);
     activeChat.summary.updatedAt = currentTimestamp();
-    const OperationResult saved = saveChat(activeChat);
+    const OperationResult saved = saveActiveChat();
     if (!saved.success) {
-        sendJsonError(500, saved.error);
+        activeChat.instructions = std::move(previousInstructions);
+        activeChat.summary.updatedAt = previousUpdatedAt;
+        sendWebJsonError(server, 500, saved.error);
         return;
     }
-    consoleStatus = instructions.empty() ? String("Instructions disabled")
-                                         : String("Instructions saved");
-    renderConsoleChat();
+    const OperationResult refreshed = refreshChats();
+    if (!refreshed.success) {
+        sendWebJsonError(server, 500, refreshed.error);
+        return;
+    }
+    consoleStatus = activeChat.instructions.empty()
+        ? String("Instructions disabled") : String("Instructions saved");
+    renderConsoleScreen();
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
+}
+
+void handleChatCompact()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    if (webSshTaskIsRunning()) {
+        sendWebJsonError(
+            server, 409,
+            "Wait for the background SSH connection attempt to finish or stop it");
+        return;
+    }
+    const ChatDocumentResult stored = loadProjectChatMetadata(
+        activeProject.summary.id, activeChat.summary.id);
+    if (!stored.success) {
+        sendWebJsonError(server, 500, stored.error);
+        return;
+    }
+    constexpr std::uint32_t kRetainedMessages = 8;
+    const std::uint32_t summaryTarget = stored.chat.summary.messageCount >
+            kRetainedMessages
+        ? stored.chat.summary.messageCount - kRetainedMessages : 0;
+    if (summaryTarget == 0) {
+        sendWebJsonError(
+            server, 409, "This chat is too short to compact");
+        return;
+    }
+    if (webSshTerminalOpen || webSshAwaitingTrust) {
+        closeWebSshConnection();
+    }
+    std::string stagedSummary;
+    std::uint32_t nextMessageIndex = 0;
+    while (nextMessageIndex < summaryTarget) {
+        const std::uint32_t remaining = summaryTarget - nextMessageIndex;
+        const IndexedMessagesPageResult page = readProjectChatMessagesByIndex(
+            activeProject.summary.id, activeChat.summary.id, nextMessageIndex,
+            std::min<std::uint32_t>(remaining, 32), 32768);
+        if (!page.success || page.messages.empty() ||
+            page.nextMessageIndex <= nextMessageIndex ||
+            page.nextMessageIndex > summaryTarget) {
+            sendWebJsonError(
+                server, 500,
+                page.success ? String("Context summary raw-history page did not advance")
+                             : page.error);
+            return;
+        }
+        WebContextSummaryResult generated = generateWebContextSummary(
+            stagedSummary, page.messages);
+        if (!generated.success || generated.includedMessages == 0 ||
+            generated.includedMessages > page.messages.size()) {
+            sendWebJsonError(
+                server, 500,
+                generated.success ? String("Context summary request did not advance")
+                                  : generated.error);
+            return;
+        }
+        stagedSummary = std::move(generated.summary);
+        nextMessageIndex += generated.includedMessages;
+    }
+    ChatDocumentResult current = loadProjectChatMetadata(
+        activeProject.summary.id, activeChat.summary.id);
+    if (!current.success) {
+        sendWebJsonError(server, 500, current.error);
+        return;
+    }
+    if (current.chat.summary.messageCount != stored.chat.summary.messageCount) {
+        sendWebJsonError(
+            server, 409,
+            "Chat history changed while the context summary was being regenerated");
+        return;
+    }
+    current.chat.contextSummary = std::move(stagedSummary);
+    current.chat.summarizedMessageCount = summaryTarget;
+    OperationResult result = saveProjectChatMetadata(current.chat);
+    if (result.success) result = loadActiveChat(activeChat.summary.id);
+    if (result.success) result = refreshChats();
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["summary_event"] = "manual_regenerated";
+    document["summarized_messages"] = activeChat.summarizedMessageCount;
+    sendWebJson(server, 200, document);
+}
+
+void handleChatSettings()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    if (!server.hasArg("tool_policy") || !server.hasArg("model")) {
+        sendWebJsonError(
+            server, 400, "Chat tool policy and model are required");
+        return;
+    }
+    const String encodedToolPolicy = server.arg("tool_policy");
+    const ScopedToolPermissionPolicyDecodeResult decodedToolPolicy =
+        decodeScopedToolPermissionPolicy(
+            encodedToolPolicy.c_str(), encodedToolPolicy.length());
+    String model = server.arg("model");
+    model.trim();
+    const bool sshProfileProvided = server.hasArg("ssh_profile");
+    const String requestedSshProfile = sshProfileProvided
+        ? server.arg("ssh_profile") : activeChat.sshProfile;
+    const std::string modelUtf8 = model.c_str();
+    if (decodedToolPolicy.error != ToolPolicyCodecError::None ||
+        modelUtf8.size() > 240 || !isValidUtf8(modelUtf8) ||
+        !isValidSshProfileCeiling(
+            requestedSshProfile.c_str(), requestedSshProfile.length())) {
+        sendWebJsonError(
+            server, 400,
+            "Chat settings require a valid tool policy, model and SSH profile ID");
+        return;
+    }
+    ChatDocumentResult updated = loadProjectChatMetadata(
+        activeProject.summary.id, activeChat.summary.id);
+    if (!updated.success) {
+        sendWebJsonError(server, 500, updated.error);
+        return;
+    }
+    updated.chat.toolPolicy = decodedToolPolicy.policy;
+    updated.chat.model = model;
+    updated.chat.sshProfile = requestedSshProfile;
+    updated.chat.summary.updatedAt = currentTimestamp();
+    OperationResult result = saveProjectChatMetadata(updated.chat);
+    if (result.success) {
+        result = loadActiveChat(activeChat.summary.id);
+    }
+    if (result.success) {
+        result = refreshChats();
+    }
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    consoleStatus = "Chat settings saved";
+    JsonDocument document;
+    document["ok"] = true;
+    sendWebJson(server, 200, document);
 }
 
 void handleChatPermissions()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     const String requested = server.arg("ssh_tools_enabled");
     if (requested != "0" && requested != "1") {
-        sendJsonError(400, "SSH tool permission must be either 0 or 1");
+        sendWebJsonError(server, 400, "SSH tool permission must be either 0 or 1");
         return;
     }
     if (requested == "1") {
-        SshProfile profile;
-        const OperationResult loaded = loadSshProfile(profile);
-        const bool complete = loaded.success && sshProfileIsComplete(profile);
-        profile.password = "";
-        profile.privateKeyPassphrase = "";
-        if (!complete) {
-            sendJsonError(409, loaded.success
-                ? String("A complete selected SSH profile is required") : loaded.error);
+        if (!sshProfilesReady) {
+            const OperationResult refreshed = refreshSshProfiles();
+            if (!refreshed.success) {
+                sendWebJsonError(server, 500, refreshed.error);
+                return;
+            }
+        }
+        if (!consoleSshConfigured) {
+            sendWebJsonError(server, 409,
+                             "A complete selected SSH profile is required");
             return;
         }
     }
-    activeChat.sshToolsEnabled = requested == "1";
+    activeChat.toolPolicy = setLegacySshToolsEnabled(
+        activeChat.toolPolicy, requested == "1");
     activeChat.summary.updatedAt = currentTimestamp();
-    const OperationResult saved = saveChat(activeChat);
+    const OperationResult saved = saveActiveChat();
     if (!saved.success) {
-        sendJsonError(500, saved.error);
+        sendWebJsonError(server, 500, saved.error);
         return;
     }
-    consoleStatus = activeChat.sshToolsEnabled
+    const OperationResult refreshed = refreshChats();
+    if (!refreshed.success) {
+        sendWebJsonError(server, 500, refreshed.error);
+        return;
+    }
+    consoleStatus = legacySshToolsEnabled(activeChat.toolPolicy)
         ? String("Model SSH access enabled for this chat")
         : String("Model SSH access disabled for this chat");
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleRenameChat()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     const std::string requestedTitle = server.arg("title").c_str();
     if (requestedTitle.empty() || requestedTitle.size() > 256 || !isValidUtf8(requestedTitle)) {
-        sendJsonError(400, "Chat title must be valid UTF-8 between 1 and 256 bytes");
+        sendWebJsonError(server, 400, "Chat title must be valid UTF-8 between 1 and 256 bytes");
         return;
     }
     activeChat.summary.title = makeChatTitle(requestedTitle, kMaximumChatTitleCells).c_str();
     activeChat.summary.updatedAt = currentTimestamp();
-    OperationResult result = saveChat(activeChat);
+    OperationResult result = saveActiveChat();
     if (result.success) {
         result = refreshChats();
     }
     if (!result.success) {
-        sendJsonError(500, result.error);
+        sendWebJsonError(server, 500, result.error);
         return;
     }
     consoleStatus = "Chat renamed";
-    renderConsoleChat();
+    renderConsoleScreen();
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handlePinChat()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     activeChat.summary.pinned = !activeChat.summary.pinned;
     if (activeChat.summary.pinned) {
         activeChat.summary.archived = false;
     }
-    OperationResult result = saveChat(activeChat);
+    OperationResult result = saveActiveChat();
     if (result.success) {
         result = refreshChats();
     }
     if (!result.success) {
-        sendJsonError(500, result.error);
+        sendWebJsonError(server, 500, result.error);
         return;
     }
     consoleStatus = activeChat.summary.pinned ? String("Chat pinned") : String("Chat unpinned");
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleArchiveChat()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     activeChat.summary.archived = !activeChat.summary.archived;
     if (activeChat.summary.archived) {
         activeChat.summary.pinned = false;
     }
-    OperationResult result = saveChat(activeChat);
+    OperationResult result = saveActiveChat();
     if (result.success) {
         result = refreshChats();
     }
     if (!result.success) {
-        sendJsonError(500, result.error);
+        sendWebJsonError(server, 500, result.error);
         return;
     }
     consoleStatus = activeChat.summary.archived ? String("Chat archived")
                                                 : String("Chat restored");
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleDuplicateChat()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    const ChatDocumentResult duplicated = duplicateChat(activeChat.summary.id);
+    const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
+    ChatDocumentResult duplicated = duplicateProjectChat(
+        activeProject.summary.id, activeChat.summary.id);
+    endWebConsoleForegroundWork();
+    recordWebSdWrite(millis() - startedAt);
     if (!duplicated.success) {
-        sendJsonError(500, duplicated.error);
+        sendWebJsonError(server, 500, duplicated.error);
         return;
     }
-    activeChat = duplicated.chat;
+    const String duplicatedId = duplicated.chat.summary.id;
+    activeChat = std::move(duplicated.chat);
+    OperationResult selected = saveActiveChatSelection(duplicatedId);
+    if (!selected.success) {
+        sendWebJsonError(server, 500, selected.error);
+        return;
+    }
+    ++projectRevision;
+    ++chatRevision;
     const OperationResult refreshed = refreshChats();
     if (!refreshed.success) {
-        sendJsonError(500, refreshed.error);
+        sendWebJsonError(server, 500, refreshed.error);
         return;
     }
+    clearFailedWebRequestInstructions();
     consoleStatus = "Chat duplicated";
-    renderConsoleChat();
+    renderConsoleScreen();
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleExportChat()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     const String filename = "chat_" + activeChat.summary.id + ".md";
-    const OperationResult exported = exportChatToWorkspace(
-        activeChat.summary.id, filename);
+    const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
+    const OperationResult exported = exportProjectChatMarkdown(
+        activeProject.summary.id, activeChat.summary.id, filename);
+    endWebConsoleForegroundWork();
+    recordWebSdWrite(millis() - startedAt);
     if (!exported.success) {
-        sendJsonError(400, exported.error);
+        sendWebJsonError(server, 400, exported.error);
+        return;
+    }
+    const OperationResult refreshed = refreshFiles();
+    if (!refreshed.success) {
+        sendWebJsonError(server, 500, refreshed.error);
         return;
     }
     consoleStatus = "Chat exported as " + filename;
     JsonDocument document;
     document["ok"] = true;
     document["filename"] = filename;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleExportChatBundle()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    const String filename = "chat_" + activeChat.summary.id + ".chat.jsonl";
-    const OperationResult exported = exportChatBundleToWorkspace(
-        activeChat.summary.id, filename);
+    const String filename =
+        "project_" + activeProject.summary.id + ".cardmind-project.jsonl";
+    const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
+    const OperationResult exported = exportProjectBundle(
+        activeProject.summary.id, filename);
+    endWebConsoleForegroundWork();
+    recordWebSdWrite(millis() - startedAt);
     if (!exported.success) {
-        sendJsonError(400, exported.error);
+        sendWebJsonError(server, 400, exported.error);
         return;
     }
-    consoleStatus = "Chat bundle exported as " + filename;
+    const OperationResult refreshed = refreshFiles();
+    if (!refreshed.success) {
+        sendWebJsonError(server, 500, refreshed.error);
+        return;
+    }
+    consoleStatus = "Project bundle exported as " + filename;
     JsonDocument document;
     document["ok"] = true;
     document["filename"] = filename;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleImportChatBundle()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    const ChatDocumentResult imported = importChatBundleFromWorkspace(server.arg("name"));
-    if (!imported.success) {
-        sendJsonError(400, imported.error);
-        return;
+    const std::uint32_t startedAt = millis();
+    String importedId;
+    {
+        beginWebConsoleForegroundWork();
+        const ProjectDocumentResult imported = importProjectBundle(server.arg("name"));
+        endWebConsoleForegroundWork();
+        recordWebSdWrite(millis() - startedAt);
+        if (!imported.success) {
+            sendWebJsonError(server, 400, imported.error);
+            return;
+        }
+        importedId = imported.project.summary.id;
     }
-    activeChat = imported.chat;
-    const OperationResult refreshed = refreshChats();
+    OperationResult refreshed = refreshProjects();
+    if (refreshed.success) {
+        refreshed = selectActiveProject(importedId);
+    }
     if (!refreshed.success) {
-        sendJsonError(500, refreshed.error);
+        sendWebJsonError(server, 500, refreshed.error);
         return;
     }
-    consoleStatus = "Chat imported";
-    renderConsoleChat();
+    clearFailedWebRequestInstructions();
+    consoleStatus = "Project imported";
+    renderConsoleScreen();
     JsonDocument document;
     document["ok"] = true;
-    document["chat_id"] = activeChat.summary.id;
-    sendJson(200, document);
+    document["project_id"] = activeProject.summary.id;
+    sendWebJson(server, 200, document);
 }
 
 void handleDeleteChat()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    OperationResult result = deleteChat(activeChat.summary.id);
+    const std::uint32_t startedAt = millis();
+    OperationResult result = deleteProjectChat(
+        activeProject.summary.id, activeChat.summary.id);
+    recordWebSdWrite(millis() - startedAt);
     if (result.success) {
         result = refreshChats();
     }
     if (!result.success) {
-        sendJsonError(500, result.error);
+        sendWebJsonError(server, 500, result.error);
         return;
     }
     if (consoleChats.empty()) {
-        const ChatDocumentResult created = createChat("New chat");
+        ChatDocumentResult created = createProjectChat(
+            activeProject.summary.id, "New chat",
+            consoleSettings.newChatToolPolicy);
         if (!created.success) {
-            sendJsonError(500, created.error);
+            sendWebJsonError(server, 500, created.error);
             return;
         }
-        activeChat = created.chat;
+        const String createdId = created.chat.summary.id;
+        activeChat = std::move(created.chat);
+        result = saveActiveChatSelection(createdId);
+        if (!result.success) {
+            sendWebJsonError(server, 500, result.error);
+            return;
+        }
+        ++projectRevision;
+        ++chatRevision;
         result = refreshChats();
     } else {
         result = loadActiveChat(consoleChats.front().id);
     }
     if (!result.success) {
-        sendJsonError(500, result.error);
+        sendWebJsonError(server, 500, result.error);
         return;
     }
+    result = saveActiveChatSelection(activeChat.summary.id);
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    clearFailedWebRequestInstructions();
+    ++projectRevision;
     consoleStatus = "Chat deleted";
-    renderConsoleChat();
+    renderConsoleScreen();
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
+}
+
+int providerStoreErrorStatus(ProviderStoreError error)
+{
+    switch (error) {
+        case ProviderStoreError::InvalidInput:
+            return 400;
+        case ProviderStoreError::NotFound:
+            return 404;
+        case ProviderStoreError::Conflict:
+            return 409;
+        case ProviderStoreError::Capacity:
+            return 507;
+        case ProviderStoreError::LegacyRetained:
+        case ProviderStoreError::AuthorityUncertain:
+        case ProviderStoreError::Corrupt:
+            return 503;
+        case ProviderStoreError::Storage:
+        case ProviderStoreError::CleanupFailed:
+            return 500;
+        case ProviderStoreError::None:
+            return 500;
+    }
+    return 500;
+}
+
+void sendProviderStoreError(const ProviderStoreResult& result)
+{
+    sendWebJsonError(server, providerStoreErrorStatus(result.error),
+                     String(result.message.c_str()));
+}
+
+bool requireProviderMutation()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return false;
+    }
+    if (consoleProviderStore == nullptr) {
+        sendWebJsonError(server, 500,
+                         "Provider profile storage is unavailable");
+        return false;
+    }
+    return true;
+}
+
+ProviderStoreResult reloadConsoleDefaultProvider()
+{
+    if (consoleProviderStore == nullptr) {
+        return {ProviderStoreError::Storage, false, false,
+                "Provider profile storage is unavailable"};
+    }
+    return consoleProviderStore->loadDefaultInto(consoleSettings);
+}
+
+void sendApiProfileResult(const ApiProfileSummary& profile,
+                          const String& warning)
+{
+    JsonDocument document;
+    document["ok"] = true;
+    document["committed"] = true;
+    if (!warning.isEmpty()) {
+        document["warning"] = warning;
+    }
+    JsonObject item = document["profile"].to<JsonObject>();
+    item["id"] = profile.id;
+    item["name"] = profile.name;
+    item["api_base_url"] = profile.baseUrl;
+    item["authority_revision"] = profile.authorityRevision;
+    item["is_default"] = profile.isDefault;
+    item["api_key_configured"] = true;
+    sendWebJson(server, 200, document);
+}
+
+void sendModelPresetResult(const ModelPresetRecord& preset)
+{
+    JsonDocument document;
+    document["ok"] = true;
+    JsonObject item = document["preset"].to<JsonObject>();
+    item["id"] = preset.id;
+    item["name"] = preset.name;
+    item["model"] = preset.model;
+    item["maximum_output_tokens"] = preset.maximumOutputTokens;
+    sendWebJson(server, 200, document);
+}
+
+void handleApiProfileCreate()
+{
+    if (!requireProviderMutation()) return;
+    const ApiProfileInput input = {
+        std::string(server.arg("name").c_str()),
+        std::string(normalizedBaseUrl(server.arg("api_base_url")).c_str()),
+        std::string(server.arg("api_key").c_str()),
+    };
+    const ApiProfileMutationResult created =
+        consoleProviderStore->createProfile(input);
+    if (created.result.committed) ++settingsRevision;
+    if (!providerStoreResultSucceeded(created.result)) {
+        sendProviderStoreError(created.result);
+        return;
+    }
+    sendApiProfileResult(created.profile, "");
+}
+
+void handleApiProfileUpdate()
+{
+    if (!requireProviderMutation()) return;
+    const std::string id(server.arg("id").c_str());
+    const ApiProfileInput input = {
+        std::string(server.arg("name").c_str()),
+        std::string(normalizedBaseUrl(server.arg("api_base_url")).c_str()),
+        std::string(server.arg("api_key").c_str()),
+    };
+    const ApiProfileMutationResult updated =
+        consoleProviderStore->updateProfile(id, input);
+    ProviderStoreResult hotReload = validProviderStoreResult();
+    if (updated.result.committed) {
+        ++settingsRevision;
+        if (updated.profile.isDefault) {
+            hotReload = reloadConsoleDefaultProvider();
+        }
+    }
+    if (!providerStoreResultSucceeded(updated.result) &&
+        !updated.result.committed) {
+        sendProviderStoreError(updated.result);
+        return;
+    }
+    String warning;
+    if (!providerStoreResultSucceeded(updated.result)) {
+        warning = String("API profile was saved, but cleanup did not finish: ") +
+                  String(updated.result.message.c_str());
+    }
+    if (!providerStoreResultSucceeded(hotReload)) {
+        if (!warning.isEmpty()) warning += " ";
+        warning += String("The saved default is authoritative, but active settings reload failed: ") +
+                   String(hotReload.message.c_str());
+    }
+    sendApiProfileResult(updated.profile, warning);
+}
+
+void handleApiProfileDefault()
+{
+    if (!requireProviderMutation()) return;
+    const ProviderStoreResult updated =
+        consoleProviderStore->setDefaultProfile(
+            std::string(server.arg("id").c_str()));
+    ProviderStoreResult hotReload = validProviderStoreResult();
+    if (updated.committed) {
+        ++settingsRevision;
+        hotReload = reloadConsoleDefaultProvider();
+    }
+    if (!providerStoreResultSucceeded(updated)) {
+        sendProviderStoreError(updated);
+        return;
+    }
+    if (!providerStoreResultSucceeded(hotReload)) {
+        sendProviderStoreError(hotReload);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["default_profile_id"] = server.arg("id");
+    sendWebJson(server, 200, document);
+}
+
+void handleApiProfileDelete()
+{
+    if (!requireProviderMutation()) return;
+    const String id = server.arg("id");
+    if (id.isEmpty() || server.arg("confirm_id") != id) {
+        sendWebJsonError(server, 400,
+                         "API profile deletion confirmation does not match");
+        return;
+    }
+    const ProviderStoreResult deleted =
+        consoleProviderStore->deleteProfile(std::string(id.c_str()));
+    if (deleted.committed) ++settingsRevision;
+    if (!providerStoreResultSucceeded(deleted) && !deleted.committed) {
+        sendProviderStoreError(deleted);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["committed"] = true;
+    document["deleted_profile_id"] = id;
+    if (!providerStoreResultSucceeded(deleted)) {
+        document["warning"] =
+            String("API profile was deleted, but cleanup did not finish: ") +
+            String(deleted.message.c_str());
+    }
+    sendWebJson(server, 200, document);
+}
+
+struct ModelPresetInputResult {
+    bool success;
+    ModelPresetInput input;
+    String error;
+};
+
+ModelPresetInputResult parseModelPresetInput(
+    const String& name,
+    const String& model,
+    const String& maximumOutputTokens)
+{
+    std::uint32_t outputTokens = 0;
+    if (!parseUnsignedArgument(maximumOutputTokens, outputTokens)) {
+        return {false, {"", "", 0},
+                "Model preset output tokens must be an unsigned integer"};
+    }
+    return {true,
+            {std::string(name.c_str()), std::string(model.c_str()),
+             outputTokens},
+            ""};
+}
+
+void handleModelPresetCreate()
+{
+    if (!requireProviderMutation()) return;
+    const ModelPresetInputResult parsed = parseModelPresetInput(
+        server.arg("name"), server.arg("model"),
+        server.arg("maximum_output_tokens"));
+    if (!parsed.success) {
+        sendWebJsonError(server, 400, parsed.error);
+        return;
+    }
+    const ModelPresetMutationResult created =
+        consoleProviderStore->createModelPreset(parsed.input);
+    if (created.result.committed) ++settingsRevision;
+    if (!providerStoreResultSucceeded(created.result)) {
+        sendProviderStoreError(created.result);
+        return;
+    }
+    sendModelPresetResult(created.preset);
+}
+
+void handleModelPresetUpdate()
+{
+    if (!requireProviderMutation()) return;
+    const ModelPresetInputResult parsed = parseModelPresetInput(
+        server.arg("name"), server.arg("model"),
+        server.arg("maximum_output_tokens"));
+    if (!parsed.success) {
+        sendWebJsonError(server, 400, parsed.error);
+        return;
+    }
+    const ModelPresetMutationResult updated =
+        consoleProviderStore->updateModelPreset(
+            std::string(server.arg("id").c_str()), parsed.input);
+    if (updated.result.committed) ++settingsRevision;
+    if (!providerStoreResultSucceeded(updated.result)) {
+        sendProviderStoreError(updated.result);
+        return;
+    }
+    sendModelPresetResult(updated.preset);
+}
+
+void handleModelPresetDelete()
+{
+    if (!requireProviderMutation()) return;
+    const String id = server.arg("id");
+    if (id.isEmpty() || server.arg("confirm_id") != id) {
+        sendWebJsonError(server, 400,
+                         "Model preset deletion confirmation does not match");
+        return;
+    }
+    const ProviderStoreResult deleted =
+        consoleProviderStore->deleteModelPreset(std::string(id.c_str()));
+    if (deleted.committed) ++settingsRevision;
+    if (!providerStoreResultSucceeded(deleted)) {
+        sendProviderStoreError(deleted);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["deleted_preset_id"] = id;
+    sendWebJson(server, 200, document);
+}
+
+void handleModelPresetApply()
+{
+    if (!requireProviderMutation()) return;
+    const std::string id(server.arg("id").c_str());
+    const ModelPresetsResult presets = consoleProviderStore->listModelPresets();
+    if (!providerStoreResultSucceeded(presets.result)) {
+        sendProviderStoreError(presets.result);
+        return;
+    }
+    const auto selected = std::find_if(
+        presets.presets.begin(), presets.presets.end(),
+        [&id](const ModelPresetRecord& preset) { return preset.id == id; });
+    if (selected == presets.presets.end()) {
+        sendWebJsonError(server, 404, "Model preset is unavailable");
+        return;
+    }
+    ProjectDocumentResult current = loadProject(activeProject.summary.id);
+    if (!current.success) {
+        sendWebJsonError(server, 500, current.error);
+        return;
+    }
+    ProjectDocument candidate = std::move(current.project);
+    candidate.model = String(selected->model.c_str());
+    candidate.maximumOutputTokens = selected->maximumOutputTokens;
+    OperationResult saved = saveProject(candidate);
+    if (!saved.success) {
+        sendWebJsonError(server, 500, saved.error);
+        return;
+    }
+    activeProject.model = candidate.model;
+    activeProject.maximumOutputTokens = candidate.maximumOutputTokens;
+    ++projectRevision;
+    ++chatRevision;
+    String warning;
+    current = loadProject(candidate.summary.id);
+    if (!current.success) {
+        warning = "Model preset was applied, but active project reload failed: " +
+                  current.error;
+    } else {
+        activeProject = std::move(current.project);
+    }
+    saved = refreshProjects();
+    if (!saved.success) {
+        if (!warning.isEmpty()) warning += " ";
+        warning += "Project list refresh failed: " + saved.error;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["committed"] = true;
+    document["project_id"] = activeProject.summary.id;
+    document["model"] = candidate.model;
+    document["maximum_output_tokens"] = candidate.maximumOutputTokens;
+    if (!warning.isEmpty()) {
+        document["warning"] = warning;
+    }
+    sendWebJson(server, 200, document);
+}
+
+struct WebSessionLifetimeDecodeResult {
+    bool success;
+    WebSessionLifetime lifetime;
+};
+
+WebSessionLifetimeDecodeResult decodeWebSessionLifetime(const String& value)
+{
+    if (value == "15m") {
+        return {true, WebSessionLifetime::Minutes15};
+    }
+    if (value == "1h") {
+        return {true, WebSessionLifetime::Hour1};
+    }
+    if (value == "8h") {
+        return {true, WebSessionLifetime::Hours8};
+    }
+    if (value == "until_reboot") {
+        return {true, WebSessionLifetime::UntilReboot};
+    }
+    return {false, WebSessionLifetime::Minutes15};
+}
+
+void sendWebSettingsError(int status, const String& error)
+{
+    queueSessionRefreshForManagedResponse();
+    sendWebJsonError(server, status, error);
 }
 
 void handleSettings()
 {
-    if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+    if (!requestHasValidCsrfWithoutRefresh()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const WebSessionLifetimeDecodeResult sessionLifetime =
+        decodeWebSessionLifetime(server.arg("web_session_lifetime"));
+    if (!sessionLifetime.success) {
+        sendWebSettingsError(400, "Web session lifetime is invalid");
+        return;
+    }
+    const bool hasMasterToolPolicy = server.hasArg("master_tool_policy");
+    const bool hasNewChatToolPolicy = server.hasArg("new_chat_tool_policy");
+    if (hasMasterToolPolicy != hasNewChatToolPolicy) {
+        sendWebSettingsError(
+            400,
+            "Master and new-chat tool policies must be submitted together");
+        return;
+    }
+    const String masterToolPolicy = server.arg("master_tool_policy");
+    const String newChatToolPolicy = server.arg("new_chat_tool_policy");
+    const ToolPermissionPolicyDecodeResult decodedMasterToolPolicy =
+        hasMasterToolPolicy
+        ? decodeToolPermissionPolicy(
+              masterToolPolicy.c_str(), masterToolPolicy.length())
+        : ToolPermissionPolicyDecodeResult{
+              consoleSettings.masterToolPolicy, ToolPolicyCodecError::None};
+    const ScopedToolPermissionPolicyDecodeResult decodedNewChatToolPolicy =
+        hasNewChatToolPolicy
+        ? decodeScopedToolPermissionPolicy(
+              newChatToolPolicy.c_str(), newChatToolPolicy.length())
+        : ScopedToolPermissionPolicyDecodeResult{
+              consoleSettings.newChatToolPolicy, ToolPolicyCodecError::None};
+    if (decodedMasterToolPolicy.error != ToolPolicyCodecError::None ||
+        decodedNewChatToolPolicy.error != ToolPolicyCodecError::None) {
+        sendWebSettingsError(400, "Tool permission policy is invalid");
         return;
     }
     Settings updated = consoleSettings;
     const String wifiSsid = server.arg("wifi_ssid");
     const String wifiPassword = server.arg("wifi_password");
     if (wifiSsid.isEmpty() || wifiSsid.length() > 32 || wifiPassword.length() > 63) {
-        sendJsonError(400, "Wi-Fi SSID must contain 1-32 bytes and password at most 63 bytes");
+        sendWebSettingsError(400, "Wi-Fi SSID must contain 1-32 bytes and password at most 63 bytes");
         return;
     }
     if (wifiSsid != updated.wifiSsid) {
@@ -1083,16 +4278,18 @@ void handleSettings()
     } else if (!wifiPassword.isEmpty()) {
         updated.wifiPassword = wifiPassword;
     }
-    String apiKey = server.arg("api_key");
-    apiKey.trim();
-    if (!apiKey.isEmpty()) {
-        updated.apiKey = apiKey;
-    }
-    updated.apiBaseUrl = normalizedBaseUrl(server.arg("api_base_url"));
     updated.model = server.arg("model");
     updated.model.trim();
     if (updated.model.length() > 120) {
-        sendJsonError(400, "Model id must not exceed 120 characters");
+        sendWebSettingsError(400, "Model id must not exceed 120 characters");
+        return;
+    }
+    updated.globalInstructions = server.arg("global_instructions");
+    if (updated.globalInstructions.length() > 2048 ||
+        !isValidUtf8(std::string(updated.globalInstructions.c_str()))) {
+        sendWebSettingsError(
+            400,
+            "Global instructions must be valid UTF-8 and at most 2048 bytes");
         return;
     }
     String sttKey = server.arg("stt_api_key");
@@ -1123,12 +4320,17 @@ void handleSettings()
     updated.ttsModel = server.arg("tts_model");
     updated.ttsVoice = server.arg("tts_voice");
     updated.ttsAutoPlay = server.arg("tts_auto_play") == "1";
+    std::uint32_t historyQuotaMiB = 0;
     std::uint32_t volume = 0;
     std::uint32_t brightness = 0;
     std::uint32_t sleepMinutes = 0;
     std::uint32_t repeatMs = 0;
     std::uint32_t powerProfile = 0;
-    if (!parseUnsignedArgument(server.arg("tts_volume"), volume) || volume > 255 ||
+    if (!parseUnsignedArgument(
+            server.arg("project_chat_history_quota_mib"), historyQuotaMiB) ||
+        (historyQuotaMiB != 0 &&
+         (historyQuotaMiB < 2 || historyQuotaMiB > 4095)) ||
+        !parseUnsignedArgument(server.arg("tts_volume"), volume) || volume > 255 ||
         !parseUnsignedArgument(server.arg("display_brightness"), brightness) ||
         brightness < 32 || brightness > 255 ||
         !parseUnsignedArgument(server.arg("screen_sleep_minutes"), sleepMinutes) ||
@@ -1137,7 +4339,7 @@ void handleSettings()
         repeatMs > UINT16_MAX ||
         !parseUnsignedArgument(server.arg("power_profile"), powerProfile) ||
         powerProfile > 2) {
-        sendJsonError(400, "Device preference values are outside their supported ranges");
+        sendWebSettingsError(400, "Device preference values are outside their supported ranges");
         return;
     }
     updated.ttsVolume = static_cast<std::uint8_t>(volume);
@@ -1145,25 +4347,35 @@ void handleSettings()
     updated.screenSleepMinutes = static_cast<std::uint16_t>(sleepMinutes);
     updated.keyboardRepeatMs = static_cast<std::uint16_t>(repeatMs);
     updated.powerProfile = static_cast<std::uint8_t>(powerProfile);
+    updated.projectChatHistoryQuotaBytes = historyQuotaMiB * 1024U * 1024U;
+    updated.webSessionLifetime = sessionLifetime.lifetime;
+    updated.masterToolPolicy = decodedMasterToolPolicy.policy;
+    updated.newChatToolPolicy = decodedNewChatToolPolicy.policy;
     const OperationResult result = saveSettings(updated);
     if (!result.success) {
-        sendJsonError(400, result.error);
+        sendWebSettingsError(400, result.error);
         return;
     }
     consoleSettings = updated;
+    queueSessionRefreshForManagedResponse();
+    ++settingsRevision;
+    ++chatRevision;
     consoleStatus = "Settings saved; Wi-Fi changes apply after closing the console";
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleClearChat()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    OperationResult result = clearChatHistory(activeChat.summary.id);
+    const std::uint32_t startedAt = millis();
+    OperationResult result = clearProjectChatHistory(
+        activeProject.summary.id, activeChat.summary.id);
+    recordWebSdWrite(millis() - startedAt);
     if (result.success) {
         result = loadActiveChat(activeChat.summary.id);
     }
@@ -1171,31 +4383,34 @@ void handleClearChat()
         result = refreshChats();
     }
     if (!result.success) {
-        sendJsonError(500, result.error);
+        sendWebJsonError(server, 500, result.error);
         return;
     }
+    clearFailedWebRequestInstructions();
     consoleStatus = "Chat messages cleared";
-    renderConsoleChat();
+    renderConsoleScreen();
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleArchivedMessages()
 {
     if (!sessionIsActive()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     std::uint32_t offset = 0;
     if (!parseUnsignedArgument(server.arg("offset"), offset)) {
-        sendJsonError(400, "Archive offset must be an unsigned integer");
+        sendWebJsonError(server, 400, "Archive offset must be an unsigned integer");
         return;
     }
-    const ArchivedMessagesPageResult result = readArchivedChatMessages(
-        activeChat.summary.id, offset, 8, 12000);
+    const std::uint32_t startedAt = millis();
+    const ArchivedMessagesPageResult result = readProjectChatMessages(
+        activeProject.summary.id, activeChat.summary.id, offset, 8, 12000);
+    recordWebSdRead(millis() - startedAt);
     if (!result.success) {
-        sendJsonError(500, result.error);
+        sendWebJsonError(server, 500, result.error);
         return;
     }
     JsonDocument document;
@@ -1208,33 +4423,106 @@ void handleArchivedMessages()
         item["role"] = message.role;
         item["content"] = message.content;
     }
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
+}
+
+void handleSearchSources()
+{
+    if (!sessionIsActive()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const std::uint32_t startedAt = millis();
+    const WebSearchSourcesResult result = loadLatestWebSearchSources();
+    recordWebSdRead(millis() - startedAt);
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["source_kind"] = "latest_device_cache";
+    document["query"] = result.query;
+    JsonArray sources = document["sources"].to<JsonArray>();
+    for (const WebSearchSource& source : result.sources) {
+        JsonObject item = sources.add<JsonObject>();
+        item["title"] = source.title;
+        item["url"] = source.url;
+        item["snippet"] = source.snippet;
+    }
+    sendWebJson(server, 200, document);
+}
+
+void handleWifiScan()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    beginWebConsoleForegroundWork();
+    const WifiScanResult result = scanWifiNetworks();
+    endWebConsoleForegroundWork();
+    if (!result.success) {
+        sendWebJsonError(server, 503, result.error);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    JsonArray networks = document["networks"].to<JsonArray>();
+    for (const WifiNetwork& network : result.networks) {
+        JsonObject item = networks.add<JsonObject>();
+        item["ssid"] = network.ssid;
+        item["rssi"] = network.rssi;
+        item["secured"] = network.secured;
+    }
+    sendWebJson(server, 200, document);
 }
 
 void handleModels()
 {
     if (!sessionIsActive()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    const ModelsResult result = fetchModels(consoleSettings);
+    const String scope = server.arg("scope");
+    const String explicitProfileId = server.arg("profile_id");
+    if ((!scope.isEmpty() && scope != "global" && scope != "project") ||
+        (scope == "project" && !explicitProfileId.isEmpty())) {
+        sendWebJsonError(server, 400, "Model discovery scope is invalid");
+        return;
+    }
+    const String profileId = scope == "project"
+        ? activeProject.apiProfile : explicitProfileId;
+    ProviderSettingsResult provider = resolveConsoleProviderId(profileId);
+    if (!providerStoreResultSucceeded(provider.result)) {
+        sendWebJsonError(
+            server, 409,
+            "API profile unavailable: " +
+                String(provider.result.message.c_str()));
+        return;
+    }
+    beginWebConsoleForegroundWork();
+    const ModelsResult result = fetchModels(provider.settings);
+    endWebConsoleForegroundWork();
     if (!result.success) {
-        sendJsonError(502, result.error);
+        sendWebJsonError(server, 502, result.error);
         return;
     }
     JsonDocument document;
     document["ok"] = true;
+    document["profile_id"] = provider.authority.profileId;
+    document["authority_revision"] = provider.authority.revision;
     JsonArray models = document["models"].to<JsonArray>();
     for (const auto& model : result.models) {
         models.add(model);
     }
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleDiagnosticsDownload()
 {
     if (!sessionIsActive()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     String report;
@@ -1263,15 +4551,33 @@ void handleDiagnosticsDownload()
     server.send(200, "text/plain; charset=utf-8", report);
 }
 
+void handleDiagnosticMetrics()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const String enabled = server.arg("enabled");
+    if (enabled != "0" && enabled != "1") {
+        sendWebJsonError(server, 400, "Diagnostic metrics enabled must be 0 or 1");
+        return;
+    }
+    setWebDiagnosticsEnabled(enabled == "1");
+    JsonDocument document;
+    document["ok"] = true;
+    document["enabled"] = webDiagnosticsEnabled();
+    sendWebJson(server, 200, document);
+}
+
 void handlePythonStart()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     const PythonModeStatus status = inspectPythonMode();
     if (!status.partitionLayoutReady || !status.pythonImageReady) {
-        sendJsonError(409, status.error);
+        sendWebJsonError(server, 409, status.error);
         return;
     }
     String password;
@@ -1288,7 +4594,7 @@ void handlePythonStart()
         result = activatePythonMode();
     }
     if (!result.success) {
-        sendJsonError(409, result.error);
+        sendWebJsonError(server, 409, result.error);
         return;
     }
     JsonDocument document;
@@ -1296,27 +4602,34 @@ void handlePythonStart()
     document["restarting"] = true;
     document["address"] = "http://" + WiFi.localIP().toString() + "/";
     document["handoff_token"] = handoffToken;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
     handoffToken = "";
+    clearSessionAuthentication();
     pythonRestartRequested = true;
 }
 
 void handleSshSettings()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    if (webSshProfileStateLocked()) {
+        sendWebJsonError(
+            server, 409,
+            "Disconnect the SSH session or resolve the host-key mismatch before changing profiles");
         return;
     }
     std::uint32_t port = 0;
     if (!parseUnsignedArgument(server.arg("port"), port) || port == 0 || port > 65535) {
-        sendJsonError(400, "SSH port must be between 1 and 65535");
+        sendWebJsonError(server, 400, "SSH port must be between 1 and 65535");
         return;
     }
     const bool create = server.arg("create") == "1";
     SshProfile profile = {"", "", 22, "", "", SshAuthMode::Password, ""};
     const OperationResult loaded = create ? OperationResult{true, ""} : loadSshProfile(profile);
     if (!loaded.success) {
-        sendJsonError(500, loaded.error);
+        sendWebJsonError(server, 500, loaded.error);
         return;
     }
     profile.name = server.arg("name");
@@ -1329,7 +4642,7 @@ void handleSshSettings()
     } else if (authMode == "key") {
         profile.authMode = SshAuthMode::PrivateKey;
     } else {
-        sendJsonError(400, "SSH auth mode must be 'password' or 'key'");
+        sendWebJsonError(server, 400, "SSH auth mode must be 'password' or 'key'");
         return;
     }
     if (server.arg("replace_password") == "1") {
@@ -1339,190 +4652,438 @@ void handleSshSettings()
         profile.privateKeyPassphrase = server.arg("key_passphrase");
     }
     OperationResult saved;
+    const std::uint32_t saveStartedAt = millis();
     if (create) {
-        std::vector<SshProfile> profiles;
+        std::vector<SshProfileSummary> profiles;
         std::size_t selectedIndex = 0;
-        saved = loadSshProfiles(profiles, selectedIndex);
+        saved = loadSshProfileSummaries(profiles, selectedIndex);
         if (saved.success) saved = saveSshProfileAt(profile, profiles.size());
     } else {
         saved = saveSshProfile(profile);
     }
+    recordWebSdWrite(millis() - saveStartedAt);
     profile.password = "";
     profile.privateKeyPassphrase = "";
     if (!saved.success) {
-        sendJsonError(400, saved.error);
+        sendWebJsonError(server, 400, saved.error);
+        return;
+    }
+    const OperationResult refreshed = refreshSshProfiles();
+    if (!refreshed.success) {
+        sendWebJsonError(server, 500, refreshed.error);
         return;
     }
     consoleStatus = "SSH profile saved";
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleSshSelect()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    if (webSshProfileStateLocked()) {
+        sendWebJsonError(
+            server, 409,
+            "Disconnect the SSH session or resolve the host-key mismatch before selecting a profile");
         return;
     }
     std::uint32_t index = 0;
     if (!parseUnsignedArgument(server.arg("index"), index)) {
-        sendJsonError(400, "SSH profile index must be an unsigned integer");
+        sendWebJsonError(server, 400, "SSH profile index must be an unsigned integer");
         return;
     }
+    const std::uint32_t startedAt = millis();
     const OperationResult result = selectSshProfile(index);
+    recordWebSdWrite(millis() - startedAt);
     if (!result.success) {
-        sendJsonError(400, result.error);
+        sendWebJsonError(server, 400, result.error);
+        return;
+    }
+    const OperationResult refreshed = refreshSshProfiles();
+    if (!refreshed.success) {
+        sendWebJsonError(server, 500, refreshed.error);
         return;
     }
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleSshDelete()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    if (webSshProfileStateLocked()) {
+        sendWebJsonError(
+            server, 409,
+            "Disconnect the SSH session or resolve the host-key mismatch before deleting a profile");
         return;
     }
     std::uint32_t index = 0;
     if (!parseUnsignedArgument(server.arg("index"), index)) {
-        sendJsonError(400, "SSH profile index must be an unsigned integer");
+        sendWebJsonError(server, 400, "SSH profile index must be an unsigned integer");
         return;
     }
+    const std::uint32_t startedAt = millis();
     const OperationResult result = deleteSshProfile(index);
+    recordWebSdWrite(millis() - startedAt);
     if (!result.success) {
-        sendJsonError(400, result.error);
+        sendWebJsonError(server, 400, result.error);
+        return;
+    }
+    const OperationResult refreshed = refreshSshProfiles();
+    if (!refreshed.success) {
+        sendWebJsonError(server, 500, refreshed.error);
         return;
     }
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
-OperationResult finishWebSshStart()
+bool webSshCancellationRequested()
 {
-    OperationResult result = webSshClient.authenticate(webSshProfile, 60000);
-    if (result.success) result = webSshClient.openTerminal(120, 36, 30000);
-    if (!result.success) {
-        webSshClient.close();
-        webSshProfile.password = "";
-        webSshProfile.privateKeyPassphrase = "";
-        webSshTerminalOpen = false;
-        return result;
+    portENTER_CRITICAL(&webSshStateMux);
+    const bool requested = webSshCancelRequested;
+    portEXIT_CRITICAL(&webSshStateMux);
+    return requested;
+}
+
+void completeWebSshWorker(WebSshStage stage, const String& error,
+                          bool closeConnection)
+{
+    if (closeConnection) {
+        clearWebSshConnection();
+    }
+    publishWebSshStage(stage, error);
+    portENTER_CRITICAL(&webSshStateMux);
+    webSshWorkerStackFree = uxTaskGetStackHighWaterMark(nullptr);
+    webSshTask = nullptr;
+    webSshCancelRequested = false;
+    portEXIT_CRITICAL(&webSshStateMux);
+}
+
+void runWebSshWorker(void* parameter)
+{
+    vTaskDelay(pdMS_TO_TICKS(25));
+    const bool authenticateOnly = reinterpret_cast<std::uintptr_t>(parameter) == 1U;
+    OperationResult result = {true, ""};
+    if (!authenticateOnly) {
+        publishWebSshStage(WebSshStage::Connecting, "");
+        const std::uint32_t startedAt = millis();
+        result = webSshClient.connectPrepared(
+            webSshProfile, 10000, []() { return false; });
+        const std::uint32_t durationMs = millis() - startedAt;
+        portENTER_CRITICAL(&webSshStateMux);
+        webSshConnectMs = durationMs;
+        portEXIT_CRITICAL(&webSshStateMux);
+        if (!result.success || webSshCancellationRequested()) {
+            completeWebSshWorker(
+                webSshCancellationRequested() ? WebSshStage::Idle : WebSshStage::Failed,
+                webSshCancellationRequested() ? String() : result.error, true);
+            vTaskDelete(nullptr);
+            return;
+        }
+        const SshTrustResult trust = checkTrustedSshHost(
+            webSshProfile.host, webSshProfile.port, webSshClient.fingerprint());
+        if (!trust.success) {
+            completeWebSshWorker(WebSshStage::Failed, trust.error, true);
+            vTaskDelete(nullptr);
+            return;
+        }
+        if (trust.found && !trust.matches) {
+            const String fingerprint = webSshClient.fingerprint();
+            const String keyType = webSshClient.hostKeyType();
+            portENTER_CRITICAL(&webSshStateMux);
+            std::snprintf(webSshFingerprint, sizeof(webSshFingerprint), "%s",
+                          fingerprint.c_str());
+            std::snprintf(webSshHostKeyType, sizeof(webSshHostKeyType), "%s",
+                          keyType.c_str());
+            webSshHostChanged = true;
+            webSshAwaitingTrust = false;
+            portEXIT_CRITICAL(&webSshStateMux);
+            completeWebSshWorker(
+                WebSshStage::Failed,
+                "SSH host key changed; connection blocked; forget the trusted host key before reconnecting",
+                true);
+            vTaskDelete(nullptr);
+            return;
+        }
+        if (!trust.found) {
+            const String fingerprint = webSshClient.fingerprint();
+            const String keyType = webSshClient.hostKeyType();
+            portENTER_CRITICAL(&webSshStateMux);
+            std::snprintf(webSshFingerprint, sizeof(webSshFingerprint), "%s",
+                          fingerprint.c_str());
+            std::snprintf(webSshHostKeyType, sizeof(webSshHostKeyType), "%s",
+                          keyType.c_str());
+            webSshHostChanged = false;
+            webSshAwaitingTrust = true;
+            webSshStage = WebSshStage::AwaitingTrust;
+            webSshWorkerStackFree = uxTaskGetStackHighWaterMark(nullptr);
+            webSshTask = nullptr;
+            portEXIT_CRITICAL(&webSshStateMux);
+            vTaskDelete(nullptr);
+            return;
+        }
+    }
+    publishWebSshStage(WebSshStage::Authenticating, "");
+    std::uint32_t startedAt = millis();
+    result = webSshClient.authenticate(webSshProfile, 10000);
+    const std::uint32_t authenticateMs = millis() - startedAt;
+    portENTER_CRITICAL(&webSshStateMux);
+    webSshAuthenticateMs = authenticateMs;
+    portEXIT_CRITICAL(&webSshStateMux);
+    if (!result.success || webSshCancellationRequested()) {
+        completeWebSshWorker(
+            webSshCancellationRequested() ? WebSshStage::Idle : WebSshStage::Failed,
+            webSshCancellationRequested() ? String() : result.error, true);
+        vTaskDelete(nullptr);
+        return;
+    }
+    publishWebSshStage(WebSshStage::Opening, "");
+    startedAt = millis();
+    result = webSshClient.openTerminal(120, 36, 10000);
+    const std::uint32_t openMs = millis() - startedAt;
+    portENTER_CRITICAL(&webSshStateMux);
+    webSshOpenMs = openMs;
+    portEXIT_CRITICAL(&webSshStateMux);
+    if (!result.success || webSshCancellationRequested()) {
+        completeWebSshWorker(
+            webSshCancellationRequested() ? WebSshStage::Idle : WebSshStage::Failed,
+            webSshCancellationRequested() ? String() : result.error, true);
+        vTaskDelete(nullptr);
+        return;
     }
     webSshAwaitingTrust = false;
     webSshTerminalOpen = true;
+    webSshProfile.password = "";
+    webSshProfile.privateKeyPassphrase = "";
+    completeWebSshWorker(WebSshStage::Connected, "", false);
+    if (webDiagnosticsEnabled()) {
+        Serial.printf("SSH_METRIC connect_ms=%u auth_ms=%u open_ms=%u heap=%u\n",
+                      static_cast<unsigned int>(webSshConnectMs),
+                      static_cast<unsigned int>(webSshAuthenticateMs),
+                      static_cast<unsigned int>(webSshOpenMs),
+                      static_cast<unsigned int>(ESP.getFreeHeap()));
+    }
+    vTaskDelete(nullptr);
+}
+
+OperationResult startWebSshWorker(bool authenticateOnly)
+{
+    portENTER_CRITICAL(&webSshStateMux);
+    webSshCancelRequested = false;
+    portEXIT_CRITICAL(&webSshStateMux);
+    TaskHandle_t task = nullptr;
+    vTaskSuspendAll();
+    const BaseType_t created = xTaskCreate(
+        runWebSshWorker, "web-ssh-connect", 6144,
+        reinterpret_cast<void*>(authenticateOnly ? 1U : 0U), 1, &task);
+    if (created == pdPASS && task != nullptr) {
+        portENTER_CRITICAL(&webSshStateMux);
+        webSshTask = task;
+        portEXIT_CRITICAL(&webSshStateMux);
+    }
+    xTaskResumeAll();
+    if (created != pdPASS || task == nullptr) {
+        return {false, "Failed to allocate the background SSH connection task"};
+    }
     return {true, ""};
 }
 
 void handleSshStart()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    webSshClient.close();
-    webSshTerminalOpen = false;
-    webSshAwaitingTrust = false;
-    const OperationResult loaded = loadSshProfile(webSshProfile);
+    if (webSshProfileStateLocked()) {
+        sendWebJsonError(server, 409,
+                         "Disconnect SSH or resolve the blocked host key before reconnecting");
+        return;
+    }
+    clearWebSshConnection();
+    clearWebSshAuthorityCapture();
+    publishWebSshStage(WebSshStage::Idle, "");
+    const std::uint32_t loadStartedAt = millis();
+    std::uint64_t loadedProfileId = 0;
+    const OperationResult loaded = loadSshProfileWithId(
+        webSshProfile, loadedProfileId);
+    recordWebSdRead(millis() - loadStartedAt);
     if (!loaded.success || !sshProfileIsComplete(webSshProfile)) {
-        sendJsonError(400, loaded.success ? String("Selected SSH profile is incomplete") : loaded.error);
+        webSshProfile.password = "";
+        webSshProfile.privateKeyPassphrase = "";
+        sendWebJsonError(server, 400, loaded.success ? String("Selected SSH profile is incomplete") : loaded.error);
         return;
     }
-    OperationResult result = webSshClient.connect(webSshProfile, 60000);
+    webSshProfileId = loadedProfileId;
+    webSshProfileHost = webSshProfile.host;
+    webSshProfilePort = webSshProfile.port;
+    portENTER_CRITICAL(&webSshStateMux);
+    webSshConnectMs = 0;
+    webSshAuthenticateMs = 0;
+    webSshOpenMs = 0;
+    webSshWorkerStackFree = 0;
+    webSshFingerprint[0] = '\0';
+    webSshHostKeyType[0] = '\0';
+    webSshHostChanged = false;
+    portEXIT_CRITICAL(&webSshStateMux);
+    OperationResult result = webSshClient.prepareConnection();
+    if (result.success) {
+        result = startWebSshWorker(false);
+    }
     if (!result.success) {
-        sendJsonError(502, result.error);
-        return;
-    }
-    const SshTrustResult trust = checkTrustedSshHost(
-        webSshProfile.host, webSshProfile.port, webSshClient.fingerprint());
-    if (!trust.success) {
-        webSshClient.close();
-        sendJsonError(500, trust.error);
+        clearWebSshConnection();
+        clearWebSshAuthorityCapture();
+        sendWebJsonError(server, 500, result.error);
         return;
     }
     JsonDocument document;
     document["ok"] = true;
-    if (!trust.found || !trust.matches) {
-        webSshAwaitingTrust = true;
-        document["trust_required"] = true;
-        document["changed"] = trust.found && !trust.matches;
-        document["host"] = webSshProfile.host;
-        document["port"] = webSshProfile.port;
-        document["key_type"] = webSshClient.hostKeyType();
-        document["fingerprint"] = webSshClient.fingerprint();
-        document["open"] = false;
-        sendJson(200, document);
-        return;
-    }
-    result = finishWebSshStart();
-    if (!result.success) {
-        sendJsonError(502, result.error);
-        return;
-    }
-    document["open"] = true;
-    sendJson(200, document);
+    document["stage"] = "connecting";
+    sendWebJson(server, 202, document);
 }
 
 void handleSshTrust()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    if (!webSshAwaitingTrust || server.arg("fingerprint") != webSshClient.fingerprint()) {
-        sendJsonError(409, "SSH trust request does not match the pending connection");
+    if (!webSshAwaitingTrust || server.arg("fingerprint") != webSshFingerprint) {
+        sendWebJsonError(server, 409, "SSH trust request does not match the pending connection");
         return;
     }
     OperationResult result = trustSshHost(webSshProfile.host, webSshProfile.port,
-                                          webSshClient.fingerprint());
-    if (result.success) result = finishWebSshStart();
+                                          webSshFingerprint);
+    if (result.success) {
+        webSshAwaitingTrust = false;
+        result = startWebSshWorker(true);
+    }
     if (!result.success) {
-        sendJsonError(502, result.error);
+        const SshTrustResult trust = checkTrustedSshHost(
+            webSshProfile.host, webSshProfile.port, webSshFingerprint);
+        portENTER_CRITICAL(&webSshStateMux);
+        webSshHostChanged = trust.success && trust.found && !trust.matches;
+        portEXIT_CRITICAL(&webSshStateMux);
+        clearWebSshConnection();
+        publishWebSshStage(WebSshStage::Failed, result.error);
+        sendWebJsonError(server, 502, result.error);
         return;
     }
     JsonDocument document;
     document["ok"] = true;
-    document["open"] = true;
-    sendJson(200, document);
+    document["stage"] = "authenticating";
+    sendWebJson(server, 202, document);
+}
+
+void handleSshForget()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    if (webSshTaskIsRunning() || !webSshHostChanged ||
+        webSshAwaitingTrust || webSshTerminalOpen || webSshProfileId == 0 ||
+        webSshProfileHost.isEmpty() || webSshProfilePort == 0) {
+        sendWebJsonError(server, 409,
+                         "No blocked selected-host mismatch is available to forget");
+        return;
+    }
+    SshAuthoritySummary authority = {};
+    const OperationResult loaded = loadSelectedSshAuthority(authority);
+    if (!loaded.success) {
+        sendWebJsonError(server, 409, loaded.error);
+        return;
+    }
+    if (authority.profileId != webSshProfileId ||
+        authority.host != webSshProfileHost ||
+        authority.port != webSshProfilePort) {
+        sendWebJsonError(
+            server, 409,
+            "Selected SSH authority changed; the retained host key was not modified");
+        return;
+    }
+    const OperationResult forgotten = forgetTrustedSshHost(
+        webSshProfileHost, webSshProfilePort);
+    if (!forgotten.success) {
+        sendWebJsonError(server, 500, forgotten.error);
+        return;
+    }
+    clearWebSshConnection();
+    clearWebSshAuthorityCapture();
+    publishWebSshStage(WebSshStage::Idle, "");
+    JsonDocument document;
+    document["ok"] = true;
+    document["stage"] = "idle";
+    sendWebJson(server, 200, document);
 }
 
 void handleSshInput()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     const String data = server.arg("data");
     if (!webSshTerminalOpen || !webSshClient.isOpen() || data.isEmpty() || data.length() > 512) {
-        sendJsonError(409, "SSH terminal is closed or input is outside the 1-512 byte limit");
+        sendWebJsonError(server, 409, "SSH terminal is closed or input is outside the 1-512 byte limit");
         return;
     }
     const OperationResult result = webSshClient.write(
         reinterpret_cast<const std::uint8_t*>(data.c_str()), data.length(), 5000);
     if (!result.success) {
-        sendJsonError(502, result.error);
+        sendWebJsonError(server, 502, result.error);
         return;
     }
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
+}
+
+void handleSshResize()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    std::uint32_t columns = 0;
+    std::uint32_t rows = 0;
+    if (!webSshTerminalOpen || !webSshClient.isOpen() ||
+        !parseUnsignedArgument(server.arg("columns"), columns) ||
+        !parseUnsignedArgument(server.arg("rows"), rows)) {
+        sendWebJsonError(server, 409,
+                         "SSH terminal is closed or resize dimensions are invalid");
+        return;
+    }
+    const OperationResult result = webSshClient.resizeTerminal(columns, rows, 3000);
+    if (!result.success) {
+        sendWebJsonError(server, 502, result.error);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    sendWebJson(server, 200, document);
 }
 
 void handleSshOutput()
 {
     if (!sessionIsActive()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     std::uint8_t buffer[2048] = {};
     const int readBytes = webSshTerminalOpen ? webSshClient.read(buffer, sizeof(buffer)) : 0;
     if (readBytes < 0) {
-        webSshClient.close();
-        webSshTerminalOpen = false;
-        sendJsonError(502, "SSH terminal read failed with code " + String(readBytes));
+        closeWebSshConnection();
+        sendWebJsonError(server, 502, "SSH terminal read failed with code " + String(readBytes));
         return;
     }
     JsonDocument document;
@@ -1530,31 +5091,30 @@ void handleSshOutput()
     const bool open = webSshTerminalOpen && webSshClient.isOpen();
     document["open"] = open;
     if (readBytes > 0) {
-        document["output"] = String(reinterpret_cast<const char*>(buffer), readBytes);
+        const String encoded = base64::encode(buffer, static_cast<std::size_t>(readBytes));
+        if (encoded == "-FAIL-") {
+            sendWebJsonError(server, 500, "Failed to encode SSH terminal output");
+            return;
+        }
+        document["output_base64"] = encoded;
     }
     if (!open) {
-        webSshClient.close();
-        webSshTerminalOpen = false;
-        webSshProfile.password = "";
-        webSshProfile.privateKeyPassphrase = "";
+        closeWebSshConnection();
     }
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleSshStop()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    webSshClient.close();
-    webSshTerminalOpen = false;
-    webSshAwaitingTrust = false;
-    webSshProfile.password = "";
-    webSshProfile.privateKeyPassphrase = "";
+    closeWebSshConnection();
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    document["stage"] = webSshTaskIsRunning() ? "stopping" : "idle";
+    sendWebJson(server, webSshTaskIsRunning() ? 202 : 200, document);
 }
 
 OperationResult ensureWebSftp()
@@ -1565,20 +5125,37 @@ OperationResult ensureWebSftp()
     return webSshClient.openSftp(30000);
 }
 
+OperationResult ensureWebSftpControlled(
+    std::uint32_t startedAt,
+    const std::function<bool()>& isCancelled)
+{
+    if (!webSshTerminalOpen || !webSshClient.isOpen()) {
+        return {false, "Connect the SSH terminal before using SFTP"};
+    }
+    const std::uint32_t remainingMs = remainingWebSftpTransferMs(startedAt);
+    if (remainingMs == 0) {
+        return {false, "SFTP transfer timed out before opening the subsystem"};
+    }
+    return webSshClient.openSftpControlled(remainingMs, isCancelled);
+}
+
 void handleSftpList()
 {
     if (!sessionIsActive()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
+    beginWebConsoleForegroundWork();
     const OperationResult opened = ensureWebSftp();
     if (!opened.success) {
-        sendJsonError(409, opened.error);
+        endWebConsoleForegroundWork();
+        sendWebJsonError(server, 409, opened.error);
         return;
     }
     const SftpEntriesResult result = webSshClient.listSftpDirectory(server.arg("path"), 30000);
+    endWebConsoleForegroundWork();
     if (!result.success) {
-        sendJsonError(502, result.error);
+        sendWebJsonError(server, 502, result.error);
         return;
     }
     JsonDocument document;
@@ -1590,43 +5167,107 @@ void handleSftpList()
         item["directory"] = entry.directory;
         item["size"] = entry.size;
     }
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleSftpDownload()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    OperationResult result = ensureWebSftp();
-    if (result.success) result = webSshClient.downloadSftpFile(
-        server.arg("path"), server.arg("name"), 60000);
+    const String overwriteArgument = server.arg("overwrite");
+    if (overwriteArgument != "0" && overwriteArgument != "1") {
+        sendWebJsonError(server, 400, "SFTP overwrite must be exactly 0 or 1");
+        return;
+    }
+    NetworkClient& requestClient = server.client();
+    const std::function<bool()> isCancelled = [&requestClient]() {
+        return webRequestClientDisconnected(requestClient);
+    };
+    const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
+    const OperationResult opened = ensureWebSftpControlled(startedAt, isCancelled);
+    if (!opened.success) {
+        endWebConsoleForegroundWork();
+        sendWebJsonError(server, 502, opened.error);
+        return;
+    }
+    const std::uint32_t remainingMs = remainingWebSftpTransferMs(startedAt);
+    if (remainingMs == 0) {
+        endWebConsoleForegroundWork();
+        sendWebJsonError(server, 502, "SFTP download timed out before transfer");
+        return;
+    }
+    const SftpMutationResult transferred =
+        webSshClient.downloadSftpFileControlled(
+            server.arg("path"), server.arg("name"), overwriteArgument == "1",
+            remainingMs, isCancelled);
+    endWebConsoleForegroundWork();
+    recordWebSdWrite(millis() - startedAt);
+    if (!transferred.success) {
+        const String error = transferred.outcomeUnknown
+            ? String("SFTP download outcome is unknown; inspect both paths before retrying: ") +
+                  transferred.error
+            : transferred.error;
+        sendWebJsonError(server, 502, error);
+        return;
+    }
+    OperationResult result = refreshFiles();
     if (!result.success) {
-        sendJsonError(502, result.error);
+        sendWebJsonError(server, 500, result.error);
         return;
     }
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleSftpUpload()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    OperationResult result = ensureWebSftp();
-    if (result.success) result = webSshClient.uploadSftpFile(
-        server.arg("name"), server.arg("path"), 60000);
-    if (!result.success) {
-        sendJsonError(502, result.error);
+    const String overwriteArgument = server.arg("overwrite");
+    if (overwriteArgument != "0" && overwriteArgument != "1") {
+        sendWebJsonError(server, 400, "SFTP overwrite must be exactly 0 or 1");
+        return;
+    }
+    NetworkClient& requestClient = server.client();
+    const std::function<bool()> isCancelled = [&requestClient]() {
+        return webRequestClientDisconnected(requestClient);
+    };
+    const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
+    const OperationResult opened = ensureWebSftpControlled(startedAt, isCancelled);
+    if (!opened.success) {
+        endWebConsoleForegroundWork();
+        sendWebJsonError(server, 502, opened.error);
+        return;
+    }
+    const std::uint32_t remainingMs = remainingWebSftpTransferMs(startedAt);
+    if (remainingMs == 0) {
+        endWebConsoleForegroundWork();
+        sendWebJsonError(server, 502, "SFTP upload timed out before transfer");
+        return;
+    }
+    const SftpMutationResult transferred =
+        webSshClient.uploadSftpFileControlled(
+            server.arg("name"), server.arg("path"), overwriteArgument == "1",
+            remainingMs, isCancelled);
+    endWebConsoleForegroundWork();
+    if (!transferred.success) {
+        const String error = transferred.outcomeUnknown
+            ? String("SFTP upload outcome is unknown; inspect both paths before retrying: ") +
+                  transferred.error
+            : transferred.error;
+        sendWebJsonError(server, 502, error);
         return;
     }
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleSshKeyUploadData()
@@ -1635,8 +5276,22 @@ void handleSshKeyUploadData()
     if (upload.status == UPLOAD_FILE_START) {
         sshKeyUploadError = "";
         sshKeyUploadBytes = 0;
-        if (!requestHasValidCsrf()) {
+        sshKeyUploadProfileId = 0;
+        if (!requestHasValidCsrfWithoutRefresh()) {
             sshKeyUploadError = "Authentication required";
+            return;
+        }
+        recordSessionActivityForRequest();
+        beginWebConsoleForegroundWork();
+        if (webSshProfileStateLocked()) {
+            sshKeyUploadError =
+                "Disconnect the SSH session or resolve the host-key mismatch before installing a private key";
+            return;
+        }
+        const OperationResult storage = requireSdWriteAccess(
+            0, kStorageOperationalFloorBytes);
+        if (!storage.success) {
+            sshKeyUploadError = storage.error;
             return;
         }
         const OperationResult initialized = initializeSshStorage();
@@ -1644,6 +5299,16 @@ void handleSshKeyUploadData()
             sshKeyUploadError = initialized.error;
             return;
         }
+        std::vector<SshProfileSummary> profiles;
+        std::size_t selected = 0;
+        const OperationResult loaded = loadSshProfileSummaries(profiles, selected);
+        if (!loaded.success || profiles.empty() || selected >= profiles.size()) {
+            sshKeyUploadError = loaded.success
+                ? String("Select an SSH profile before installing its private key")
+                : loaded.error;
+            return;
+        }
+        sshKeyUploadProfileId = profiles[selected].id;
         SD.remove(kSshKeyUploadPath);
         sshKeyUploadFile = SD.open(kSshKeyUploadPath, FILE_WRITE);
         if (!sshKeyUploadFile) {
@@ -1655,19 +5320,47 @@ void handleSshKeyUploadData()
         if (!sshKeyUploadError.isEmpty()) {
             return;
         }
+        const OperationResult storage = requireSdWriteAccess(
+            0, kStorageOperationalFloorBytes);
+        if (!storage.success) {
+            sshKeyUploadError = storage.error;
+            if (sshKeyUploadFile) {
+                sshKeyUploadFile.close();
+            }
+            const OperationResult cleanupStorage = requireSdWriteAccess(0, 0);
+            if (!cleanupStorage.success) {
+                sshKeyUploadError += String("; temporary upload cleanup failed: ") +
+                    cleanupStorage.error;
+            } else if (!SD.remove(kSshKeyUploadPath)) {
+                sshKeyUploadError += "; temporary upload cleanup failed";
+            }
+            return;
+        }
         if (!sshKeyUploadFile || upload.currentSize > 16384 - sshKeyUploadBytes) {
             sshKeyUploadError = "SSH private key exceeds 16384 bytes";
             if (sshKeyUploadFile) {
                 sshKeyUploadFile.close();
             }
-            SD.remove(kSshKeyUploadPath);
+            const OperationResult cleanupStorage = requireSdWriteAccess(0, 0);
+            if (!cleanupStorage.success) {
+                sshKeyUploadError += String("; temporary upload cleanup failed: ") +
+                    cleanupStorage.error;
+            } else if (!SD.remove(kSshKeyUploadPath)) {
+                sshKeyUploadError += "; temporary upload cleanup failed";
+            }
             return;
         }
         const std::size_t written = sshKeyUploadFile.write(upload.buf, upload.currentSize);
         if (written != upload.currentSize) {
             sshKeyUploadError = "microSD did not accept the complete SSH key chunk";
             sshKeyUploadFile.close();
-            SD.remove(kSshKeyUploadPath);
+            const OperationResult cleanupStorage = requireSdWriteAccess(0, 0);
+            if (!cleanupStorage.success) {
+                sshKeyUploadError += String("; temporary upload cleanup failed: ") +
+                    cleanupStorage.error;
+            } else if (!SD.remove(kSshKeyUploadPath)) {
+                sshKeyUploadError += "; temporary upload cleanup failed";
+            }
             return;
         }
         sshKeyUploadBytes += written;
@@ -1677,11 +5370,37 @@ void handleSshKeyUploadData()
         if (!sshKeyUploadError.isEmpty()) {
             return;
         }
+        OperationResult storage = requireSdWriteAccess(
+            0, kStorageOperationalFloorBytes);
+        if (!storage.success) {
+            sshKeyUploadError = storage.error;
+            if (sshKeyUploadFile) {
+                sshKeyUploadFile.close();
+            }
+            return;
+        }
         sshKeyUploadFile.flush();
         sshKeyUploadFile.close();
-        const OperationResult installed = installSshPrivateKey(kSshKeyUploadPath);
-        SD.remove(kSshKeyUploadPath);
-        if (!installed.success) {
+        storage = requireSdWriteAccess(0, kStorageOperationalFloorBytes);
+        if (!storage.success) {
+            sshKeyUploadError = storage.error;
+            return;
+        }
+        const OperationResult installed = installSshPrivateKey(
+            kSshKeyUploadPath, sshKeyUploadProfileId);
+        const OperationResult cleanupStorage = requireSdWriteAccess(0, 0);
+        String cleanupError;
+        if (!cleanupStorage.success) {
+            cleanupError = String("temporary upload cleanup failed: ") +
+                cleanupStorage.error;
+        } else if (!SD.remove(kSshKeyUploadPath)) {
+            cleanupError = "temporary upload cleanup failed";
+        }
+        if (!cleanupError.isEmpty()) {
+            sshKeyUploadError = installed.success
+                ? String("SSH private key was installed, but ") + cleanupError
+                : installed.error + String("; ") + cleanupError;
+        } else if (!installed.success) {
             sshKeyUploadError = installed.error;
         }
         return;
@@ -1690,39 +5409,57 @@ void handleSshKeyUploadData()
         if (sshKeyUploadFile) {
             sshKeyUploadFile.close();
         }
-        SD.remove(kSshKeyUploadPath);
-        sshKeyUploadError = "SSH private-key upload was aborted";
+        const OperationResult cleanupStorage = requireSdWriteAccess(0, 0);
+        String cleanupError;
+        if (!cleanupStorage.success) {
+            cleanupError = String("temporary upload cleanup failed: ") +
+                cleanupStorage.error;
+        } else if (!SD.remove(kSshKeyUploadPath)) {
+            cleanupError = "temporary upload cleanup failed";
+        }
+        sshKeyUploadError = cleanupError.isEmpty()
+            ? String("SSH private-key upload was aborted")
+            : String("SSH private-key upload was aborted; ") + cleanupError;
     }
 }
 
 void handleSshKeyUploadComplete()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     if (!sshKeyUploadError.isEmpty()) {
-        sendJsonError(400, sshKeyUploadError);
+        const SdStorageStatus storage = inspectSdStorage();
+        const int errorStatus = storage.state == SdStorageState::Ready
+            ? 400
+            : webStorageErrorStatus(storage.state);
+        sendWebJsonError(server, errorStatus, sshKeyUploadError);
+        return;
+    }
+    const OperationResult refreshed = refreshSshProfiles();
+    if (!refreshed.success) {
+        sendWebJsonError(server, 500, refreshed.error);
         return;
     }
     consoleStatus = "SSH private key installed";
     JsonDocument document;
     document["ok"] = true;
     document["bytes"] = sshKeyUploadBytes;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleQrShow()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     const String content = server.arg("content");
     const std::string payload = content.c_str();
     if (payload.empty() || payload.size() > kMaximumQrPayloadBytes ||
         !isValidUtf8(payload)) {
-        sendJsonError(400, "QR content must be valid UTF-8 between 1 and 320 bytes");
+        sendWebJsonError(server, 400, "QR content must be valid UTF-8 between 1 and 320 bytes");
         return;
     }
     consoleQrPayload = content;
@@ -1730,24 +5467,31 @@ void handleQrShow()
     JsonDocument document;
     document["ok"] = true;
     document["bytes"] = payload.size();
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleQrFile()
 {
     if (!sessionIsActive()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
+    const String name = server.arg("name");
+    if (!isWorkspaceTextFile(std::string(name.c_str()))) {
+        sendWebJsonError(server, 400, "Selected workspace file is not editable text");
+        return;
+    }
+    const std::uint32_t startedAt = millis();
     const WorkspaceChunkResult result = readWorkspaceFileChunk(
-        server.arg("name"), 0, kMaximumQrPayloadBytes + 1);
+        name, 0, kMaximumQrPayloadBytes + 1);
+    recordWebSdRead(millis() - startedAt);
     if (!result.success) {
-        sendJsonError(400, result.error);
+        sendWebJsonError(server, 400, result.error);
         return;
     }
     if (!result.eof || result.totalBytes == 0 ||
         result.totalBytes > kMaximumQrPayloadBytes) {
-        sendJsonError(400, "Selected file must contain 1 to 320 UTF-8 bytes for QR display");
+        sendWebJsonError(server, 400, "Selected file must contain 1 to 320 UTF-8 bytes for QR display");
         return;
     }
     consoleQrPayload = result.content.c_str();
@@ -1756,37 +5500,44 @@ void handleQrFile()
     document["ok"] = true;
     document["content"] = result.content;
     document["bytes"] = result.totalBytes;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleQrClose()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     consoleQrPayload = "";
-    showWebConsoleAccess("http://" + WiFi.localIP().toString(), accessPassword);
+    renderConsoleScreen();
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleFileRead()
 {
     if (!sessionIsActive()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const String name = server.arg("name");
+    if (!isWorkspaceTextFile(std::string(name.c_str()))) {
+        sendWebJsonError(server, 400, "Selected workspace file is not editable text");
         return;
     }
     std::uint32_t offset = 0;
     if (!parseUnsignedArgument(server.arg("offset"), offset)) {
-        sendJsonError(400, "File offset must be an unsigned integer");
+        sendWebJsonError(server, 400, "File offset must be an unsigned integer");
         return;
     }
+    const std::uint32_t startedAt = millis();
     const WorkspaceChunkResult result = readWorkspaceFileChunk(
-        server.arg("name"), offset, kMaximumWebFileChunkBytes);
+        name, offset, kMaximumWebFileChunkBytes);
+    recordWebSdRead(millis() - startedAt);
     if (!result.success) {
-        sendJsonError(400, result.error);
+        sendWebJsonError(server, 400, result.error);
         return;
     }
     JsonDocument document;
@@ -1796,92 +5547,212 @@ void handleFileRead()
     document["next_offset"] = result.nextOffset;
     document["total_bytes"] = result.totalBytes;
     document["eof"] = result.eof;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleFileSave()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const String name = server.arg("name");
+    if (!isWorkspaceTextFile(std::string(name.c_str()))) {
+        sendWebJsonError(server, 400, "Selected workspace file is not editable text");
         return;
     }
     std::uint32_t offset = 0;
     std::uint32_t originalBytes = 0;
     if (!parseUnsignedArgument(server.arg("offset"), offset) ||
         !parseUnsignedArgument(server.arg("original_bytes"), originalBytes)) {
-        sendJsonError(400, "File offsets must be unsigned integers");
+        sendWebJsonError(server, 400, "File offsets must be unsigned integers");
         return;
     }
     const std::string content = server.arg("content").c_str();
     if (content.size() > kMaximumWebFileChunkBytes || !isValidUtf8(content)) {
-        sendJsonError(400, "File chunk must be valid UTF-8 up to 12288 bytes");
+        sendWebJsonError(server, 400, "Editor window must be valid UTF-8 up to 12288 bytes");
         return;
     }
-    const OperationResult result = replaceWorkspaceFileRange(
-        server.arg("name"), offset, originalBytes, content);
+    const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
+    OperationResult result = replaceWorkspaceFileRange(
+        name, offset, originalBytes, content);
+    endWebConsoleForegroundWork();
+    recordWebSdWrite(millis() - startedAt);
     if (!result.success) {
-        sendJsonError(400, result.error);
+        sendWebJsonError(server, 400, result.error);
         return;
     }
-    consoleStatus = "File chunk saved";
+    result = refreshFiles();
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    consoleStatus = "File changes saved";
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleFileRename()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    const OperationResult result = renameWorkspaceFile(server.arg("name"), server.arg("new_name"));
+    const std::uint32_t startedAt = millis();
+    OperationResult result = renameWorkspaceFile(server.arg("name"), server.arg("new_name"));
+    recordWebSdWrite(millis() - startedAt);
     if (!result.success) {
-        sendJsonError(400, result.error);
+        sendWebJsonError(server, 400, result.error);
+        return;
+    }
+    result = refreshFiles();
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
         return;
     }
     consoleStatus = "File renamed";
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
+}
+
+void handleFileCopy()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const String destination = server.arg("new_name");
+    const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
+    OperationResult result = copyWorkspaceFile(server.arg("name"), destination);
+    endWebConsoleForegroundWork();
+    recordWebSdWrite(millis() - startedAt);
+    if (!result.success) {
+        sendWebJsonError(server, 400, result.error);
+        return;
+    }
+    result = refreshFiles();
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    consoleStatus = "File copied";
+    JsonDocument document;
+    document["ok"] = true;
+    document["name"] = destination;
+    sendWebJson(server, 200, document);
 }
 
 void handleFileDelete()
 {
     if (!requestHasValidCsrf()) {
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
-    const OperationResult result = deleteWorkspaceFile(server.arg("name"));
+    const std::uint32_t startedAt = millis();
+    OperationResult result = deleteWorkspaceFile(server.arg("name"));
+    recordWebSdWrite(millis() - startedAt);
     if (!result.success) {
-        sendJsonError(400, result.error);
+        sendWebJsonError(server, 400, result.error);
+        return;
+    }
+    result = refreshFiles();
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
         return;
     }
     consoleStatus = "File deleted";
     JsonDocument document;
     document["ok"] = true;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void handleFileDownload()
 {
-    if (!sessionIsActive()) {
-        sendJsonError(401, "Authentication required");
+    if (!sessionIsActiveWithoutRefresh()) {
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
+    recordSessionActivityForRequest();
     const String name = server.arg("name");
     if (!isValidWorkspaceFilename(name.c_str())) {
-        sendJsonError(400, "Invalid workspace filename");
+        queueSessionRefreshForManagedResponse();
+        sendWebJsonError(server, 400, "Invalid workspace filename");
         return;
     }
+    const std::uint32_t startedAt = millis();
     File file = SD.open(workspaceFilePath(name), FILE_READ);
+    recordWebSdRead(millis() - startedAt);
     if (!file) {
-        sendJsonError(404, "Workspace file does not exist: " + name);
+        queueSessionRefreshForManagedResponse();
+        sendWebJsonError(server, 404, "Workspace file does not exist: " + name);
         return;
     }
-    server.sendHeader("Content-Disposition", "attachment; filename=\"" + name + "\"");
-    server.streamFile(file, "text/plain; charset=utf-8");
+    const std::size_t totalBytesValue = file.size();
+    if (totalBytesValue > kMaximumWorkspaceFileBytes) {
+        file.close();
+        queueSessionRefreshForManagedResponse();
+        sendWebJsonError(server, 400,
+                         "Workspace file exceeds the supported 32-bit file range");
+        return;
+    }
+    const std::uint32_t totalBytes = static_cast<std::uint32_t>(totalBytesValue);
+    Client& client = server.client();
+    const String responseHeader =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "Content-Disposition: attachment\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n"
+        "Content-Length: " + String(static_cast<unsigned long long>(totalBytes)) +
+        "\r\nSet-Cookie: " + sessionCookieValue() +
+        "\r\n\r\n";
+    auto writeExact = [&client](const std::uint8_t* data, std::size_t bytes) -> bool {
+        std::size_t written = 0;
+        while (written < bytes) {
+            if (!client.connected()) {
+                return false;
+            }
+            const std::size_t accepted = client.write(data + written, bytes - written);
+            if (accepted == 0 || accepted > bytes - written) {
+                return false;
+            }
+            written += accepted;
+        }
+        return true;
+    };
+    sessionCookieEmittedForRequest = true;
+    beginWebConsoleForegroundWork();
+    bool success = writeExact(
+        reinterpret_cast<const std::uint8_t*>(responseHeader.c_str()),
+        responseHeader.length());
+    std::uint8_t buffer[4096] = {};
+    std::uint32_t sentBytes = 0;
+    while (success && sentBytes < totalBytes) {
+        const std::size_t blockBytes = std::min<std::size_t>(
+            sizeof(buffer), totalBytes - sentBytes);
+        const std::size_t readBytes = file.read(buffer, blockBytes);
+        if (readBytes != blockBytes || !writeExact(buffer, readBytes)) {
+            success = false;
+            break;
+        }
+        sentBytes += static_cast<std::uint32_t>(readBytes);
+        if ((sentBytes % (64U * 1024U)) == 0) {
+            delay(0);
+        }
+    }
     file.close();
+    client.flush();
+    client.stop();
+    endWebConsoleForegroundWork();
+    if (!success || sentBytes != totalBytes) {
+        Serial.printf("WEB_FILE_DOWNLOAD result=failed sent_bytes=%u expected_bytes=%u\n",
+                      static_cast<unsigned int>(sentBytes),
+                      static_cast<unsigned int>(totalBytes));
+    }
 }
 
 void handleFileUploadData()
@@ -1890,23 +5761,36 @@ void handleFileUploadData()
     if (upload.status == UPLOAD_FILE_START) {
         uploadReplacing = server.arg("replace") == "1";
         uploadName = uploadReplacing ? server.arg("name") : upload.filename;
-        uploadStorageName = uploadReplacing ? String(kWebSaveTemporaryName) : uploadName;
+        uploadStorageName = uploadReplacing ? uploadName + ".tmp" : uploadName;
         uploadError = "";
         uploadBytes = 0;
         uploadCreated = false;
-        if (!requestHasValidCsrf()) {
+        if (!requestHasValidCsrfWithoutRefresh()) {
             uploadError = "Authentication required";
             return;
         }
-        if (uploadReplacing &&
-            (!isValidWorkspaceFilename(uploadName.c_str()) ||
-             !SD.exists(workspaceFilePath(uploadName)))) {
-            uploadError = "Workspace file does not exist: " + uploadName;
+        recordSessionActivityForRequest();
+        beginWebConsoleForegroundWork();
+        const OperationResult storage = requireSdWriteAccess(
+            0, kStorageOperationalFloorBytes);
+        if (!storage.success) {
+            uploadError = storage.error;
             return;
         }
-        if (uploadReplacing && SD.exists(workspaceFilePath(uploadStorageName)) &&
-            !SD.remove(workspaceFilePath(uploadStorageName))) {
-            uploadError = "Failed to clear the temporary Web Console save file";
+        if (uploadReplacing && !isValidWorkspaceFilename(uploadName.c_str())) {
+            uploadError = "Invalid workspace filename";
+            return;
+        }
+        if (uploadReplacing) {
+            const OperationResult recovered = recoverAtomicSdFile(
+                workspaceFilePath(uploadName));
+            if (!recovered.success) {
+                uploadError = recovered.error;
+                return;
+            }
+        }
+        if (uploadReplacing && !SD.exists(workspaceFilePath(uploadName))) {
+            uploadError = "Workspace file does not exist: " + uploadName;
             return;
         }
         if (!uploadReplacing) {
@@ -1928,8 +5812,15 @@ void handleFileUploadData()
         if (!uploadError.isEmpty()) {
             return;
         }
-        if (!uploadFile || upload.currentSize > kMaximumWorkspaceFileBytes - uploadBytes) {
-            failUpload("Uploaded file exceeds the 491520-byte size limit");
+        if (!uploadFile || uploadBytes > kMaximumWorkspaceFileBytes ||
+            upload.currentSize > kMaximumWorkspaceFileBytes - uploadBytes) {
+            failUpload("Uploaded file exceeds the supported 32-bit file range");
+            return;
+        }
+        const OperationResult space = checkSdOperationSpace(
+            upload.currentSize, kStorageOperationalFloorBytes);
+        if (!space.success) {
+            failUpload(space.error);
             return;
         }
         const std::size_t written = uploadFile.write(upload.buf, upload.currentSize);
@@ -1946,11 +5837,6 @@ void handleFileUploadData()
         }
         uploadFile.flush();
         uploadFile.close();
-        const OperationResult valid = validateWorkspaceFileUtf8(uploadStorageName);
-        if (!valid.success) {
-            failUpload(valid.error);
-            return;
-        }
         if (uploadReplacing) {
             const OperationResult replaced = replaceWorkspaceFileWithTemporary(
                 uploadName, uploadStorageName);
@@ -1971,11 +5857,16 @@ void handleFileUploadComplete()
 {
     if (!requestHasValidCsrf()) {
         failUpload("Authentication required");
-        sendJsonError(401, "Authentication required");
+        sendWebJsonError(server, 401, "Authentication required");
         return;
     }
     if (!uploadError.isEmpty()) {
-        sendJsonError(400, uploadError);
+        sendWebJsonError(server, 400, uploadError);
+        return;
+    }
+    const OperationResult refreshed = refreshFiles();
+    if (!refreshed.success) {
+        sendWebJsonError(server, 500, refreshed.error);
         return;
     }
     consoleStatus = uploadReplacing ? "File saved" : "File uploaded";
@@ -1983,7 +5874,7 @@ void handleFileUploadComplete()
     document["ok"] = true;
     document["name"] = uploadName;
     document["bytes"] = uploadBytes;
-    sendJson(200, document);
+    sendWebJson(server, 200, document);
 }
 
 void updateConsoleSerial()
@@ -1995,8 +5886,12 @@ void updateConsoleSerial()
             if (consoleSerialInput == "PING") {
                 Serial.println("PONG");
             } else if (consoleSerialInput == "STATUS") {
-                Serial.printf("WEB_CONSOLE status=ready authenticated=%s heap=%u\n",
-                              sessionToken.isEmpty() ? "no" : "yes",
+                const std::uint32_t now = millis();
+                Serial.printf(
+                              "WEB_CONSOLE status=ready authenticated=%s browser_presence=%s heap=%u\n",
+                              sessionAuthenticationActiveAt(now) ? "yes" : "no",
+                              webConsoleBrowserStateName(
+                                  webConsoleBrowserStateAt(now)),
                               static_cast<unsigned int>(ESP.getFreeHeap()));
             } else if (consoleSerialInput == "EXIT") {
                 exitRequested = true;
@@ -2016,126 +5911,242 @@ void updateConsoleSerial()
 
 }  // namespace
 
-WebConsoleResult runWebConsole(const Settings& settings, const String& initialChatId,
+void configureWebConsole()
+{
+    if (!routesConfigured) {
+        const WebConsoleRouteHandlers handlers = {{
+            sendRoot,
+            handleLogin,
+            handleLogout,
+            handleSession,
+            handleSessionHeartbeat,
+            handleCloseConsole,
+            handleState,
+            handlePending,
+            handleStorageConfirm,
+            handleSelectProject,
+            handleNewProject,
+            handleProjectSettings,
+            handleProjectSettingsRawComplete,
+            handleProjectSettingsRawData,
+            handleRenameProject,
+            handleDuplicateProject,
+            handleArchiveProject,
+            handleDeleteProject,
+            handleProjectLinks,
+            handleProjectLinkUpdate,
+            handlePrompt,
+            handlePromptRawComplete,
+            handlePromptRawData,
+            handlePromptRetry,
+            handlePendingAllowOnce,
+            handlePendingAllowChat,
+            handlePendingDeny,
+            handlePendingAcknowledge,
+            handleSelectChat,
+            handleNewChat,
+            handleInstructions,
+            handleInstructionsRawComplete,
+            handleInstructionsRawData,
+            handleChatSettings,
+            handleChatCompact,
+            handleChatPermissions,
+            handleRenameChat,
+            handlePinChat,
+            handleArchiveChat,
+            handleDuplicateChat,
+            handleExportChat,
+            handleExportChatBundle,
+            handleImportChatBundle,
+            handleDeleteChat,
+            handleClearChat,
+            handleArchivedMessages,
+            handleSearchSources,
+            handleSettings,
+            handleWifiScan,
+            handleApiProfileCreate,
+            handleApiProfileUpdate,
+            handleApiProfileDefault,
+            handleApiProfileDelete,
+            handleModelPresetCreate,
+            handleModelPresetUpdate,
+            handleModelPresetDelete,
+            handleModelPresetApply,
+            handleModels,
+            handleDiagnosticsDownload,
+            handleDiagnosticMetrics,
+            handlePythonStart,
+            handleSshSettings,
+            handleSshSelect,
+            handleSshDelete,
+            handleSshStart,
+            handleSshTrust,
+            handleSshForget,
+            handleSshInput,
+            handleSshResize,
+            handleSshOutput,
+            handleSshStop,
+            handleSftpList,
+            handleSftpDownload,
+            handleSftpUpload,
+            handleSshKeyUploadComplete,
+            handleSshKeyUploadData,
+            handleQrShow,
+            handleQrFile,
+            handleQrClose,
+            handleFileRead,
+            handleFileSave,
+            handleFileCopy,
+            handleFileRename,
+            handleFileDelete,
+            handleFileDownload,
+            handleFileUploadComplete,
+            handleFileUploadData,
+            []() { sendWebJsonError(server, 404, "Not found"); },
+        }, allowWebStorageRoute};
+        configureWebConsoleRoutes(server, handlers);
+        routesConfigured = true;
+    }
+}
+
+WebConsoleResult runWebConsole(const Settings& settings,
+                               ProviderProfileStore& providerStore,
+                               const String& initialChatId,
                                const String& version)
 {
     if (WiFi.status() != WL_CONNECTED) {
         return {false, initialChatId, "Web console requires an active Wi-Fi connection"};
     }
+    if (!webSessionLifetimePolicy(settings.webSessionLifetime).valid) {
+        return {false, initialChatId, "Web session lifetime is invalid"};
+    }
+    setWebDiagnosticsEnabled(false);
     Serial.println("WEB_CONSOLE stage=load_password");
     Serial.flush();
     consoleSettings = settings;
+    consoleProviderStore = &providerStore;
     firmwareVersion = version;
     OperationResult result = loadSetupAccessPointPassword(accessPassword);
     if (!result.success || accessPassword.isEmpty()) {
-        clearConsoleSecrets();
+        releaseConsoleSessionState();
         return {false, initialChatId,
                 result.success ? String("Installation password is missing") : result.error};
     }
-    Serial.println("WEB_CONSOLE stage=refresh_chats");
+    Serial.println("WEB_CONSOLE stage=refresh_projects");
     Serial.flush();
-    result = refreshChats();
-    if (!result.success) {
-        clearConsoleSecrets();
-        return {false, initialChatId, result.error};
-    }
-    Serial.println("WEB_CONSOLE stage=load_chat");
-    Serial.flush();
-    if (!initialChatId.isEmpty()) {
-        result = loadActiveChat(initialChatId);
-    } else if (!consoleChats.empty()) {
-        result = loadActiveChat(consoleChats.front().id);
-    } else {
-        const ChatDocumentResult created = createChat("New chat");
-        result = created.success ? OperationResult{true, ""}
-                                 : OperationResult{false, created.error};
-        if (created.success) {
-            activeChat = created.chat;
-            result = refreshChats();
+    settingsRevision = 1;
+    String storageStartupError;
+    const SdStorageStatus startupStorage = inspectSdStorage();
+    result = requireSdReadAccess();
+    if (result.success && startupStorage.state == SdStorageState::Ready) {
+        result = refreshProjects();
+        if (!result.success) {
+            releaseConsoleSessionState();
+            return {false, initialChatId, result.error};
         }
+        Serial.println("WEB_CONSOLE stage=load_project");
+        Serial.flush();
+        const ProjectStorageManifestResult manifest = loadProjectStorageManifest();
+        if (!manifest.success || manifest.manifest.activeProjectId.isEmpty()) {
+            releaseConsoleSessionState();
+            return {false, initialChatId,
+                    manifest.success ? String("Active project is missing") : manifest.error};
+        }
+        result = selectActiveProject(manifest.manifest.activeProjectId);
+        if (result.success && !initialChatId.isEmpty() &&
+            initialChatId != activeChat.summary.id) {
+            ChatDocumentResult requested = loadProjectChat(
+                activeProject.summary.id, initialChatId, 96,
+                activeProjectTailByteBudget());
+            if (requested.success) {
+                activeChat = std::move(requested.chat);
+                result = saveActiveChatSelection(initialChatId);
+                if (result.success) {
+                    ++chatRevision;
+                    ++projectRevision;
+                }
+            }
+        }
+        if (!result.success) {
+            releaseConsoleSessionState();
+            return {false, initialChatId, result.error};
+        }
+    } else if (result.success && startupStorage.state == SdStorageState::Full) {
+        result = loadCommittedConsoleStorageReadOnly();
+        storageStartupError = startupStorage.error;
+        if (!result.success) {
+            activeProject = ProjectDocument{};
+            activeChat = ChatDocument{};
+            consoleProjects.clear();
+            consoleChats.clear();
+            consoleFiles.clear();
+            storageStartupError += "; ";
+            storageStartupError += result.error;
+        }
+    } else {
+        activeProject = ProjectDocument{};
+        activeChat = ChatDocument{};
+        consoleProjects.clear();
+        consoleChats.clear();
+        consoleFiles.clear();
+        storageStartupError = result.success ? startupStorage.error : result.error;
     }
-    if (!result.success) {
-        clearConsoleSecrets();
-        return {false, initialChatId, result.error};
-    }
-    sessionToken = "";
-    csrfToken = "";
-    consoleStatus = "";
+    clearSessionAuthentication();
+    sessionActivityRecordedForRequest = false;
+    sessionCookieEmittedForRequest = false;
+    presentedAuthenticationActive = false;
+    presentedBrowserState = WebConsoleBrowserState::Waiting;
+    consoleStatus = storageStartupError;
     exitRequested = false;
     pythonRestartRequested = false;
-    consoleEscapeConsumed = false;
+    consoleEscapeConsumed = consoleEscapePressed();
     loginFailures = 0;
     loginLockedUntil = 0;
-    if (!routesConfigured) {
-        const char* headers[] = {"Cookie", "X-CardMind-CSRF"};
-        server.collectHeaders(headers, 2);
-        server.on("/", HTTP_GET, sendRoot);
-        server.on("/login", HTTP_POST, handleLogin);
-        server.on("/logout", HTTP_POST, handleLogout);
-        server.on("/api/console/close", HTTP_POST, handleCloseConsole);
-        server.on("/api/state", HTTP_GET, handleState);
-        server.on("/api/prompt", HTTP_POST, handlePrompt);
-        server.on("/api/chat/select", HTTP_POST, handleSelectChat);
-        server.on("/api/chat/new", HTTP_POST, handleNewChat);
-        server.on("/api/chat/instructions", HTTP_POST, handleInstructions);
-        server.on("/api/chat/permissions", HTTP_POST, handleChatPermissions);
-        server.on("/api/chat/rename", HTTP_POST, handleRenameChat);
-        server.on("/api/chat/pin", HTTP_POST, handlePinChat);
-        server.on("/api/chat/archive", HTTP_POST, handleArchiveChat);
-        server.on("/api/chat/duplicate", HTTP_POST, handleDuplicateChat);
-        server.on("/api/chat/export", HTTP_POST, handleExportChat);
-        server.on("/api/chat/export-bundle", HTTP_POST, handleExportChatBundle);
-        server.on("/api/chat/import", HTTP_POST, handleImportChatBundle);
-        server.on("/api/chat/delete", HTTP_POST, handleDeleteChat);
-        server.on("/api/chat/clear", HTTP_POST, handleClearChat);
-        server.on("/api/chat/archived", HTTP_GET, handleArchivedMessages);
-        server.on("/api/settings", HTTP_POST, handleSettings);
-        server.on("/api/models", HTTP_GET, handleModels);
-        server.on("/api/diagnostics", HTTP_GET, handleDiagnosticsDownload);
-        server.on("/api/python/start", HTTP_POST, handlePythonStart);
-        server.on("/api/ssh/settings", HTTP_POST, handleSshSettings);
-        server.on("/api/ssh/select", HTTP_POST, handleSshSelect);
-        server.on("/api/ssh/delete", HTTP_POST, handleSshDelete);
-        server.on("/api/ssh/start", HTTP_POST, handleSshStart);
-        server.on("/api/ssh/trust", HTTP_POST, handleSshTrust);
-        server.on("/api/ssh/input", HTTP_POST, handleSshInput);
-        server.on("/api/ssh/output", HTTP_GET, handleSshOutput);
-        server.on("/api/ssh/stop", HTTP_POST, handleSshStop);
-        server.on("/api/ssh/sftp/list", HTTP_GET, handleSftpList);
-        server.on("/api/ssh/sftp/download", HTTP_POST, handleSftpDownload);
-        server.on("/api/ssh/sftp/upload", HTTP_POST, handleSftpUpload);
-        server.on("/api/ssh/key", HTTP_POST,
-                  handleSshKeyUploadComplete, handleSshKeyUploadData);
-        server.on("/api/qr/show", HTTP_POST, handleQrShow);
-        server.on("/api/qr/file", HTTP_GET, handleQrFile);
-        server.on("/api/qr/close", HTTP_POST, handleQrClose);
-        server.on("/api/file", HTTP_GET, handleFileRead);
-        server.on("/api/file/save", HTTP_POST, handleFileSave);
-        server.on("/api/file/rename", HTTP_POST, handleFileRename);
-        server.on("/api/file/delete", HTTP_POST, handleFileDelete);
-        server.on("/api/file/download", HTTP_GET, handleFileDownload);
-        server.on("/api/file/upload", HTTP_POST,
-                  handleFileUploadComplete, handleFileUploadData);
-        server.onNotFound([]() { sendJsonError(404, "Not found"); });
-        routesConfigured = true;
+    configureWebConsole();
+    if (!serverStarted) {
+        Serial.println("WEB_CONSOLE stage=server_begin");
+        Serial.flush();
+        server.begin();
+        Serial.println("WEB_CONSOLE stage=server_ready");
+        Serial.flush();
+        serverStarted = true;
     }
-    Serial.println("WEB_CONSOLE stage=server_begin");
-    Serial.flush();
-    server.begin();
+    const OperationResult handoffAcknowledged =
+        acknowledgePythonHandoffRequest();
+    if (!handoffAcknowledged.success) {
+        Serial.printf(
+            "ERROR event=python_handoff_ack reason=%s\n",
+            handoffAcknowledged.error.c_str());
+        consoleStatus = handoffAcknowledged.error;
+    }
     Serial.printf("WEB_CONSOLE result=ready address=http://%s/\n",
                   WiFi.localIP().toString().c_str());
-    showWebConsoleAccess("http://" + WiFi.localIP().toString(), accessPassword);
+    Serial.flush();
+    passwordRevealUntil = millis() + 30000U;
+    renderConsoleScreen();
     bool escapeHeld = false;
+    bool enterHeld = false;
+    bool passwordWasVisible = consolePasswordVisible();
     while (!exitRequested) {
+        sessionActivityRecordedForRequest = false;
+        sessionCookieEmittedForRequest = false;
         server.handleClient();
+        if (browserPresenceBusy) {
+            endWebConsoleForegroundWork();
+        }
+        expireSessionAuthenticationAt(millis());
+        renderConsoleSessionPresentationIfChanged();
         if (pythonRestartRequested) {
-            showBusyScreen("PYTHON WORKSPACE", "Restarting into MicroPython...");
+            showPythonWorkspaceRunning("http://" + WiFi.localIP().toString() + "/",
+                                       accessPassword);
             delay(500);
             ESP.restart();
         }
         updateConsoleSerial();
         M5Cardputer.update();
+        const Keyboard_Class::KeysState keys = M5Cardputer.Keyboard.keysState();
         const bool escapePressed = consoleEscapePressed();
+        const bool enterPressed = keys.enter;
         if (consoleEscapeConsumed) {
             escapeHeld = escapePressed;
             if (!escapePressed) {
@@ -2144,20 +6155,37 @@ WebConsoleResult runWebConsole(const Settings& settings, const String& initialCh
         } else {
             if (escapePressed && !escapeHeld) {
                 exitRequested = true;
+                Serial.println("WEB_CONSOLE exit=keyboard");
             }
             escapeHeld = escapePressed;
+        }
+        if (enterPressed && !enterHeld) {
+            passwordRevealUntil = millis() + 30000U;
+            renderConsoleScreen();
+        }
+        enterHeld = enterPressed;
+        const bool passwordIsVisible = consolePasswordVisible();
+        if (passwordIsVisible != passwordWasVisible) {
+            passwordWasVisible = passwordIsVisible;
+            renderConsoleScreen();
         }
         delay(2);
     }
     showBusyScreen("WEB CONSOLE", "Closing browser and SSH sessions...");
-    server.stop();
-    clearConsoleSecrets();
+    closeWebSshConnection();
+    while (webSshTaskIsRunning()) {
+        delay(10);
+    }
+    // Keep the listener bound because repeated stop/begin cycles exhaust lwIP sockets.
+    server.client().stop();
+    const String activeChatId = activeChat.summary.id;
+    releaseConsoleSessionState();
     while (!M5Cardputer.Keyboard.keyList().empty()) {
         M5Cardputer.update();
         delay(5);
     }
     Serial.println("WEB_CONSOLE result=stopped");
-    return {true, activeChat.summary.id, ""};
+    return {true, activeChatId, ""};
 }
 
 }  // namespace cardputer
