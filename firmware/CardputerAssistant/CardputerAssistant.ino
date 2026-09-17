@@ -68,7 +68,7 @@ cardputer::OperationResult cleanupSshCommandOutputRemoteTest(
     bool& removed);
 cardputer::OperationResult runModelSftpRemoteTest(bool& cleanupComplete);
 
-constexpr const char* kFirmwareVersion = "1.12.1";
+constexpr const char* kFirmwareVersion = "1.13.0";
 constexpr std::size_t kMaximumInputBytes = 16384;
 constexpr std::size_t kMaximumWifiPasswordBytes = 63;
 constexpr std::uint8_t kTtsVolumeStep = 64;

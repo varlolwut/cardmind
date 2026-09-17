@@ -74,12 +74,12 @@ Status values are `pending`, `in_progress`, and `completed`.
 | P6-01 | Canonical phase transition, reopened full visual inspection and consolidated correction under the 2026-09-16 user decision, and pre-edit freeze: confirm remote `develop`; inventory every required P3-P5 user-facing action; obtain Architect's consolidated replacement brief and independent visual red-team; create a materially different replacement artifact; freeze scope, non-goals, proof matrix, resource budget and first production-row write set for Architect GO | Exact baseline and branch evidence; complete action-to-surface inventory including project creation, Shared-workspace file creation/upload, chat creation/management and Settings; reviewed replacement brief; independent red-team verdict; Architect acceptance of the interactive artifact against complete functional coverage, current UX/design-system evidence, Web Console/ESP32 Cardputer feasibility and visual quality; reviewed first-row design/proof/write set before production | completed |
 | P6-02 | Add the bounded API-profile and model-preset contract through existing settings, persistence, Device and Web owners | Measured NVS capacity; explicit count/length limits; selection/default behavior; malformed/full-storage failure; reboot persistence; Device/Web parity; exact cleanup and resources | completed |
 | P6-03 | Add configurable authentication lifetime and independent multi-tab browser presence | Four exact lifetime choices; expiry and until-reboot semantics; aggregate visible-tab heartbeat; while WebServer is available, waiting within 30 seconds after the last heartbeat without auth loss; multi-tab correctness; blocking foreground request shown as Busy/unobservable and original timestamp evaluated at return without renewal; final-image startup rejection before login plus stale-token rejection through the shared clear owner | completed |
-| P6-04 | Preserve active project, active view and drafts through the existing Web reconnect path | Same-address reconnect after transient disconnect and Python handoff; active project/view/draft restored; stale or missing state fails explicitly; no exact-scroll claim | completed |
+| P6-04 | Preserve active project, active view and drafts through the existing Web reconnect path | Same-address reconnect after transient disconnect and inherited handoff return; active project/view/draft restored; stale or missing state fails explicitly; no exact-scroll claim | completed |
 | P6-05 | Bring the Web Console to the Architect-reviewed replacement direction, add explicit discovered-network Wi-Fi selection through the smallest reviewed existing-owner backend mapping, and finish desktop/tablet/phone polish through the existing asset boundary | Every required Web capability reachable; explicit Wi-Fi scan/select/hidden-manual/connect states and other degraded states; stable-ID interaction checks; 1280, 900 and 390 px screenshots without overlap; soak and resource evidence | completed |
 | P6-05A | Bring the existing basic setup/provisioning page and save/error responses to the accepted shared visual style | All Wi-Fi/API/STT/search/TTS fields and actions remain usable at desktop/tablet/phone sizes; actual-source form/state/interaction evidence and unchanged write-only secret/validation/save/restart owners; flash-resident setup without SD or external assets; pinned build/resources under the 2026-09-17 proportional-evidence decision | completed |
 | P6-06 | Bring the 240x135 Device UI to the Architect-reviewed replacement direction through existing screen/input owners | Every required Device capability reachable; coherent navigation and compact states; provider/SD/optional-API degradation; no Web-only requirement leakage; device resources and latency | completed |
 | P6-07 | Reconcile cross-surface behavior and run focused integration acceptance | Names/state/permissions consistent across Device and Web; profiles, sessions, presence, reconnect and SSH interoperate; inherited Phase 5 behavior remains regression-free; forbidden effects absent; exact-owned cleanup | completed |
-| P6-08 | Establish the stable Wi-Fi release candidate, complete full firmware acceptance and close Phase 6 | Full E2E of all implemented functionality through P6 plus host/Device/Web regression; exact build options and binary hash; flash/RAM/heap/largest-block/stack/latency; screenshots; soak; cleanup including quarantined P2-21 debt; independent reviews; green CI; reviewed phase merge to `develop`, followed by Architect-owned `main` release under the 2026-09-15 user mandate | in_progress |
+| P6-08 | Establish the stable Wi-Fi release candidate, complete full firmware acceptance and close Phase 6 | Local row acceptance: full E2E of all implemented functionality through P6 plus host/Device/Web regression; exact build options and binary hash; flash/RAM/heap/largest-block/stack/latency; screenshots; soak; cleanup including quarantined P2-21 debt; independent reviews and explicit Architect GO. Mandatory post-row publication gates: one official atomic commit, exact-head green CI, reviewed phase merge to `develop` with green CI, followed by Architect-owned `main` release under the 2026-09-15 user mandate | completed |
 
 P6-05B was removed from this release by the user's explicit 2026-09-16 scope
 decision. This is cancellation, not completion or runtime verification. Phase 5
@@ -3659,6 +3659,14 @@ ignored local canonical scope file and is not staged. The Architect-approved unr
 `.codex/` and `m[1])` paths remain untouched. P6-04 is not activated before authenticated remote
 SHA verification.
 
+### P6-03 publication
+
+P6-03 publication was verified at `2026-09-11T17:55:52+03:00`. The exact 18-path commit
+`ba03c90dda9bb6c4c9eb0bf57379d2a323dbbd53` passed the mandatory local row-close check, was
+pushed without force to `feature/phase-6-ui-stable-baseline`, and authenticated GitHub MCP user
+`varlolwut` resolved that branch to the same SHA with the required Author and Committer. No
+GitHub Actions result is claimed for this atomic publication.
+
 ## P6-01 correction implementation and proof — 2026-09-16
 
 **Correction interval:** 2026-09-15T22:39:54+03:00 through
@@ -4521,6 +4529,28 @@ HTTP or Device state was changed by cleanup. The matrix intentionally has zero
 `in_progress` rows during the publication window; P6-04 remains `pending` until the
 exact row commit is pushed and its remote SHA is authenticated.
 
+### P6-01 authenticated publication and P6-04 resumption
+
+The row-only local commit is
+`20a6eb97ec1d9020c979473737c848611f77ec0f`. Its local Author and Committer are both
+the required `Alexey Bulygin <30726976+varlolwut@users.noreply.github.com>`, and the
+mandatory local row-close check passed for the sole path
+`docs/traceability/P6_TRACEABILITY.md`.
+
+The required authenticated GitHub MCP created server commit
+`d3e1d84a7d3620f687805a4bac886b8c16a4e7be` on
+`feature/phase-6-ui-stable-baseline`. Architect's final MCP verification at
+`2026-09-16T08:10:00Z` observed both linked roles as login `varlolwut`, account ID
+`30726976`, and noreply email
+`30726976+varlolwut@users.noreply.github.com`; the server-recorded profile display
+name is `Alexej Bulygin`. The accepted parent is
+`ca5068af86177485851948bb7629ea4acda19531`, the message is
+`P6-01: close full visual correction`, and the complete changed-path set is exactly
+the trace file above at +667/-2. Remote blob
+`dc8a9a38c3c043008f90a66c4437993e215d8319` is literally equal to the accepted
+local blob at 393,923 UTF-8 bytes. The branch head resolves to that remote commit.
+There were zero Actions push runs for the branch, so no CI result is claimed.
+
 ### P6-04 resumed acceptance, Architect closure GO and publication window
 
 Authenticated GitHub publication of P6-01 established remote phase parent
@@ -4606,6 +4636,26 @@ has zero in_progress rows during row-only publication; P6-05 remains pending unt
 authenticated remote SHA, parent, identity, complete path set and exact blob
 verification. Per-tab session storage and omitted exact-scroll restoration remain
 intentional scope; broader P6 integration and release gates remain open.
+
+### P6-04 verified publication and power integration — 2026-09-16
+
+After the user explicitly authorized publication and the repository's native-Git
+workflow, Architect verified SSH authentication as `varlolwut`. The preserved local
+`ee684bf0e177497ea03f50cd47771856b38fe450` referenced the local P6-01 parent
+`20a6eb97ec1d9020c979473737c848611f77ec0f`. Its predecessor tree matched the
+published P6-01 `d3e1d84a7d3620f687805a4bac886b8c16a4e7be` tree exactly.
+Architect attached the unchanged accepted P6-04 tree to that published parent,
+verified the five-path set and both required identities, and published the resulting
+local object `916ac7a2a2957ba321176038e1e2b1205d7f28ee` without force-push.
+The original accepted commit remains preserved in the isolated repository.
+
+Authenticated GitHub MCP then resolved the phase branch to that exact published
+SHA. Author and Committer are both `Alexey Bulygin` with the required noreply
+email and linked account `varlolwut`, ID `30726976`. The changed paths are exactly
+the approved trace, HTML, server, generated header and retained Web test. Separate
+MCP directory reads confirmed all four source/test blob SHAs from the closure GO.
+No source, test, runtime proof or accepted content was changed during publication.
+The earlier transport failures remain historical; the publication blocker is resolved.
 
 ### FIX-POWER-01 completed — Architect acceptance 2026-09-16
 
@@ -4801,6 +4851,19 @@ Architect personally reviewed the installed version, pinned archive identity,
 upload command, four verified flash writes and final normal STATUS and returns
 closure GO for this upload-only pin. Its publication contains only the lock file
 and this observed-evidence section; historical USB causality remains open.
+
+### FIX-PERF-04 verified publication — 2026-09-16 23:01 UTC
+
+The authenticated remote feature branch resolves to
+a52d8bc5399578dcc6228ece483ad2e9720c0f9b, with parent
+d54b4657fb282fb31d2a5d25bfc981ae514b8ce1. Power verified all eight remote
+blobs and exact identities; Architect independently verified the MCP branch
+SHA, eight paths, varlolwut account30726976 and exact Author/Committer identity.
+The fast-forward preserves the intervening accepted P6 and power commits.
+The original ca5068-based a8601d commit is preserved under a local unpublished
+ref; the seven source/test blobs are unchanged in the final publication.
+The primary index is clean and shared working files remain intact. This closes
+publication only; the stated synthetic-evidence limitations remain unchanged.
 
 ### FIX-PERF-02 proportional input acceptance — 2026-09-16 23:08 UTC
 
@@ -5703,6 +5766,16 @@ evidence. No live provisioning cycle was executed; final release coverage must
 retain that limitation. P6-06 and all foreign corrective work remain pending and
 outside this row publication.
 
+### P6-05A verified publication — 2026-09-17 00:29 UTC
+
+Native fast-forward publication produced exact local and remote commit
+`429432146ff64d5a608d68c3a01e65638fce49f0` with parent
+`080e7b2b1e14e35eb35432c9f2c6499b6218e2da`. GitHub MCP verified the two-path
+set, trace blob `51d3b7dbbf371626f8a3711b6fe01eddae725029`, provisioning blob
+`7512be4951a1e3618b5204004ec2723494c9d273`, exact Author and Committer, and the
+linked `varlolwut` account 30726976. The local row checker passed for two paths.
+The no-live-provisioning-cycle limitation remains part of release coverage.
+
 ### FIX-PERF-01 Architect closure GO - 2026-09-17 00:25 UTC
 
 The final bounded proof work ran from 2026-09-17T02:35:56.703+03:00 through the
@@ -6599,6 +6672,183 @@ and returned explicit `P6-07 CLOSURE GO`. P6-07 active work completed at
 `completed`; P6-08 remains `pending` during the zero-active-row publication window
 until the exact remote P6-07 SHA and blobs are verified.
 
+### P6-08 size-budget finding on the current candidate — 2026-09-17
+
+The existing firmware_metrics.py check ran on the unchanged 741E candidate at
+2026-09-16T21:03:52Z and FAILED only flash_text_bytes: 2,245,692 exceeds the
+2,120,672-byte section limit by 125,020 bytes. The measured application is
+3,664,752 bytes, partition 4,194,304 bytes, free 529,552 bytes, rodata 1,317,504,
+static DRAM 65,956 and IRAM 77,567. The combined app-size/512 KiB spare gates
+and every other section gate pass. Report: build/p6-home-correction/firmware-metrics.json.
+
+Architect assigns this to P6-08 release-budget reconciliation, not P6-05 Web behavior
+or the one-line draft-loader change. The documented text-section ceiling was sized
+for Phase 4 plus a 40 KiB guard. A bounded read-only audit is checking that history
+and whether it represents a distinct hardware constraint before any budget change.
+The failed report remains failed evidence; no CI or release pass is claimed.
+Latest trace wording now distinguishes CI-budget headroom from physical partition
+free space. No limit, production implementation or acceptance assertion was changed
+in response to this failure.
+
+
+### P2-21 release-cleanup evidence correction — 2026-09-17
+
+The Architect's read-only Web inventory found the material 320 MiB product child
+and its parent workspace path absent. The internal owner metadata paths
+`/assistant/.cardmind-p2-21-1789080570927-owner.json` and its `.tmp` and `.bak`
+variants are not exposed through that read-only interface and remain `UNKNOWN`;
+no new API, reset or Device mutation was introduced solely to inspect them.
+Under the recorded narrow release-cleanup exclusion, their unknown state does
+not convert the historical failed cleanup into a pass. P6-08 remains open and
+must not claim complete P2-21 cleanup. Retained observations are
+`artifacts/architect-p221-inventory.json`,
+`artifacts/architect-p221-inventory-serial.log`,
+`artifacts/architect-p221-parent.json` and
+`artifacts/architect-p221-parent-serial.log`.
+
+### P6-07 verified publication, factual unit correction and P6-08 activation — 2026-09-17 03:03:20 UTC
+
+Native fast-forward publication produced exact local and remote commit
+`d1ce40172e13998db1c69ed6d946135f070f5352`, parent
+`8757a6297ff3d13ed820185c99d38f1d7fff9028`, on
+`feature/phase-6-ui-stable-baseline`. Authenticated GitHub MCP verified the exact
+three-path set, remote blobs
+`54b718901fe84f2cb350d63addb98ed1e4aefcc3`,
+`72dd63223220712c3d2a5439458f9205466147b8` and
+`30345914213c2409080c3dedca530d79dfb664bc`, plus linked Author/Committer
+`varlolwut`/`30726976` with the required name and noreply email.
+
+Architect's post-publication commit review found one documentation-only unit defect:
+the retained P6-07 section in `d1ce401` calls `active_ssh_prompt_ms=25360` and
+`closed_ssh_prompt_ms=42404` microseconds. The producer uses
+`Math.round(performance.now() - startedAt)` and both public field names end in `_ms`;
+the correct unit is milliseconds. The live canonical text above is corrected. The
+published P6-07 history is not rewritten, and this explicit P6-08 reconciliation
+supersedes only that unit label; source, runtime values, cleanup and Closure GO are
+unchanged.
+
+With exact remote publication verified, P6-08 is now the sole `in_progress` row.
+
+### P6-08 initial pre-edit GO and candidate freeze — 2026-09-17 03:05:28 UTC
+
+P6-08 active work starts from the hypothesis that the accepted candidate still
+identifies itself as 1.12.1 and that the inherited 2,120,672-byte `.flash.text`
+threshold is the only disproved section ceiling. The accepted current ELF measures
+2,242,012 `.flash.text` bytes; retaining the existing 40 KiB guard yields the exact
+2,282,972-byte threshold. Application size/free-partition, rodata, static DRAM and
+IRAM limits and all baseline growth warnings remain unchanged.
+
+Source inventory found the single `kFirmwareVersion` producer and its existing OTA,
+serial boot/status, Device/Web, crash-journal, file/export and release-workflow
+consumers. The existing metrics tool sums `.flash.text` and directly enforces the
+JSON maximum. `ROADMAP.md` already freezes release `1.13.0`/`v1.13.0`. The initial
+write set is therefore exactly
+`firmware/CardputerAssistant/CardputerAssistant.ino`,
+`ci/firmware-budget.json` and this trace: change the version to `1.13.0`, change only
+`limits.flash_text_bytes` to `2282972`, and update only the matching rationale.
+
+One fresh independent pre-edit review returned GO, and Architect returned explicit
+`P6-08 INITIAL PRE-EDIT GO`. The proof is the existing complete cheap checks followed
+by one pinned exact-core build, `build.options.json` verification, binary/ELF hashes
+and complete firmware metrics. The final `.flash.text` result plus 40,960 must equal
+the retained limit. No upload, COM/HTTP action, product behavior, other resource
+ceiling, test framework or acceptance scenario changes in this boundary; Architect
+owns the later final-image upload and complete E2E.
+
+### P6-08 initial candidate source and build evidence — 2026-09-17 03:13 UTC
+
+The frozen two-file source/config correction is exact. The firmware source now has
+Git blob `945a10b453251f452d2ae5145f6f939770de210d`, SHA-256
+`8E3606E822E88CE1F43B40DC57EF689FE5EE4F3734CA0C6616F5EEB6554A1614`;
+the budget has Git blob `c81ebd95b4bc0e8b34a115e37efb37753ffc992a`, SHA-256
+`DE00E74E835BCB5593C180687F00FB0EA5FB603C52500E4F8F3F5C55B33B7554`.
+Only `kFirmwareVersion` changed from 1.12.1 to 1.13.0, and only the text limit
+and its matching Phase 6 rationale changed in the budget.
+
+All pinned library revisions and ArduinoJson 7.2.1 passed. Node syntax, the existing
+Web UI/generated-asset test, both retained PowerShell parsers, JSON/guard arithmetic
+and diff checks passed. The first WSL host invocation did not compile because the
+PowerShell-to-WSL boundary delivered an empty output path; no ELF was created. With
+one materially corrected exact `/tmp/cardmind-host-tests-p608-<nonce>` path, the
+unchanged strict suite returned `host_tests: PASS`. Its wrapper then placed its
+absence assertion before the EXIT trap and returned nonzero after the successful
+test; a separate read-only check verified that the trap removed every exact-owned
+P6-08 host ELF. No third compile or test rewrite ran.
+
+The one pinned firmware compile passed with exact FQBN
+`m5stack:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=custom`, one unique
+resolved M5Stack ESP32 core 3.2.1 and options SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`.
+The sketch is 3,662,358 bytes and globals use 65,956 bytes. The 3,662,544-byte
+application SHA-256 is
+`F334B1C80803C88130BBDCA5D3CF1C424DADE89EB8AE84833180442E6E0318F8`;
+the 46,196,612-byte ELF SHA-256 is
+`718087C20EAB7AD6B711BA239BD8BB2BB3026616794C153FE6DA2A36576C75D3`;
+and the 8,388,608-byte merged image SHA-256 is
+`2A19F2EFD108E45ACA866B038D166256C9584748C944C9971F9DA9E0737735C0`.
+
+The existing metrics tool passed with application headroom 7,472 bytes and physical
+partition free space 531,760 bytes. Measurements are `.flash.text` 2,242,012,
+rodata 1,318,972, static DRAM 65,956 and IRAM 77,567 bytes. The exact text result plus
+40,960 is 2,282,972, equal to the new limit; every other hard ceiling is unchanged
+and passes. Existing baseline-growth warnings remain warnings. No upload, COM/HTTP
+action or runtime acceptance ran in this build boundary.
+
+### P6-08 closure and publication sequencing decision — 2026-09-17 03:37:21 UTC
+
+Architect rejected a temporary candidate ref and duplicate candidate/official commit
+sequence. The smallest accepted order is one local acceptance boundary followed by one
+official publication chain. P6-08 remains `in_progress` while the frozen final image is
+still proving complete runtime behavior, resources, screenshots, soak, exact-owned
+cleanup and local packaging. Only after that evidence and Architect's personal closure
+review return explicit GO may the row become `completed` and create its single official
+atomic commit.
+
+The completed row then remains inside the Phase 6 publication window while that exact
+official head is pushed, verified and required to pass GitHub CI. A CI failure stops the
+publication chain and reopens the proven owning row before any production or oracle edit.
+Only an exact green official head may merge to `develop`; the resulting `develop` run
+must also be green before the reviewed `develop` to `main` merge. Immediately before the
+main merge, reverify that `v1.13.0` and its release are absent. The main workflow then
+owns the new release and its application/full-image artifacts and checksums. These are
+mandatory post-row publication gates, not claims that row completion already published,
+merged or released the phase. No WIP ref, duplicate commit, workflow/checker change,
+scope removal or premature P6-08 status change is authorized.
+
+### P6-08 cheap release checks and local package proof — 2026-09-17 03:39:06 UTC
+
+The unchanged third-party verifier passed all eight manifest components. In-memory
+syntax compilation passed for the three release tools, both current MicroPython VFS
+Python files and the existing MicroPython supervisor test. `git diff --check` passed;
+before the separate canonical sequencing correction, the tracked candidate write set
+remained only the firmware version, firmware budget and this trace. No accepted host,
+Web UI, generated-asset, parser, build or metrics check was rerun.
+
+Architect authorized one local package proof of the frozen F334 candidate with the
+existing release owner and no new compile, upload, source edit, tag or publication.
+The CardMind application input remained 3,662,544 bytes with SHA-256
+`F334B1C80803C88130BBDCA5D3CF1C424DADE89EB8AE84833180442E6E0318F8`.
+The pinned MicroPython 1.28.0 build 20260406 input was 1,689,072 bytes with the
+manifest/workflow SHA-256
+`931F47DE3076F51F386DB204C2CC710D0AC42480DED50B1298CFB860E1BC1BFA`.
+Pinned `mklittlefs` 3.0.0-gnu12-dc7f933 rebuilt the current 131,072-byte VFS with
+`/boot.py` and `/cardmind_supervisor.py`; its SHA-256 is
+`7B9B70079F8C21B864D50F011B4D563C4221D151C8D21AEF0B72439FBEA26287`.
+
+`tools/package_firmware.py` passed every input-size and partition-bound check. An
+independent byte comparison reconstructed the entire expected 8,388,608-byte image
+from the accepted merged image plus MicroPython at `0x410000` and VFS at `0x710000`.
+The packaged application is byte-identical to the F334 input. The full-image SHA-256
+is `F10B7F0893F9E0893CA74714626475C362506A39F420327B4AEC7511A1EB7A67`,
+and its generated `SHA256SUMS.txt` exactly matches both application and full-image
+hashes. The local license archive contains the project license, third-party notices,
+manifest and nine component-license files; it is 24,283 bytes with SHA-256
+`6AC6AA2A9DE7BC4375F8C661918B390E8E3DBF72CB867991BA84B859DD52C3C7`.
+All outputs are exact-owned under ignored
+`build/p608-package-proof-f334b1c8/`; Git status proved no added tracked path. The
+official GitHub workflow must still reproduce and verify the published artifacts and
+checksums from the exact official commit.
+
 ### P6-07 reopened resource lifecycle: verified correction and closure — 2026-09-17
 
 Architect reopened P6-07 at 03:52:30 UTC after the P6-08 workload exposed
@@ -6704,6 +6954,105 @@ Reopened work started 03:52:30 UTC; final required runtime proof completed
 60-minute single-hypothesis stall was recorded. P6-07 is completed; P6-08 stays
 pending until the exact official correction commit and remote blobs are verified.
 
+### P6-07 correction publication and P6-08 resumption — 2026-09-17 07:08 UTC
+
+P6-07 correction d5b3ef4a646f50b53762d072fa535a65d8ceee12 is published on
+feature/phase-6-ui-stable-baseline with exact parent d1ce40172e13998db1c69ed6d946135f070f5352.
+Authenticated GitHub MCP verified the branch head, all seven file blobs, complete
+changed-path set and varlolwut account ID 30726976 (profile Alexej Bulygin).
+Native Git preserved both Alexey Bulygin noreply identities and exact commit SHA.
+The isolated row checker, filename-only secret/artifact exclusion and clean
+publication tree passed. The shared branch/index advanced without replacing any
+working file; P6-08 version/budget/trace WIP, unrelated untracked files, main and
+stash are preserved. P6-08 is again the sole in_progress row. It continues the
+already frozen full-release proof on the exact 267A3B production candidate.
+
+### P6-08 retained full-release runtime observations — 2026-09-17 07:15 UTC
+
+The F334 application from the initial 1.13.0 candidate owns these eligible
+03:24-03:35 UTC observations. The later P6-07 correction does not change their
+storage, UI, microphone or audio implementations; its current-image resource and
+cross-surface proofs above qualify the changed memory boundary. Raw logs remain
+under artifacts/architect-p608- with the table suffix. No failed broad run is
+promoted to a pass by selecting these already completed independent cases.
+
+| Existing selector / artifact suffix | Observed acceptance |
+| --- | --- |
+| sd-mount | Ready expected card; SD mount test passed |
+| audio | Two actual 32,000-sample microphone recordings (peak 13 in the unattended quiet environment), hardware playback, stop and repeated audio-state checks passed; no spoken transcription claim |
+| p2-migration | Existing empty-legacy baseline metadata/history/revision passed; separate staged/corrupt migration recovery and restoration passed |
+| p2-projects | Actual Device rename cancel/validation/save, delete cancel/delete/replacement/page-zero, exact cleanup/resources passed; Shared identity/tool/isolation test cleanup left zero owned fixtures |
+| p2-chats | Persistent draft/chat, instruction ordering, retry nonduplication, manual/automatic compaction and real provider summary/replace/coverage/raw/context/cleanup passed |
+| p2-limits | Existing prompt, Project and Chat limit observations passed |
+| p2-archive | Beyond-2MiB history, quota/full/planner/nonmutation, first/middle/last/count/hash and exact cleanup passed |
+| p2-binary | Binary/text matrix, UI/read/write/append/nonmutation and exact cleanup passed |
+| hotfix-device-ui | Input redraw average 2,662 us; full redraw 60,933 us; navigation average 35 ms. Actual input/render handlers passed synthetic unattended proof; no physical electrical-key latency claim. Missing/replaced-card rejection and nonmutation passed |
+| selected, first seven cases only | Pure functions, display frame budget, cancel, Device settings, offline tools, SSH runtime and Python partition/image layout passed. PYTHONCHECK reported historical runtime_error='module' object has no attribute 'stdout'; layout pass does not establish Python execution. The following SSH case failed and is retained as P6-07 reopening evidence |
+
+Current 267A3B production-image acceptance added:
+
+- 07:08:52 onward: configured SFTP passed; the next OTACHECK failed with
+  `GitHub latest release response body was empty`. The selector stopped before
+  OTA download or SFTP transfer. This remains failed update acceptance. Source
+  assigns the error to checkLatestFirmwareUpdate's HTTPClient::getString result;
+  transport-vs-allocation cause is under read-only investigation, not inferred.
+- A separate bounded SFTPTRANSFERTEST completed at 07:12:27 UTC in 123,140 ms.
+  The inherited exact 65,536-byte transfer, overwrite/no-overwrite, cancellation,
+  reuse/reconnect and cleanup observations passed. `cleanup=yes`; final normal
+  heap/largest 95,516/31,732, lifetime minimum 1,588, main stack 1,144 bytes;
+  original history/chats, SD and Wi-Fi ready. Log: final-sftp-transfer.log.
+
+P6-08 remains in_progress. Large-file streaming, manual and one-shot Python,
+policy decisions, update acceptance, final soak and publication gates are open.
+
+### P6-08 large-file observation interruption and cleanup — 2026-09-17 07:31 UTC
+
+The first current-image upload had produced 32 MiB at 453,187 ms (about 74 KiB/s).
+At that measured rate its disposable observer's 45-minute transfer deadline and
+one-hour authentication lifetime were insufficient for 268,439,552 bytes. Architect
+stopped that run; it is interrupted, not passing file-stream evidence. The holder
+closed Console with the exact stopped marker and verified normal readiness.
+The upload-abort owner removed its partial file. A fresh exact-owned cleanup at
+07:30:56-07:31:11 verified fixture/sidecar absence twice, restored the original
+15-minute lifetime, and verified every other current settings projection unchanged.
+Final normal heap/largest were 92,600/31,732, stack 1,144; SD, chats/files and Wi-Fi
+were ready. Log: architect-p608-large-interrupted-cleanup.log and .log.node.out.
+
+The older P2-21 320 MiB evidence also contains an interrupted download at
+297,836,544/335,544,320 bytes, not a full successful transfer/hash. Full >256 MiB
+acceptance therefore remains required. Rerun the same owned upload/download/hash
+proof on the final corrected image with a 90-minute transfer deadline and the
+existing eight-hour session option. This changes only the disposable observer's
+unsupported timing assumption, not firmware, retained tests or pass conditions.
+
+### P6-08 manual Python and ordinary confirmation observation — 2026-09-17 07:42 UTC
+
+On 267A3B, an exact-owned script was saved/read/run in the actual Python workspace;
+its unique stdout marker was observed. Same-address authenticated handoff and return
+to CardMind passed. The historical stdout runtime error cleared. No Python production
+change or supervisor replacement was made. The combined observation then failed its
+own Files Ask oracle: generic ReadFile previews intentionally have an empty target
+(pending_tool_call.cpp::loadPendingToolPreview), whereas it required the filename.
+Its whole-settings comparison also included python_runtime_error, which is live
+runtime evidence, not configuration. Neither mismatch establishes a firmware defect.
+
+The invalid combined policy run is not accepted. Its project/script cleanup succeeded;
+the remaining owned interrupted read request was acknowledged in a separate bounded
+cleanup, then absence was verified twice and normal Console exit/readiness passed.
+Source writes preserved credentials/Wi-Fi, master policy returned to its original
+v1;ws=a;wf=a;fr=a;fw=a;sr=a;sm=a;sf=a;py=o value, and Python runtime error was empty.
+Artifacts: architect-p608-policy-python.log.node.out and policy-cleanup.log/node.out.
+Replace that over-combined observer with separate direct Files decisions and one-shot
+observations using the actual public contracts; no retained test or oracle change.
+
+A real Required Web prompt on the current configured claude-opus-5 at 07:43:33-
+07:44:20 still emitted no required canonical tool. Firmware returned the explicit
+missing group 0x1 error; exact-owned project cleanup, settings invariance and Console
+exit passed. This remains failed successful-search acceptance; its exact cause was
+not established. Existing direct service/fetch/cache passes are unchanged. The next
+bounded proof uses a discovered tool-capable model only in an owned test chat,
+preserving the default provider/model and canonical tool catalog.
+
 ### FIX-OTA-01 verified correction and Architect closure GO — 2026-09-17 07:49 UTC
 
 Architect personally reviewed the complete ota_update.cpp diff, both existing Device
@@ -6744,3 +7093,201 @@ and -device.log. Investigation started07:09; this is verified closure at07:49,
 with bounded independent-review/other-device-owner intervals rather than a repeated
 single-hypothesis loop. Publication write set is exactly ota_update.cpp and this
 compact trace record; independent P6-08 acceptance, CI, merge and release remain open.
+
+### FIX-OTA-01 verified publication
+
+FIX-OTA-01 published as `38fe7940252868e0ead13518a57f37730a1b799d` on the phase
+branch. Authenticated GitHub MCP verified the exact head, both changed paths/blobs and
+both `varlolwut` identities. Native Git preserved the accepted SHA. The isolated
+tree/index was clean; shared files/stash were preserved while its ref/index advanced,
+and `main`/`develop` were unchanged. P6-08 continues on the verified B38A3C4E image.
+
+### P6-08 current-image policy and package acceptance — 2026-09-17 07:55 UTC
+
+On B38A3C4E, direct real-provider Files Read Ask requests passed Deny, Allow once and
+Allow chat. Denial created no execution activity; each approval returned the actual
+unique file contents, recorded successful read_file activity and preserved bytes.
+The chat grant changed only its expected capability, and all decisions cleared pending
+state. Exact-owned project/file/sidecar absence was checked twice, original selection
+and settings/API/Wi-Fi projection remained intact, and Console exit/normal readiness
+passed. One existing provider transport retry (-11) occurred before the third request;
+that run still completed within its deadline without restart. Final heap/largest
+92,464/31,732; minimum7,564, main stack976 bytes. Evidence: architect-p608-files-policy.log
+and .log.node.out, completion07:54:06 UTC. This is a current measured tight stack margin,
+not an electrical-key latency claim or proof of arbitrary external model behavior.
+
+The final B38 package was constructed using tools/package_firmware.py and verified
+byte-for-byte: application region at0x10000, unchanged pinned MicroPython1.28.0 at
+0x410000 and current unchanged VFS at0x710000, total8,388,608 bytes. App SHA remains
+B38A3C4E11A9E8E78D178E1C389C1D58075A88B7CA344F6C371ED8A4F5397A07;
+full-image SHA is B3D78C69E07B7A250F1062121FB008DB97DE81790F98D7453A06EF74940EB135.
+Current B38 metrics PASS were copied from the verified FIX-OTA build output; no stale
+F334 metrics were reused. Unchanged previously verified license and pinned core-source
+archives retain their exact hashes; four artifacts have checksum entries. Output:
+build/p608-package-proof-b38a3c4e. Official exact-commit CI packaging remains mandatory.
+
+Real provider discovery advertises claude-sonnet-4-5-20250929, but that owned-chat search
+attempt returned HTTP400 explicitly rejecting it and listing newer supported models.
+This is a proven provider discovery/request inconsistency. Its cleanup/settings/Console
+exit passed; it is not successful search acceptance.
+Next observation selects the explicitly reported supported claude-opus-4-8 only in an
+owned chat. No default model, profile, secret, request schema or production code changes.
+
+### P6-08 current-image one-shot Python, required-search and large-file status — 2026-09-17 08:03 UTC
+
+On the B38A3C4E image, the existing direct one-shot Python path passed from
+07:56:53 through 07:58:15 UTC. The mandatory confirmation preview showed the full
+source hash and exposed Allow once without an Allow chat option. The actual planned
+partition execution returned to the same chat with exactly one stdout result; reload
+produced no duplicate. Exact-owned cleanup, the settings/API/Wi-Fi projection and normal
+readiness passed. After the planned reset (reason 3), final heap/largest were
+88,704/31,732 bytes, lifetime minimum was 76,464 and main-stack margin was 5,200
+bytes. Evidence: `artifacts/architect-p608-oneshot-python.log.node.out` and
+`artifacts/architect-p608-oneshot-start.log`.
+
+The explicitly reported supported `claude-opus-4-8` Required Web observation from
+07:58:42 through 07:59:30 UTC failed: ordinary SSE deltas were followed by the
+firmware's missing-required-group `0x1` rejection, and no actual tool executed.
+Exact-owned cleanup and normal readiness passed. This does not establish a provider
+defect:
+the observer forced output 512, Web sends that exact `max_tokens`, Device SEARCHTEST
+uses 1024, and the SSE parser does not retain `finish_reason`. Output-budget exhaustion
+and model noncompliance therefore remain unresolved. API-profile resolution preserved
+all search settings while replacing only the chat API key/base URL and selected model.
+Successful model-directed search remains open; the next distinct observation uses the
+product-appropriate 4096-token output after the current large-file run.
+
+At about 08:03 UTC, the B38 >256 MiB observation started with exact-owned fixture
+`p608-7aace220-9d30-4ee6-a690-8a20cd66e847.bin` at 268,439,552 bytes, the corrected
+90-minute observer deadline and the existing eight-hour session. It is still running;
+no large-file PASS is claimed.
+
+P6-08 remains `in_progress`. Successful model-directed search, large-file completion,
+remaining full E2E/soak acceptance, Architect closure, official commit, exact-head CI,
+merge and release are open.
+
+### P6-08 final text-budget reconciliation — 2026-09-17 08:24 UTC
+
+The accepted P6-07 and FIX-OTA-01 corrections changed the final B38 ELF text to
+2,244,340 bytes. Architect applied the already reviewed measured-text-plus-40-KiB
+formula to this final image: 2,244,340 + 40,960 = 2,285,300. Only the existing
+`limits.flash_text_bytes` value changes; the application limit, 512 KiB partition
+reserve, other section limits and baseline warnings remain unchanged. Historical
+F334 measurements and its initial 2,282,972-byte ceiling above remain historical.
+
+The existing metrics tool passed against the unchanged final ELF/application and
+the reconciled budget at 08:24:45 UTC. Application 3,665,808, partition free 528,496,
+text 2,244,340, rodata 1,319,936, static DRAM 65,980 and IRAM 77,567 bytes. The exact
+guard arithmetic passed, and the final application's B38A3C4E SHA-256 is unchanged.
+Evidence: `artifacts/architect-p608-final-budget-metrics.json`; the verified local
+B38 package contains this current metrics JSON. No rebuild, upload, production
+behavior or test change was needed for this configuration-only reconciliation.
+
+### P6-08 user-directed proportional acceptance — 2026-09-17 08:35 UTC
+
+The user reports personally checking successful speech recognition about a week
+earlier and directs reuse if that block is unchanged. Source history confirms the
+STT client last changed on August 24 and microphone/WAV owner on August 26. Against
+the September 2 baseline, both files are unchanged. `handleVoiceInput` retains the
+same recording, transcription, draft insertion and recording cleanup; its only
+change removes the obsolete `draftDirtySinceAt` assignment under the already
+accepted draft-save correction. The other hunk in VoiceAndSpeech.ino changes a
+retry-response buffer outside the voice-input path. Architect accepts the user's
+successful runtime observation with this source continuity and the separately
+verified current microphone/power and draft-save boundaries. No new transcription
+run or diagnostic is claimed or required by this explicit user decision.
+
+The user also identifies the 256 MiB synthetic fixture as unrealistic. Architect
+removes the greater-than-256-MiB release gate in ROADMAP before stopping this
+disproportionate observation. Ordinary and multi-megabyte file behavior, streaming
+memory bounds, explicit storage failures and absence of an artificial product cap
+remain required. The final large observer was intentionally interrupted after its
+96 MiB progress record; it is not passing transfer/hash evidence. Its existing holder
+then completed exact Console stop and normal STATUS without restart.
+
+A separate exact-owned cleanup completed at 08:35:39 UTC: fixture
+`p608-7aace220-9d30-4ee6-a690-8a20cd66e847.bin` and its sidecars were absent twice,
+session lifetime returned from 8h to 15m, all other settings/API/Wi-Fi projections
+were unchanged, and Console exit plus normal readiness passed. Normal heap/largest
+92,444/31,732, lifetime minimum 9,292, main stack 2,688 bytes; reset reason 3,
+history 17 and three chats are unchanged. Evidence:
+`artifacts/architect-p608-large-final-cleanup.log` and `.log.node.out`.
+
+### P6-08 Required Web classification against the inherited contract — 2026-09-17 08:39 UTC
+
+The distinct 4096-token observation verified effective Web Search and Fetch as
+`allow`, then received undeclared `WebSearch`, `WebFetch`, `WebSearch` calls from
+the selected claude-opus-4-8 provider. All were rejected; no canonical Web tool ran.
+The request ended with the explicit missing-required-Web error. Exact-owned Project
+cleanup and settings preservation passed, followed by exact Console stop and normal
+STATUS: heap/largest 92,812/31,732, minimum 6,172, main stack 2,688, reset reason 3.
+Evidence: `artifacts/architect-p608-required-search-budget.log` and `.log.node.out`;
+run 08:37:03-08:39:18 UTC. This disproves an insufficient 512-token allowance as a
+complete explanation for this provider behavior; it does not establish successful
+model-directed search.
+
+Architect reconciled the observation with the complete P3-05 contract and P3 final
+acceptance: the same undeclared `WebSearch` response was already classified on
+August 29. Required evidence is successful real canonical search/fetch/cache plus
+either exact-name model execution or explicit unmatched-required rejection with no
+search effect. P6 retains that contract. The current complete P1 executor checks
+and this observed rejection satisfy it; the stricter disposable observer remains
+failed and its oracle is not changed. Requiring this nonconforming external model
+to produce a successful search was an unnecessary additional P6-08 gate and is
+removed. No alias normalization, compatibility layer, firmware change or further
+model trial is authorized. Retain the external-model limitation in the release
+report; do not describe this as a successful model-directed Web search.
+
+### P6-08 final ordinary-file, soak and local closure GO — 2026-09-17 08:42 UTC
+
+The same direct transfer observer, scoped to an ordinary 4 MiB fixture without
+changing session settings, passed on the final B38 image at 08:41:36 UTC. Actual
+upload took 60,647 ms; full download took 9,455 ms. Both complete byte streams had
+SHA-256 `e6d6899207ceb4cabe72b20d4704be0ec2764663f1fdc61c9e87cf94f81bc11e`.
+The exact-owned fixture was removed and absence verified twice. Web free heap
+recovered from 84,376 to 84,764 bytes, largest block remained 31,732, and SD free
+space returned exactly to 15,867,265,024 bytes. No settings were written. Final
+Console stop and normal STATUS passed at heap/largest 93,352/31,732, minimum
+6,172, main stack 2,688, reset reason 3; history 17, three chats and ready SD/Wi-Fi
+were unchanged. Evidence: `artifacts/architect-p608-file-roundtrip.log` and
+`.log.node.out`. Retained P2-18 4 MiB window/edit/rejection/full-hash evidence covers
+the unchanged file-edit owner; current Device binary/text and P6 Web consumer proofs
+cover their changed integrations.
+
+The continuously held Console from 08:03:18 through the intentional transfer stop
+and clean exit before 08:35:39 remained responsive to ongoing traffic without a
+reset or freeze; its exact stop and subsequent ordinary actions passed. This is
+over 30 minutes of observed loaded Console stability, combined with the accepted
+P6-05 idle/resource and P6-07 state-poll cycles. It does not promote either interrupted
+large-file run to successful full-transfer evidence. The final normal free heap is
+above the 70 KiB general-mode floor. Tight historical SSH/main-stack and lifetime
+heap minima above remain disclosed; no electrical keyboard timing claim is made.
+
+Architect personally reviewed the final row-owned diff: only version 1.13.0, the
+measured text-section budget/rationale and this verified trace reconciliation.
+Production behavior fixes are already separately accepted and published. Existing
+strict host, Web/asset, parser, dependency/license and pinned build checks apply;
+final B38 resource/package hashes and exact-owned cleanup are verified. The bounded
+independent final proof review found the voice-evidence gap; the user's direct
+successful test plus unchanged source resolved that one blocker, and the reviewer
+returned GO without a new diagnostic or test rewrite. Required Web follows its
+unchanged explicit P3 acceptance contract as recorded above.
+
+The accepted evidence covers Device/Web navigation and visuals, projects/chats/files,
+voice under the user's observed unchanged path, tool policies/confirmations, SSH/SFTP,
+manual and approved one-shot Python, diagnostics, OTA metadata/download/digest,
+degraded states, resources and cleanup. Setup AP save/restart is not claimed under
+the explicit presentation-only proof decision. The configured model's undeclared
+Web tool names and three inaccessible inert legacy P2-21 metadata paths remain
+bounded disclosed limitations. P7-P10 stay excluded. The local B38 application/full
+package and exact pinned options are the recoverable pre-USB baseline; existing
+v1.12.1 remains an immutable prior release reference, not a tested data downgrade.
+
+Architect returns explicit **P6-08 LOCAL CLOSURE GO**. Active work began at
+03:05:28 UTC; local acceptance closes at 08:42 UTC after the separately recorded
+P6-07/FIX-OTA ownership intervals and the bounded device-transfer wait. No additional
+60-minute single-hypothesis loop occurred in this final acceptance boundary. P6-08
+may now become completed and publish one official atomic commit. Exact-head green
+feature CI, reviewed develop merge with green CI, existing-main merge, new v1.13.0
+release/assets/checksums and verified-merged branch cleanup remain mandatory and
+are not claimed complete. Main and the retained stash are unchanged.
