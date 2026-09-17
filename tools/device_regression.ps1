@@ -778,11 +778,11 @@ $p2BinaryCases = @(
 )
 
 $hotfixLatencyCases = @(
-    (New-RegressionCase -Name "project and chat navigation latency" -Command "HOTFIXNAVTEST" -CompletionPattern "^HOTFIXNAVTEST result=" -PassPattern "^HOTFIXNAVTEST result=pass iterations=8 projects_ms=[0-9]+ chats_ms=[0-9]+ average_ms=[0-9]+ error=none$" -TimeoutSeconds 30)
+    (New-RegressionCase -Name "project and chat navigation latency" -Command "HOTFIXNAVTEST" -CompletionPattern "^HOTFIXNAVTEST result=" -PassPattern "^HOTFIXNAVTEST result=pass iterations=8 projects_ms=[0-9]+ chats_ms=[0-9]+ average_ms=[0-9]+ actions_lazy=pass actions_ms=[0-9]+ open_ms=[0-9]+ tail_messages=[0-9]+ tail_bytes=[0-9]+ state=pass error=none$" -TimeoutSeconds 30)
 )
 $hotfixDeviceUiCases = @(
-    (New-RegressionCase -Name "device chat input latency" -Command "HOTFIXINPUTTEST" -CompletionPattern "^HOTFIXINPUTTEST result=" -PassPattern "^HOTFIXINPUTTEST result=pass full_average_us=[0-9]+ input_average_us=[0-9]+ error=none$" -TimeoutSeconds 30),
-    (New-RegressionCase -Name "project and chat navigation latency" -Command "HOTFIXNAVTEST" -CompletionPattern "^HOTFIXNAVTEST result=" -PassPattern "^HOTFIXNAVTEST result=pass iterations=8 projects_ms=[0-9]+ chats_ms=[0-9]+ average_ms=[0-9]+ error=none$" -TimeoutSeconds 30),
+    (New-RegressionCase -Name "device chat input latency" -Command "HOTFIXINPUTTEST" -CompletionPattern "^HOTFIXINPUTTEST result=" -PassPattern "^HOTFIXINPUTTEST result=pass full_average_us=[0-9]+ input_average_us=[0-9]+ scroll_average_us=[0-9]+ scroll=pass scroll_max=[1-9][0-9]* tail_messages=32 tail_bytes=7680 error=none$" -TimeoutSeconds 30),
+    (New-RegressionCase -Name "project and chat navigation latency" -Command "HOTFIXNAVTEST" -CompletionPattern "^HOTFIXNAVTEST result=" -PassPattern "^HOTFIXNAVTEST result=pass iterations=8 projects_ms=[0-9]+ chats_ms=[0-9]+ average_ms=[0-9]+ actions_lazy=pass actions_ms=[0-9]+ open_ms=[0-9]+ tail_messages=[0-9]+ tail_bytes=[0-9]+ state=pass error=none$" -TimeoutSeconds 30),
     (New-RegressionCase -Name "microSD read and recovery guards" -Command "HOTFIXSDTEST" -CompletionPattern "^HOTFIXSDTEST result=" -PassPattern "^HOTFIXSDTEST result=pass removed=pass replaced=pass nonmutation=pass error=none$" -TimeoutSeconds 20)
 )
 

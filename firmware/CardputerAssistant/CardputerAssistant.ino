@@ -1408,25 +1408,37 @@ void openLatestSearchSources()
     renderSearchSources();
 }
 
+cardputer::OperationResult loadSelectedChatContextUsage()
+{
+    selectedChatContextUsage = {0, 0, 0, 0, 0};
+    selectedChatContextUsageReady = false;
+    const cardputer::ChatDocumentResult loaded = cardputer::loadProjectChat(
+        activeProjectId, selectedChatId, 64, 65536);
+    if (!loaded.success) {
+        return {false, loaded.error};
+    }
+    const cardputer::ProjectDocumentResult project = cardputer::loadProject(
+        activeProjectId);
+    if (!project.success) {
+        return {false, project.error};
+    }
+    selectedChatContextUsage = cardputer::resolveContextUsage(
+        loaded.chat, project.project.contextByteBudget);
+    selectedChatContextUsageReady = true;
+    return {true, ""};
+}
+
 void openChatActions(const cardputer::ChatSummary& chat)
 {
     selectedChatId = chat.id;
     selectedChatTitle = chat.title;
-    const cardputer::ChatDocumentResult loaded = cardputer::loadProjectChat(
-        activeProjectId, chat.id, 64, 65536);
-    const cardputer::ProjectDocumentResult project = cardputer::loadProject(
-        activeProjectId);
+    const cardputer::ChatDocumentResult loaded = cardputer::loadProjectChatMetadata(
+        activeProjectId, chat.id);
     selectedChatModel = loaded.success ? loaded.chat.model : String();
-    selectedChatContextUsageReady = loaded.success && project.success;
-    if (selectedChatContextUsageReady) {
-        selectedChatContextUsage = cardputer::resolveContextUsage(
-            loaded.chat, project.project.contextByteBudget);
-    } else {
-        selectedChatContextUsage = {0, 0, 0, 0, 0};
-    }
+    selectedChatContextUsage = {0, 0, 0, 0, 0};
+    selectedChatContextUsageReady = false;
     chatActionsIndex = 0;
-    menuStatus = !loaded.success ? loaded.error
-        : (!project.success ? project.error : String(""));
+    menuStatus = loaded.success ? String("") : loaded.error;
     currentScreen = Screen::ChatActions;
     renderChatActions();
 }
@@ -1477,10 +1489,11 @@ void render()
     }
     switch (currentScreen) {
     case Screen::Chat:
-        cardputer::showChat(history, activeResponse, inputBuffer, keyboardLayout,
-                            activeChatTitle, statusMessage, scrollOffset,
-                            activeChatCapabilityStates(),
-                            WiFi.status() == WL_CONNECTED, batteryLevel, batteryCharging);
+        scrollOffset = cardputer::showChat(
+            history, activeResponse, inputBuffer, keyboardLayout,
+            activeChatTitle, statusMessage, scrollOffset,
+            activeChatCapabilityStates(),
+            WiFi.status() == WL_CONNECTED, batteryLevel, batteryCharging);
         return;
     case Screen::MainCarousel:
         renderCarousel();

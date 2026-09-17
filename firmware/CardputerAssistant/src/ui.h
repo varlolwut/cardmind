@@ -81,17 +81,17 @@ void showWebConsoleAccess(const String& address,
                           bool passwordVisible);
 void showPythonWorkspaceAccess(const String& address, const String& accessPassword);
 void showPythonWorkspaceRunning(const String& address, const String& accessPassword);
-void showChat(const std::vector<Message>& history,
-              const std::string& activeResponse,
-              const std::string& input,
-              KeyboardLayout layout,
-              const String& chatTitle,
-              const String& status,
-              std::size_t scrollOffset,
-              const ChatCapabilityStates& capabilities,
-              bool wifiConnected,
-              int batteryLevel,
-              bool batteryCharging);
+std::size_t showChat(const std::vector<Message>& history,
+                     const std::string& activeResponse,
+                     const std::string& input,
+                     KeyboardLayout layout,
+                     const String& chatTitle,
+                     const String& status,
+                     std::size_t scrollOffset,
+                     const ChatCapabilityStates& capabilities,
+                     bool wifiConnected,
+                     int batteryLevel,
+                     bool batteryCharging);
 void updateChatInput(const std::string& input);
 void showCarousel(const std::vector<CarouselCard>& cards,
                   std::size_t selectedIndex,
@@ -109,9 +109,6 @@ void animateCarousel(const std::vector<CarouselCard>& cards,
                      int batteryLevel,
                      bool batteryCharging,
                      const String& status);
-std::size_t maximumChatScrollOffset(const std::vector<Message>& history,
-                                    const std::string& activeResponse,
-                                    const String& status);
 void showSelectionList(const String& title,
                        const std::vector<String>& items,
                        std::size_t selectedIndex,

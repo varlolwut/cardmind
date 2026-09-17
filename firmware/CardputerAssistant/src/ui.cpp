@@ -111,16 +111,21 @@ std::size_t visibleTranscriptLineCount(const String& status)
         : kCompactTranscriptLines;
 }
 
+std::string prepareChatInputLine(const std::string& input)
+{
+    const auto inputLines = wrapUtf8Text("> " + input + "_", kTranscriptCells);
+    return inputLines.back();
+}
+
 template <typename Display>
-void drawChatInputLine(Display& display, const std::string& input)
+void drawChatInputLine(Display& display, const std::string& preparedInputLine)
 {
     display.fillRect(0, 104, 240, 17, TFT_BLACK);
     display.drawFastHLine(0, 104, 240, TFT_DARKGREY);
     display.setFont(&fonts::efontCN_12);
     display.setTextColor(TFT_GREENYELLOW, TFT_BLACK);
     display.setCursor(3, 106);
-    const auto inputLines = wrapUtf8Text("> " + input + "_", kTranscriptCells);
-    display.print(inputLines.back().c_str());
+    display.print(preparedInputLine.c_str());
 }
 
 void drawToolbarItem(int x, const std::uint8_t* icon, const char* label)
@@ -518,17 +523,17 @@ void showPythonWorkspaceRunning(const String& address, const String& accessPassw
     canvas->pushSprite(0, 0);
 }
 
-void showChat(const std::vector<Message>& history,
-              const std::string& activeResponse,
-              const std::string& input,
-              KeyboardLayout layout,
-              const String& chatTitle,
-              const String& status,
-              std::size_t scrollOffset,
-              const ChatCapabilityStates& capabilities,
-              bool wifiConnected,
-              int batteryLevel,
-              bool batteryCharging)
+std::size_t showChat(const std::vector<Message>& history,
+                     const std::string& activeResponse,
+                     const std::string& input,
+                     KeyboardLayout layout,
+                     const String& chatTitle,
+                     const String& status,
+                     std::size_t scrollOffset,
+                     const ChatCapabilityStates& capabilities,
+                     bool wifiConnected,
+                     int batteryLevel,
+                     bool batteryCharging)
 {
     canvas->fillScreen(TFT_BLACK);
     canvas->setFont(&fonts::efontCN_12);
@@ -560,7 +565,8 @@ void showChat(const std::vector<Message>& history,
     const std::size_t availableStart = lines.size() > visibleTranscriptLines
         ? lines.size() - visibleTranscriptLines
         : 0;
-    const std::size_t start = scrollOffset > availableStart ? 0 : availableStart - scrollOffset;
+    const std::size_t effectiveScrollOffset = std::min(scrollOffset, availableStart);
+    const std::size_t start = availableStart - effectiveScrollOffset;
     const std::size_t end = std::min(lines.size(), start + visibleTranscriptLines);
     int y = 17;
     for (std::size_t index = start; index < end; ++index) {
@@ -570,9 +576,11 @@ void showChat(const std::vector<Message>& history,
         y += 12;
     }
     if (availableStart > 0) {
-        canvas->drawBitmap(230, 18, kUpIcon, 8, 8, scrollOffset < availableStart ? TFT_CYAN : TFT_DARKGREY);
+        canvas->drawBitmap(230, 18, kUpIcon, 8, 8,
+                           effectiveScrollOffset < availableStart ? TFT_CYAN : TFT_DARKGREY);
         const int downIconY = 18 + static_cast<int>((visibleTranscriptLines - 1) * 12);
-        canvas->drawBitmap(230, downIconY, kDownIcon, 8, 8, scrollOffset > 0 ? TFT_CYAN : TFT_DARKGREY);
+        canvas->drawBitmap(230, downIconY, kDownIcon, 8, 8,
+                           effectiveScrollOffset > 0 ? TFT_CYAN : TFT_DARKGREY);
     }
 
     if (visibleTranscriptLines != kIdleTranscriptLines) {
@@ -591,7 +599,8 @@ void showChat(const std::vector<Message>& history,
         }
     }
 
-    drawChatInputLine(*canvas, input);
+    const std::string preparedInputLine = prepareChatInputLine(input);
+    drawChatInputLine(*canvas, preparedInputLine);
 
     canvas->fillRect(0, 121, 240, 14, TFT_DARKGREY);
     canvas->drawFastVLine(47, 121, 14, TFT_BLACK);
@@ -607,12 +616,14 @@ void showChat(const std::vector<Message>& history,
                     layout == KeyboardLayout::English ? "F3 RU" : "F3 EN");
     drawToolbarItem(192, kSettingsIcon, "F4 MENU");
     canvas->pushSprite(0, 0);
+    return effectiveScrollOffset;
 }
 
 void updateChatInput(const std::string& input)
 {
-    drawChatInputLine(*canvas, input);
-    drawChatInputLine(M5Cardputer.Display, input);
+    const std::string preparedInputLine = prepareChatInputLine(input);
+    drawChatInputLine(*canvas, preparedInputLine);
+    drawChatInputLine(M5Cardputer.Display, preparedInputLine);
 }
 
 void showCarousel(const std::vector<CarouselCard>& cards,
@@ -659,15 +670,6 @@ void animateCarousel(const std::vector<CarouselCard>& cards,
     }
     drawCarouselFrame(cards, selectedIndex, selectedIndex, -240, cardX,
                       wifiConnected, sdReady, batteryLevel, batteryCharging, status);
-}
-
-std::size_t maximumChatScrollOffset(const std::vector<Message>& history,
-                                    const std::string& activeResponse,
-                                    const String& status)
-{
-    const auto lines = transcriptLines(history, activeResponse);
-    const std::size_t visibleTranscriptLines = visibleTranscriptLineCount(status);
-    return lines.size() > visibleTranscriptLines ? lines.size() - visibleTranscriptLines : 0;
 }
 
 void showSelectionList(const String& title,

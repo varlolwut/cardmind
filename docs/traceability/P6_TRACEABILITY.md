@@ -5698,3 +5698,63 @@ Architect returns explicit `P6-05A CLOSURE GO` for only
 evidence. No live provisioning cycle was executed; final release coverage must
 retain that limitation. P6-06 and all foreign corrective work remain pending and
 outside this row publication.
+
+### FIX-PERF-01 Architect closure GO - 2026-09-17 00:25 UTC
+
+The final bounded proof work ran from 2026-09-17T02:35:56.703+03:00 through the
+03:16:30+03:00 Device result without a stall pivot. Architect personally re-read
+the actual consumer, diagnostic and matcher diffs and returned closure GO. The
+row-owned production hunks are only `loadSelectedChatContextUsage()`, the
+metadata-first `openChatActions()` and `render()`'s returned-scroll consumer in
+`CardputerAssistant.ino`; Chat-Actions index-3 lazy loading and the scroll-up
+increment in `KeyboardNavigation.ino`; input-line preparation, the returned clamp
+and removed `maximumChatScrollOffset()` implementation in `src/ui.cpp`; and the
+matching `showChat()` return plus removed declaration in `src/ui.h`. The selected
+chat-context value and ready flag are invalidated together by the same lazy owner.
+Current whole-worktree verification blobs are Main
+`0663b579b80d7a9b58fa2c8b7eb87d5cdaa84875`, Keyboard
+`4c4be999f81907c69078b8ff3763b4c7d05abaa5`, UI source
+`fbefd1e089a3a544bcca2e63e26333da5f6bfa6c` and header
+`463af89fedae59917af74ffbd4a1b9ee286a8d6a`; these shared files contain foreign
+P6/FIX-PERF-03 work and are not whole-file commit boundaries.
+
+Retained proof owns only `runHotfixNavigationLatencyTest()` and
+`runHotfixInputLatencyTest()` in `SerialDiagnostics.ino`, changing the file from
+blob `fea48b632709ae35d731535b005fe534040bcc9a` to
+`7f16667c03447fd4bc7bad790a5ba80d23c9ec8b`, plus the two existing NAV matchers
+and one existing INPUT matcher in `tools/device_regression.ps1`, blob
+`183302fcec51870bd69cdf31a90952e14d7c1b37` to
+`c232355851921e278cb2531ad8a7e434379c9437`. No selector, runner or test family
+was added. On exact application
+`A67F45C026A834F7605E524C245621BD225CD1370BB7315845817B59771E56EA`, the existing
+`hotfix-device-ui` suite passed: full/input rendering was 61,028/2,698 us; a
+32-message, 7,680-content-byte tail scrolled in 61,679 us with maximum 249 and a
+stable clamp; eight Project/Chat page iterations took 229/320 ms; Actions stayed
+lazy at 341 ms and Open took 516 ms on 17 messages/3,482 bytes while preserving
+title, model, draft and history identity. SD removed/replaced/nonmutation guards
+also passed. Artifact: `artifacts/architect-perf-20260917-device-ui.log`.
+
+The earlier integrated 5619 image measured 60,967/2,732 us, so the current
+full/input regression comparison is +61/-34 us; it is not a pre-fix improvement
+baseline. No eligible numeric pre-change scroll or Actions/Open sample exists.
+Under the explicit ROADMAP proportional decision, the inspected duplicate call
+chains plus the current timings, lazy/state/clamp observations and unchanged-render
+comparison close the row without an old-image reflash or a fabricated speedup.
+Physical dispatch/key-to-pixel remains unmeasured. INPUT/NAV created no fixture or
+setting mutation. The shared final status retained history 17, chats 3, ready SD,
+connected Wi-Fi and valid TLS with no reset. General send latency remains separately
+measured and outside this fix.
+
+The accepted build used the exact FQBN and unique core 3.2.1, options SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`, ELF
+`02A6DE1F439509B9ACCA0878B653CD4C70965799B5D1C481AB895D4A1BAA2F63`, 65,956
+global bytes and a 3,669,328-byte application. Only 688 bytes remain under the
+application budget, while physical partition spare is 524,976 bytes; no further
+diagnostic growth is authorized. The current metrics check failed only because
+`flash_text=2,249,004` exceeds its 2,120,672-byte limit; rodata is 1,318,760
+bytes and every other measured limit passed. This does not reopen FIX-PERF-01,
+but P6-08 owns the existing section-budget reconciliation and neither the green
+resource nor CI gate is closed. Publication must stage only the listed hunks and
+this selective documentation after P6-05A's verified publication. FIX-PERF-01
+must publish before FIX-PERF-03; no commit, stage or remote publication has yet
+occurred under this GO.

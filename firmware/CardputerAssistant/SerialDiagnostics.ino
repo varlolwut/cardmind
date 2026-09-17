@@ -307,10 +307,83 @@ void runStorageTest()
 void runHotfixNavigationLatencyTest()
 {
     constexpr std::uint32_t kIterations = 8;
-    if (!chatStorageReady || activeProjectId.isEmpty()) {
-        Serial.println("HOTFIXNAVTEST result=failed error=active_project_unavailable");
+    if (!chatStorageReady || activeProjectId.isEmpty() || activeChatId.isEmpty()) {
+        Serial.println("HOTFIXNAVTEST result=failed error=active_chat_unavailable");
         return;
     }
+    if (!activeResponse.empty()) {
+        Serial.println("HOTFIXNAVTEST result=failed error=active_response_in_progress");
+        return;
+    }
+    if (inputBuffer != persistedDraft || currentChatMetadataSavePending) {
+        Serial.println("HOTFIXNAVTEST result=failed error=active_chat_dirty");
+        return;
+    }
+    {
+        const cardputer::ProjectDocumentResult project = cardputer::loadProject(
+            activeProjectId);
+        if (!project.success) {
+            Serial.printf("HOTFIXNAVTEST result=failed error=%s\n", project.error.c_str());
+            return;
+        }
+        if (project.project.activeChatId != activeChatId) {
+            Serial.println("HOTFIXNAVTEST result=failed error=active_chat_selection_mismatch");
+            return;
+        }
+    }
+    cardputer::ChatSummary activeChatSummary = {};
+    {
+        const cardputer::ChatDocumentResult metadata = cardputer::loadProjectChatMetadata(
+            activeProjectId, activeChatId);
+        if (!metadata.success) {
+            Serial.printf("HOTFIXNAVTEST result=failed error=%s\n", metadata.error.c_str());
+            return;
+        }
+        if (metadata.chat.summary.id != activeChatId ||
+            metadata.chat.model != activeChatModel ||
+            metadata.chat.draft != inputBuffer) {
+            Serial.println("HOTFIXNAVTEST result=failed error=active_chat_storage_mismatch");
+            return;
+        }
+        activeChatSummary = metadata.chat.summary;
+    }
+
+    struct HistoryIdentity {
+        std::size_t messages;
+        std::size_t bytes;
+        std::uint32_t fnv32;
+    };
+    const auto identifyHistory = [](const std::vector<cardputer::Message>& messages)
+        -> HistoryIdentity {
+        std::size_t bytes = 0;
+        std::uint32_t fnv32 = 2166136261U;
+        const auto includeByte = [&fnv32](std::uint8_t value) {
+            fnv32 ^= value;
+            fnv32 *= 16777619U;
+        };
+        for (const auto& message : messages) {
+            includeByte(0xFFU);
+            for (std::size_t index = 0; index < message.role.length(); ++index) {
+                includeByte(static_cast<std::uint8_t>(message.role[index]));
+            }
+            includeByte(0U);
+            for (const unsigned char value : message.content) {
+                includeByte(value);
+            }
+            includeByte(0U);
+            bytes += message.content.size();
+        }
+        return {messages.size(), bytes, fnv32};
+    };
+
+    const HistoryIdentity beforeHistory = identifyHistory(history);
+    const String originalProjectId = activeProjectId;
+    const String originalChatId = activeChatId;
+    const String originalChatTitle = activeChatTitle;
+    const String originalChatModel = activeChatModel;
+    const std::string originalDraft = inputBuffer;
+
+
     cardputer::OperationResult result = {true, ""};
     const std::uint32_t projectsStartedAt = millis();
     for (std::uint32_t index = 0; index < kIterations && result.success; ++index) {
@@ -326,15 +399,67 @@ void runHotfixNavigationLatencyTest()
         if (!page.success) result = {false, page.error};
     }
     const std::uint32_t chatsElapsedMs = millis() - chatsStartedAt;
+    bool actionsLazy = false;
+    bool statePreserved = false;
+    std::uint32_t actionsElapsedMs = 0;
+    std::uint32_t openElapsedMs = 0;
+    if (result.success) {
+        const std::uint32_t actionsStartedAt = millis();
+        openChatActions(activeChatSummary);
+        actionsElapsedMs = millis() - actionsStartedAt;
+        {
+            const std::vector<String> actions = chatActionItems();
+            actionsLazy = menuStatus.isEmpty() &&
+                currentScreen == Screen::ChatActions && chatActionsIndex == 0 &&
+                selectedChatId == originalChatId &&
+                selectedChatTitle == originalChatTitle &&
+                selectedChatModel == originalChatModel &&
+                !selectedChatContextUsageReady && actions.size() > 3 &&
+                actions[3].startsWith("View full history (");
+        }
+        if (!actionsLazy) {
+            result = {false, menuStatus.isEmpty()
+                ? String("actions_lazy_state_mismatch") : menuStatus};
+        }
+        if (result.success) {
+            const std::uint32_t openStartedAt = millis();
+            result = activateChat(originalChatId);
+            openElapsedMs = millis() - openStartedAt;
+        }
+        if (result.success) {
+            const HistoryIdentity afterHistory = identifyHistory(history);
+            statePreserved = activeProjectId == originalProjectId &&
+                activeChatId == originalChatId && activeChatTitle == originalChatTitle &&
+                activeChatModel == originalChatModel && inputBuffer == originalDraft &&
+                persistedDraft == originalDraft && activeResponse.empty() &&
+                !currentChatMetadataSavePending &&
+                afterHistory.messages == beforeHistory.messages &&
+                afterHistory.bytes == beforeHistory.bytes &&
+                afterHistory.fnv32 == beforeHistory.fnv32;
+            if (!statePreserved) {
+                result = {false, "actions_open_state_mismatch"};
+            }
+        }
+
+    }
+    currentScreen = Screen::Chat;
+    scrollOffset = 0;
+    render();
     const bool responsive = result.success && projectsElapsedMs <= 1600 &&
         chatsElapsedMs <= 1600;
-    Serial.printf("HOTFIXNAVTEST result=%s iterations=%u projects_ms=%u chats_ms=%u average_ms=%u error=%s\n",
+    Serial.printf("HOTFIXNAVTEST result=%s iterations=%u projects_ms=%u chats_ms=%u average_ms=%u actions_lazy=%s actions_ms=%u open_ms=%u tail_messages=%u tail_bytes=%u state=%s error=%s\n",
                   responsive ? "pass" : "failed",
                   static_cast<unsigned int>(kIterations),
                   static_cast<unsigned int>(projectsElapsedMs),
                   static_cast<unsigned int>(chatsElapsedMs),
                   static_cast<unsigned int>(
                       (projectsElapsedMs + chatsElapsedMs) / (kIterations * 2U)),
+                  actionsLazy ? "pass" : "failed",
+                  static_cast<unsigned int>(actionsElapsedMs),
+                  static_cast<unsigned int>(openElapsedMs),
+                  static_cast<unsigned int>(beforeHistory.messages),
+                  static_cast<unsigned int>(beforeHistory.bytes),
+                  statePreserved ? "pass" : "failed",
                   result.success ? (responsive ? "none" : "latency_budget_exceeded")
                                  : result.error.c_str());
 }
@@ -342,41 +467,68 @@ void runHotfixNavigationLatencyTest()
 void runHotfixInputLatencyTest()
 {
     constexpr std::uint32_t kFullIterations = 4;
+    constexpr std::uint32_t kScrollIterations = 4;
     constexpr std::uint32_t kInputIterations = 32;
+    constexpr std::size_t kTailMessages = 32;
+    constexpr std::size_t kPayloadBytes = 240;
+    constexpr std::size_t kTailBytes = kTailMessages * kPayloadBytes;
     std::vector<cardputer::Message> benchmarkHistory;
-    benchmarkHistory.reserve(32);
-    const std::string payload(240, 'x');
-    for (std::uint32_t index = 0; index < 32; ++index) {
+    benchmarkHistory.reserve(kTailMessages);
+    const std::string payload(kPayloadBytes, 'x');
+    for (std::size_t index = 0; index < kTailMessages; ++index) {
         benchmarkHistory.push_back({index % 2 == 0 ? "user" : "assistant", payload});
     }
-    const std::uint32_t fullStartedAt = micros();
-    for (std::uint32_t index = 0; index < kFullIterations; ++index) {
-        cardputer::showChat(
+    const auto showBenchmark = [&benchmarkHistory](std::size_t requestedScrollOffset) {
+        return cardputer::showChat(
             benchmarkHistory, "", inputBuffer, keyboardLayout, activeChatTitle,
-            statusMessage, 0,
+            statusMessage, requestedScrollOffset,
             {cardputer::ChatCapabilityState::Inherit,
              cardputer::ChatCapabilityState::Inherit,
              cardputer::ChatCapabilityState::Inherit,
              cardputer::ChatCapabilityState::Inherit},
-            WiFi.status() == WL_CONNECTED, batteryLevel,
-            batteryCharging);
+            WiFi.status() == WL_CONNECTED, batteryLevel, batteryCharging);
+    };
+    const std::uint32_t fullStartedAt = micros();
+    for (std::uint32_t index = 0; index < kFullIterations; ++index) {
+        showBenchmark(0);
     }
     const std::uint32_t fullElapsedUs = micros() - fullStartedAt;
+    const std::size_t topOffset = showBenchmark(0);
+    const std::size_t firstScrollOffset = showBenchmark(4);
+    const std::size_t maximumScrollOffset = showBenchmark(
+        std::numeric_limits<std::size_t>::max());
+    const std::size_t repeatedMaximumScrollOffset = showBenchmark(maximumScrollOffset);
+    const bool scrollPassed = topOffset == 0 && firstScrollOffset == 4 &&
+        maximumScrollOffset > firstScrollOffset &&
+        repeatedMaximumScrollOffset == maximumScrollOffset;
+    const std::uint32_t scrollStartedAt = micros();
+    for (std::uint32_t index = 0; index < kScrollIterations; ++index) {
+        showBenchmark(4);
+    }
+    const std::uint32_t scrollElapsedUs = micros() - scrollStartedAt;
     const std::uint32_t inputStartedAt = micros();
     for (std::uint32_t index = 0; index < kInputIterations; ++index) {
         cardputer::updateChatInput(inputBuffer + std::to_string(index));
     }
     const std::uint32_t inputElapsedUs = micros() - inputStartedAt;
     const std::uint32_t fullAverageUs = fullElapsedUs / kFullIterations;
+    const std::uint32_t scrollAverageUs = scrollElapsedUs / kScrollIterations;
     const std::uint32_t inputAverageUs = inputElapsedUs / kInputIterations;
-    const bool responsive = inputAverageUs <= 50000U && inputAverageUs < fullAverageUs;
+    const bool responsive = scrollPassed && inputAverageUs <= 50000U &&
+        inputAverageUs < fullAverageUs;
     render();
     Serial.printf(
-        "HOTFIXINPUTTEST result=%s full_average_us=%u input_average_us=%u error=%s\n",
+        "HOTFIXINPUTTEST result=%s full_average_us=%u input_average_us=%u scroll_average_us=%u scroll=%s scroll_max=%u tail_messages=%u tail_bytes=%u error=%s\n",
         responsive ? "pass" : "failed",
         static_cast<unsigned int>(fullAverageUs),
         static_cast<unsigned int>(inputAverageUs),
-        responsive ? "none" : "input_render_budget_exceeded");
+        static_cast<unsigned int>(scrollAverageUs),
+        scrollPassed ? "pass" : "failed",
+        static_cast<unsigned int>(maximumScrollOffset),
+        static_cast<unsigned int>(kTailMessages),
+        static_cast<unsigned int>(kTailBytes),
+        scrollPassed ? (responsive ? "none" : "input_render_budget_exceeded")
+                     : "scroll_clamp_mismatch");
 }
 
 void runHotfixSdAccessSafetyTest()

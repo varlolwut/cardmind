@@ -612,10 +612,18 @@ void handleKeyboard()
         } else if (upPressed) {
             chatActionsIndex = chatActionsIndex > 0 ? chatActionsIndex - 1 : 0;
             menuStatus = "";
+            if (chatActionsIndex == 3 && !selectedChatContextUsageReady) {
+                const cardputer::OperationResult loaded = loadSelectedChatContextUsage();
+                if (!loaded.success) menuStatus = loaded.error;
+            }
             renderChatActions();
         } else if (downPressed) {
             chatActionsIndex = std::min(chatActionsIndex + 1, itemCount - 1);
             menuStatus = "";
+            if (chatActionsIndex == 3 && !selectedChatContextUsageReady) {
+                const cardputer::OperationResult loaded = loadSelectedChatContextUsage();
+                if (!loaded.success) menuStatus = loaded.error;
+            }
             renderChatActions();
         } else if (enterPressed && chatActionsIndex == 0) {
             const cardputer::OperationResult result = activateChat(selectedChatId);
@@ -732,6 +740,8 @@ void handleKeyboard()
             selectedChatId = duplicated.chat.summary.id;
             selectedChatTitle = duplicated.chat.summary.title;
             selectedChatModel = duplicated.chat.model;
+            selectedChatContextUsage = {0, 0, 0, 0, 0};
+            selectedChatContextUsageReady = false;
             menuStatus = "Chat duplicated";
             renderChatActions();
         } else if (enterPressed && chatActionsIndex == 9) {
@@ -2881,9 +2891,7 @@ void handleKeyboard()
         speakLastAssistantResponse();
         return;
     } else if (keys.fn && (keys.f5 || keys.up)) {
-        const std::size_t maximum = cardputer::maximumChatScrollOffset(
-            history, activeResponse, statusMessage);
-        scrollOffset = std::min(scrollOffset + 4, maximum);
+        scrollOffset += 4;
     } else if (keys.fn && (keys.f6 || keys.down)) {
         scrollOffset = scrollOffset > 4 ? scrollOffset - 4 : 0;
     } else if (clearDraftPressed) {
