@@ -1028,7 +1028,10 @@ CompletionTurnResult streamCompletionTurn(const Settings& settings,
         http.addHeader("Accept", "text/event-stream");
         const char* responseHeaderKeys[] = {"Content-Type"};
         http.collectHeaders(responseHeaderKeys, 1);
-        const int status = http.POST(payload);
+        // The String overload copies the request before allocating TLS buffers.
+        const int status = http.POST(
+            reinterpret_cast<std::uint8_t*>(const_cast<char*>(payload.c_str())),
+            payload.length());
         if (status != HTTP_CODE_OK) {
             const String body = status > 0 ? http.getString() : String();
             lastError = status > 0
@@ -1291,6 +1294,14 @@ ChatResult runToolCompletionLoop(
             if (isCancelled()) {
                 return {false, completeResponse, "Request canceled by user"};
             }
+            std::string wireName = std::move(call.name);
+            if (isWebSearchToolName(wireName)) {
+                call.name = "web_search";
+            } else if (isWebFetchToolName(wireName)) {
+                call.name = "web_fetch";
+            } else {
+                call.name = std::move(wireName);
+            }
             remainingRequiredGroups = remainingRequiredGroupsAfterToolCall(
                 toolPlan, remainingRequiredGroups, call.name);
             ToolExecutionResult result = executeTool(call);
@@ -1359,6 +1370,9 @@ ChatResult runToolCompletionLoop(
                 completedWorkspaceWrite = true;
             }
             round.results.push_back(std::move(result));
+            if (!wireName.empty()) {
+                call.name = std::move(wireName);
+            }
         }
         rounds.push_back(std::move(round));
         ++roundIndex;

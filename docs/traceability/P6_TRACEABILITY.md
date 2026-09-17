@@ -7337,3 +7337,76 @@ and `architect-post-release-1131-upload.log`. The subsequent Web observation is 
 separate correction and does not claim success here. No retained test was modified.
 Architect returns **FIX-SETUP-EXIT CLOSURE GO** at 10:38 UTC; correction completed.
 Publication, combined Web acceptance and the new patch release remain pending.
+
+## FIX-WEB-ALIASES — post-release correction, 2026-09-17
+
+Started 09:54 UTC; Architect implementation ownership from 10:06 UTC. Source history
+proves v1.12.1 (`681cc8f`) and pre-P3 `2ffc3eb` accepted WebSearch/WebFetch. P3
+`d176fb47f2471338c37baa19a7e195b250a8cb4e` inserted exact catalog lookup before that
+compatibility boundary. The earlier provider-only classification is withdrawn.
+
+The existing Web-name helpers now canonicalize only the local execution name.
+Required accounting, router permissions, audit and pending persistence see canonical
+catalog names. Completed rounds replay the provider's original name; IDs/arguments
+are untouched. Unknown names retain the strict catalog rejection. Pending resumes
+retain their existing canonical format. No schema, permission, output or round
+limit was changed. The pinned libstdc++ move clears the source name, so restoring
+the original wire name does not copy potentially large tool arguments.
+
+Pinned ESP32 3.2.1 HTTPClient::POST(String) copies the entire request before TLS
+allocation. The synchronous byte-buffer overload reads the existing live String
+without retaining or modifying it. This removes one proven duplicate. It does not
+claim to resolve every model-request memory limit. Bounded independent design and
+fresh final code reviews returned GO; Architect personally reviewed the exact diff,
+vendor semantics, producer/consumer paths, errors and these runtime observations.
+
+Final candidate SHA-256:
+`adf0e8b0095bc4c42f0d8ea86903505790d62760c83dcd2b67373cce4649f05a`.
+Pinned build/options/upload passed: app 3,669,952 bytes, partition reserve 524,352,
+text 2,247,796, rodata 1,320,620, static DRAM 65,980, IRAM 77,567. Existing strict host
+tests and third-party checks passed unchanged; no retained test was added/modified.
+
+Real final-candidate SEARCHTEST, started 11:44:26 UTC and observed complete by
+11:45:51 UTC, returned `pass search_called=yes tool=web_search response_bytes=1754
+error=none` using the configured claude-opus-5 provider. Normal STATUS before/after
+retained four chats/history 3, connected Wi-Fi and ready SD/chats/files. Heap changed
+99,212 -> 99,128 bytes; largest block remained 32,756; stack margin remained 5,072;
+minimum heap reached 10,008 during network work. Final Web Ask observation separately
+proved canonical `web_search` in awaiting/policy_ask with allow-once available. The
+unchanged strict host policy/catalog evidence covers Off and unknown-name rejection.
+
+Evidence: `artifacts/architect-web-final-device-roundtrip.log`,
+`architect-web-wire-move-build.log`, `architect-web-wire-move-metrics.json`,
+`architect-web-wire-move-upload.log`, and the pending stage of
+`architect-web-ask-native-prompt.log.node.out`. Ancestor Device SEARCHTEST also
+completed a 1,212-byte answer; it is not substituted for the final candidate.
+
+Architect returns **FIX-WEB-ALIASES CLOSURE GO** at 11:46 UTC for this compatibility
+and redundant-copy correction. It is completed; publication follows. Setup's prior
+accepted commit is published as `e20c477a125a70449c1e3453afde860682e2aa17`.
+The independently failing Web continuation below still blocks the patch release.
+
+## FIX-WEB-CONTINUATION — in_progress, 2026-09-17
+
+The post-release Web observations exposed an independent resource boundary. With
+all available schemas, two successful ~4.4 KiB searches can exhaust the unchanged
+post-serialization 70,000-byte heap floor. Some model responses also omit calls
+despite Required; those runs are not successful search evidence. Final-candidate
+Ask reached canonical confirmation, then its continuation failed TLS allocation
+(`-32512`). Read-only inventories verified moved ownership throughout the normal
+and pending paths; no large leaked document or missed move explains the failure.
+The serialized body coexists with retained tool results during TLS.
+
+The Ask observer's cleanup did not handle its terminal pending state and failed.
+Separate exact-owned acknowledgement/project cleanup passed at 11:29:35 UTC. A
+later Web-only control lost HTTP transport; that run immediately stopped and remains
+failed. A separate pinned esptool 4.9.0 RTS reset restored normal readiness, then
+exact-owned terminal acknowledgement/project cleanup passed at 11:40:13 UTC.
+Four chats/history 3, API configuration and connected Wi-Fi were retained. Evidence:
+`artifacts/architect-web-ask-terminal-cleanup.log`,
+`architect-web-ask-web-only.log.node.out`, `architect-web-ask-separate-restoration.log`,
+`architect-web-ask-restored-status.log`, and `architect-web-ask-restored-cleanup.log`.
+
+Architect records **release STOP**. ROADMAP contains the bounded SD-backed request
+design assignment; Phase 6 is doing read-only design, with production handoff still
+pending. No claim of a completed Web search/approval flow or v1.13.1 release is made.
