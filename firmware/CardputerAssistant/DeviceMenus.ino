@@ -331,6 +331,7 @@ std::vector<String> fileActionItems()
 
 std::vector<cardputer::CarouselCard> carouselCards()
 {
+    constexpr std::uint16_t iconAccent = 0xAAE2;
     String networkSubtitle = "Choose 2.4 GHz Wi-Fi";
     if (WiFi.status() == WL_CONNECTED) {
         networkSubtitle = String("Connected: ") + settings.wifiSsid;
@@ -338,15 +339,15 @@ std::vector<cardputer::CarouselCard> carouselCards()
         networkSubtitle = String("Connecting: ") + settings.wifiSsid;
     }
     return {
-        {"CONTEXTS", "PROJECTS", "Chats · Files · Instructions", 0x2F1C, cardputer::CarouselIcon::Chats},
-        {"MODELS & TOOLS", "AI", settings.model, 0xA23F, cardputer::CarouselIcon::Ai},
-        {"SPEECH", "VOICE", "STT · TTS · Volume", 0xFD20, cardputer::CarouselIcon::Voice},
-        {"CONNECTIVITY", "NETWORK", networkSubtitle, 0xB7E6, cardputer::CarouselIcon::Network},
-        {"WORKSPACE", "FILES", "Edit · Read · Export", 0x4DFF, cardputer::CarouselIcon::Files},
-        {"BROWSER CONTROL", "WEB CONSOLE", "Chat · Files · Terminal", 0xFB4D, cardputer::CarouselIcon::Web},
-        {"SYSTEM", "DEVICE", "Settings · API · Update", 0xFFE0, cardputer::CarouselIcon::Device},
-        {"UTILITIES", "TOOLS", "Notes · SSH · Monitor", 0x07FF, cardputer::CarouselIcon::Tools},
-        {"REFERENCE", "HELP", "Controls · About · Support", 0xF81F, cardputer::CarouselIcon::Help},
+        {"CONTEXTS", "PROJECTS", "Chats · Files · Instructions", iconAccent, cardputer::CarouselIcon::Chats},
+        {"MODELS & TOOLS", "AI", settings.model, iconAccent, cardputer::CarouselIcon::Ai},
+        {"SPEECH", "VOICE", "STT · TTS · Volume", iconAccent, cardputer::CarouselIcon::Voice},
+        {"CONNECTIVITY", "NETWORK", networkSubtitle, iconAccent, cardputer::CarouselIcon::Network},
+        {"WORKSPACE", "FILES", "Edit · Read · Export", iconAccent, cardputer::CarouselIcon::Files},
+        {"BROWSER CONTROL", "WEB CONSOLE", "Chat · Files · Terminal", iconAccent, cardputer::CarouselIcon::Web},
+        {"SYSTEM", "DEVICE", "Settings · API · Update", iconAccent, cardputer::CarouselIcon::Device},
+        {"UTILITIES", "TOOLS", "Notes · SSH · Monitor", iconAccent, cardputer::CarouselIcon::Tools},
+        {"REFERENCE", "HELP", "Controls · About · Support", iconAccent, cardputer::CarouselIcon::Help},
     };
 }
 
@@ -657,9 +658,13 @@ void renderQrEntry()
 
 void openWebConsole(Screen returnScreen)
 {
+    lastUserActivityAt = millis();
+    displaySleeping = false;
+    M5Cardputer.Display.setBrightness(settings.displayBrightness);
     ensureNetworkReady();
     if (WiFi.status() != WL_CONNECTED || std::time(nullptr) < 1700000000) {
         menuStatus = statusMessage;
+        lastUserActivityAt = millis();
         currentScreen = returnScreen;
         render();
         return;
@@ -718,6 +723,7 @@ void openWebConsole(Screen returnScreen)
                 : "Web console closed";
         }
     }
+    lastUserActivityAt = millis();
     currentScreen = returnScreen;
     render();
 }

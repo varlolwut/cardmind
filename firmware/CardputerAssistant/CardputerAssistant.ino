@@ -78,6 +78,7 @@ constexpr std::uint32_t kSdStateRefreshIntervalMs = 1000;
 constexpr std::size_t kFileViewerChunkBytes = 2048;
 constexpr std::size_t kFileViewerPageLines = 8;
 constexpr std::size_t kFileEditorMaximumBytes = 4096;
+constexpr std::size_t kMaximumChatRenameInputBytes = 256;
 constexpr cardputer::ToolMessageIntent kAutomaticToolMessageIntent = {
     cardputer::ToolMessageIntentMode::Auto,
     0,
@@ -118,8 +119,10 @@ enum class Screen {
     ProjectToolPolicy,
     ProjectInstructions,
     ProjectRename,
+    DeleteProjectConfirm,
     ChatList,
     ChatActions,
+    ChatRename,
     ChatModelPicker,
     ChatToolPolicy,
     ChatCapabilityStatus,
@@ -229,6 +232,8 @@ bool archivedChatEof = true;
 String selectedChatId;
 String selectedChatTitle;
 String selectedChatModel;
+std::string chatRenameInput;
+String chatRenameStatus;
 cardputer::ContextUsage selectedChatContextUsage = {0, 0, 0, 0, 0};
 bool selectedChatContextUsageReady = false;
 String requestOutputOverrideChatId;
@@ -382,6 +387,7 @@ void renderProjectModelPicker();
 void renderProjectToolPolicy();
 void renderProjectInstructions();
 void renderProjectRename();
+void renderChatRename();
 void renderControlsHelp();
 void renderAiMenu();
 void renderToolActivity();
@@ -464,6 +470,9 @@ void runUiSearchEndToEndTest();
 void updateSerial();
 bool refreshRuntimeSdState();
 void handleKeyboard();
+void processKeyboardInput(
+    const std::vector<Point2D_t>& newPresses,
+    const Keyboard_Class::KeysState& keys);
 void handleVoiceInput();
 void speakLastAssistantResponse();
 void openWifiPicker(Screen returnScreen);
@@ -1154,6 +1163,7 @@ std::vector<String> projectActionItems()
         "Export project bundle",
         deviceProjectApiProfileLabel(project.project),
         "Capability policies",
+        "Delete project",
         "Back",
     };
 }
@@ -1326,6 +1336,7 @@ std::vector<String> chatActionItems()
         "Capability policies",
         "Capability status",
         "Next capabilities: " + composerCapabilitiesLabel(),
+        "Rename chat",
         "Clear messages",
         "Delete chat",
         "Back",
@@ -1338,6 +1349,15 @@ void renderChatActions()
                                  menuStatus.isEmpty()
                                      ? String("UP/DOWN  ENTER  ESC back")
                                      : menuStatus);
+}
+
+void renderChatRename()
+{
+    cardputer::showTextEditor(
+        "RENAME CHAT", chatRenameInput, keyboardLayout,
+        kMaximumChatRenameInputBytes, chatRenameStatus,
+        "Stored title uses up to 28 cells",
+        "ENTER save  CTRL+BACKSPACE clear  ESC back");
 }
 
 void renderSearchSources()
@@ -1598,11 +1618,18 @@ void render()
     case Screen::ProjectRename:
         renderProjectRename();
         return;
+    case Screen::DeleteProjectConfirm:
+        cardputer::showConfirmation("DELETE PROJECT", selectedProjectTitle,
+                                    "ENTER delete  ESC cancel");
+        return;
     case Screen::ChatList:
         renderChatList();
         return;
     case Screen::ChatActions:
         renderChatActions();
+        return;
+    case Screen::ChatRename:
+        renderChatRename();
         return;
     case Screen::ChatModelPicker:
         renderChatModelPicker();

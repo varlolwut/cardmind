@@ -69,7 +69,7 @@ bool runPureSelfTest()
 void printStatus()
 {
     refreshRuntimeSdState();
-    Serial.printf("STATUS version=%s board_adv=%s configured=%s voice_configured=%s search_configured=%s tts_configured=%s tts_auto=%s microsd=%s microsd_state=%s microsd_error=%s chats=%s chat_count=%u files=%s crash_journal=%s previous_operation=%s wifi=%s tls_time=%s battery=%d charging=%s history=%u heap=%u largest_heap=%u min_heap=%u stack_free=%u brightness=%u sleep_min=%u repeat_ms=%u power=%u cpu_mhz=%u reset_reason=%d\n",
+    Serial.printf("STATUS version=%s board_adv=%s configured=%s voice_configured=%s search_configured=%s tts_configured=%s tts_auto=%s microsd=%s microsd_state=%s microsd_error=%s chats=%s chat_count=%u files=%s crash_journal=%s previous_operation=%s wifi=%s tls_time=%s battery=%d charging=%s history=%u heap=%u largest_heap=%u min_heap=%u stack_free=%u brightness=%u brightness_actual=%u sleeping=%s sleep_min=%u repeat_ms=%u power=%u cpu_mhz=%u reset_reason=%d\n",
                   kFirmwareVersion,
                   M5.getBoard() == m5::board_t::board_M5CardputerADV ? "yes" : "no",
                   cardputer::settingsAreComplete(settings) ? "yes" : "no",
@@ -96,6 +96,8 @@ void printStatus()
                   static_cast<unsigned int>(ESP.getMinFreeHeap()),
                   static_cast<unsigned int>(uxTaskGetStackHighWaterMark(nullptr)),
                   static_cast<unsigned int>(settings.displayBrightness),
+                  static_cast<unsigned int>(M5Cardputer.Display.getBrightness()),
+                  displaySleeping ? "yes" : "no",
                   static_cast<unsigned int>(settings.screenSleepMinutes),
                   static_cast<unsigned int>(settings.keyboardRepeatMs),
                   static_cast<unsigned int>(settings.powerProfile),
@@ -2399,185 +2401,355 @@ void runProjectMigrationRecoveryTest()
 
 void runProjectParityTest()
 {
-    const String sharedName = "firmware_project_parity.txt";
-    const String bundleName = "firmware_project_parity.cardmind-project.jsonl";
-    const String sharedPath = cardputer::workspaceFilePath(sharedName);
-    const String bundlePath = cardputer::workspaceFilePath(bundleName);
-    if (SD.exists(sharedPath)) {
-        SD.remove(sharedPath);
-    }
-    if (SD.exists(bundlePath)) {
-        SD.remove(bundlePath);
-    }
+    const std::uint32_t heapBefore = ESP.getFreeHeap();
+    const std::uint32_t largestBefore =
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     cardputer::OperationResult result = {true, ""};
-    const cardputer::ScopedToolPermissionPolicy projectPolicy =
-        diagnosticScopedToolPolicy();
-    const cardputer::ScopedToolPermissionPolicy chatPolicy =
-        cardputer::setLegacySshToolsEnabled(
-            diagnosticScopedToolPolicy(), true);
-    cardputer::ProjectDocumentResult source = cardputer::createProject("Parity source");
-    if (!source.success) {
-        result = {false, source.error};
+    bool emptyRenameRejected = false;
+    bool renameCanceled = false;
+    bool renameSaved = false;
+    bool laterSavePreserved = false;
+    bool deleteCanceled = false;
+    bool projectDeleted = false;
+    bool replacementReady = false;
+    bool pageZeroReady = false;
+    bool cleanupComplete = false;
+
+    const std::vector<Point2D_t> enterPress = {{13, 2}};
+    const std::vector<Point2D_t> backspacePress = {{13, 0}};
+    const std::vector<Point2D_t> escapePress = {{0, 0}};
+    const std::vector<Point2D_t> releasePress;
+    const Keyboard_Class::KeysState neutralKeys = {};
+    Keyboard_Class::KeysState clearKeys = {};
+    clearKeys.ctrl = true;
+    Keyboard_Class::KeysState escapeKeys = {};
+    escapeKeys.fn = true;
+    escapeKeys.esc = true;
+
+    const cardputer::ProjectStorageManifestResult initialManifest =
+        cardputer::loadProjectStorageManifest();
+    const String originalProjectId = initialManifest.success
+        ? initialManifest.manifest.activeProjectId : String();
+    const cardputer::ProjectDocumentResult originalProject =
+        initialManifest.success && !originalProjectId.isEmpty()
+        ? cardputer::loadProject(originalProjectId)
+        : cardputer::ProjectDocumentResult{
+              false, {}, "Active project is unavailable before Device action proof"};
+    if (!initialManifest.success) {
+        result = {false, "Active project manifest preflight failed: " + initialManifest.error};
+    } else if (originalProjectId.isEmpty() || !originalProject.success) {
+        result = {
+            false,
+            originalProject.error.isEmpty()
+                ? String("Active project is unavailable before Device action proof")
+                : originalProject.error,
+        };
     }
-    cardputer::ChatDocumentResult chat = result.success
-        ? cardputer::createProjectChat(
-              source.project.summary.id, "Parity chat",
-              chatPolicy)
-        : cardputer::ChatDocumentResult{false, {}, result.error};
-    if (result.success && !chat.success) {
-        result = {false, chat.error};
-    }
+
+    cardputer::ProjectDocumentResult fixture = {
+        false, {}, "Fixture project creation was not attempted"};
+    cardputer::ChatDocumentResult fixtureChat = {
+        false, {}, "Fixture chat creation was not attempted"};
     if (result.success) {
-        result = cardputer::appendProjectChatMessages(
-            source.project.summary.id, chat.chat.summary.id,
-            {{"user", "parity"}, {"assistant", "ok"}}, 1700000000,
-            settings.projectChatHistoryQuotaBytes);
-    }
-    if (result.success) {
-        result = cardputer::createWorkspaceFile(sharedName);
-    }
-    if (result.success) {
-        result = cardputer::linkSharedFileToProject(source.project.summary.id, sharedName);
-    }
-    if (result.success) {
-        source = cardputer::loadProject(source.project.summary.id);
-        if (!source.success) {
-            result = {false, source.error};
+        fixture = cardputer::createProject("P6-06 Device fixture");
+        if (!fixture.success) {
+            result = {false, "Fixture project creation failed: " + fixture.error};
         }
     }
     if (result.success) {
-        source.project.instructions = "Parity instructions";
-        source.project.model = settings.model;
-        source.project.contextByteBudget = 65536;
-        source.project.maximumOutputTokens = 2048;
-        source.project.automaticCompaction = false;
-        source.project.activeChatId = chat.chat.summary.id;
-        source.project.toolPolicy = projectPolicy;
-        result = cardputer::saveProject(source.project);
+        fixtureChat = cardputer::createProjectChat(
+            fixture.project.summary.id, "P6-06 chat",
+            settings.newChatToolPolicy);
+        if (!fixtureChat.success) {
+            result = {false, "Fixture chat creation failed: " + fixtureChat.error};
+        }
     }
     if (result.success) {
-        result = cardputer::renameProject(source.project.summary.id, "Parity renamed");
-    }
-    cardputer::ProjectDocumentResult duplicate = result.success
-        ? cardputer::duplicateProject(source.project.summary.id, "Parity duplicate")
-        : cardputer::ProjectDocumentResult{false, {}, result.error};
-    if (result.success && !duplicate.success) {
-        result = {false, duplicate.error};
+        fixture.project.activeChatId = fixtureChat.chat.summary.id;
+        const cardputer::OperationResult saved = cardputer::saveProject(fixture.project);
+        if (!saved.success) {
+            result = {false, "Fixture active chat save failed: " + saved.error};
+        }
     }
     if (result.success) {
-        result = cardputer::setProjectArchived(duplicate.project.summary.id, true);
+        const cardputer::OperationResult activated =
+            activateProject(fixture.project.summary.id);
+        if (!activated.success || activeProjectId != fixture.project.summary.id ||
+            activeChatId != fixtureChat.chat.summary.id) {
+            result = {
+                false,
+                activated.success
+                    ? String("Fixture project/chat activation identities did not match")
+                    : "Fixture project activation failed: " + activated.error,
+            };
+        }
+    }
+
+    const String originalChatTitle = fixtureChat.success
+        ? fixtureChat.chat.summary.title : String();
+    if (result.success) {
+        openChatActions(fixtureChat.chat.summary);
+        chatActionsIndex = 17;
+        processKeyboardInput(enterPress, neutralKeys);
+        processKeyboardInput(releasePress, neutralKeys);
+        if (currentScreen != Screen::ChatRename ||
+            chatRenameInput != std::string(originalChatTitle.c_str())) {
+            result = {false, "Device Chat Rename entry did not initialize the editor"};
+        }
     }
     if (result.success) {
-        result = cardputer::setProjectArchived(duplicate.project.summary.id, false);
-    }
-    const cardputer::ChatDocumentResult duplicateChat = result.success
-        ? cardputer::loadProjectChat(
-              duplicate.project.summary.id, chat.chat.summary.id, 4, 1024)
-        : cardputer::ChatDocumentResult{false, {}, result.error};
-    const cardputer::SharedFileLinkResult duplicateLink = result.success
-        ? cardputer::projectHasSharedFileLink(duplicate.project.summary.id, sharedName)
-        : cardputer::SharedFileLinkResult{false, false, result.error};
-    const cardputer::ProjectDocumentResult storedDuplicate = result.success
-        ? cardputer::loadProject(duplicate.project.summary.id)
-        : cardputer::ProjectDocumentResult{false, {}, result.error};
-    if (result.success && (!duplicateChat.success || duplicateChat.chat.messages.size() != 2 ||
-                           !duplicateLink.success || !duplicateLink.linked ||
-                           !storedDuplicate.success ||
-                           storedDuplicate.project.instructions != "Parity instructions" ||
-                           storedDuplicate.project.contextByteBudget != 65536 ||
-                           storedDuplicate.project.maximumOutputTokens != 2048 ||
-                           storedDuplicate.project.automaticCompaction ||
-                           storedDuplicate.project.toolPolicy != projectPolicy ||
-                           duplicateChat.chat.toolPolicy != chatPolicy)) {
-        result = {false, "Duplicated project content verification failed"};
+        processKeyboardInput(backspacePress, clearKeys);
+        processKeyboardInput(releasePress, neutralKeys);
+        processKeyboardInput(enterPress, neutralKeys);
+        processKeyboardInput(releasePress, neutralKeys);
+        const cardputer::ChatDocumentResult unchanged =
+            cardputer::loadProjectChatMetadata(
+                fixture.project.summary.id, fixtureChat.chat.summary.id);
+        emptyRenameRejected = currentScreen == Screen::ChatRename &&
+            chatRenameInput.empty() && unchanged.success &&
+            unchanged.chat.summary.title == originalChatTitle;
+        if (!emptyRenameRejected) {
+            result = {false, "Empty Device Chat Rename changed durable state or left the editor"};
+        }
     }
     if (result.success) {
-        result = cardputer::exportProjectBundle(source.project.summary.id, bundleName);
+        processKeyboardInput(escapePress, escapeKeys);
+        processKeyboardInput(releasePress, neutralKeys);
+        const cardputer::ChatDocumentResult unchanged =
+            cardputer::loadProjectChatMetadata(
+                fixture.project.summary.id, fixtureChat.chat.summary.id);
+        renameCanceled = currentScreen == Screen::ChatActions && unchanged.success &&
+            unchanged.chat.summary.title == originalChatTitle;
+        if (!renameCanceled) {
+            result = {false, "Canceled Device Chat Rename changed durable state"};
+        }
     }
-    cardputer::ProjectDocumentResult imported = result.success
-        ? cardputer::importProjectBundle(bundleName)
-        : cardputer::ProjectDocumentResult{false, {}, result.error};
-    if (result.success && !imported.success) {
-        result = {false, imported.error};
-    }
-    const cardputer::ChatDocumentResult importedChat = result.success
-        ? cardputer::loadProjectChat(imported.project.summary.id, chat.chat.summary.id, 4, 1024)
-        : cardputer::ChatDocumentResult{false, {}, result.error};
-    const cardputer::SharedFileLinkResult importedLink = result.success
-        ? cardputer::projectHasSharedFileLink(imported.project.summary.id, sharedName)
-        : cardputer::SharedFileLinkResult{false, false, result.error};
-    const cardputer::ScopedToolPermissionPolicy importedChatPolicy =
-        cardputer::setLegacySshToolsEnabled(chatPolicy, false);
-    if (result.success && (!importedChat.success || importedChat.chat.messages.size() != 2 ||
-                           !importedLink.success || !importedLink.linked ||
-                           imported.project.instructions != "Parity instructions" ||
-                           imported.project.toolPolicy != projectPolicy ||
-                           importedChat.chat.toolPolicy != importedChatPolicy)) {
-        result = {false, "Imported project content verification failed"};
-    }
-    bool uiRoutesReady = false;
+
+    const std::string renameInput = "  P6-06   renamed chat  ";
+    const String expectedChatTitle = "P6-06 renamed chat";
     if (result.success) {
-        const cardputer::OperationResult refreshed = refreshProjectPage(0);
-        if (!refreshed.success) {
-            result = refreshed;
+        chatActionsIndex = 17;
+        processKeyboardInput(enterPress, neutralKeys);
+        processKeyboardInput(releasePress, neutralKeys);
+        chatRenameInput = renameInput;
+        renderChatRename();
+        processKeyboardInput(enterPress, neutralKeys);
+        processKeyboardInput(releasePress, neutralKeys);
+        const cardputer::ChatDocumentResult canonical =
+            cardputer::loadProjectChatMetadata(
+                fixture.project.summary.id, fixtureChat.chat.summary.id);
+        bool listedTitleMatches = false;
+        for (const cardputer::ChatSummary& listed : chats) {
+            if (listed.id == fixtureChat.chat.summary.id) {
+                listedTitleMatches = listed.title == expectedChatTitle;
+                break;
+            }
+        }
+        renameSaved = currentScreen == Screen::ChatActions &&
+            menuStatus == "Chat renamed" && canonical.success &&
+            canonical.chat.summary.title == expectedChatTitle &&
+            selectedChatTitle == expectedChatTitle &&
+            activeChatTitle == expectedChatTitle && listedTitleMatches;
+        if (!renameSaved) {
+            result = {false, "Device Chat Rename did not synchronize canonical and live titles"};
+        }
+    }
+    if (result.success) {
+        const cardputer::OperationResult saved = saveCurrentChat();
+        const cardputer::ChatDocumentResult canonical = saved.success
+            ? cardputer::loadProjectChatMetadata(
+                  fixture.project.summary.id, fixtureChat.chat.summary.id)
+            : cardputer::ChatDocumentResult{false, {}, saved.error};
+        laterSavePreserved = saved.success && canonical.success &&
+            canonical.chat.summary.title == expectedChatTitle;
+        if (!laterSavePreserved) {
+            result = {false, "A normal Chat save did not preserve the Device rename"};
+        }
+    }
+
+    if (result.success) {
+        openProjectActions(fixture.project.summary);
+        projectActionsIndex = 12;
+        processKeyboardInput(enterPress, neutralKeys);
+        processKeyboardInput(releasePress, neutralKeys);
+        if (currentScreen != Screen::DeleteProjectConfirm) {
+            result = {false, "Device Project Delete confirmation was not entered"};
+        }
+    }
+    if (result.success) {
+        processKeyboardInput(escapePress, escapeKeys);
+        processKeyboardInput(releasePress, neutralKeys);
+        const cardputer::ProjectDocumentResult retained =
+            cardputer::loadProject(fixture.project.summary.id);
+        deleteCanceled = currentScreen == Screen::ProjectActions && retained.success;
+        if (!deleteCanceled) {
+            result = {false, "Canceled Device Project Delete did not retain the project"};
+        }
+    }
+    if (result.success) {
+        const cardputer::ProjectsPageResult candidates = cardputer::listProjectsPage(
+            0, cardputer::kMaximumProjectPageEntries);
+        bool replacementCandidateReady = false;
+        if (candidates.success) {
+            for (const cardputer::ProjectSummary& candidate : candidates.projects) {
+                if (candidate.id != fixture.project.summary.id) {
+                    replacementCandidateReady = true;
+                    break;
+                }
+            }
+        }
+        if (!candidates.success || !replacementCandidateReady) {
+            result = {
+                false,
+                candidates.success
+                    ? String("No surviving page-zero replacement Project is available")
+                    : "Replacement Project preflight failed: " + candidates.error,
+            };
+        }
+    }
+    if (result.success) {
+        projectActionsIndex = 12;
+        processKeyboardInput(enterPress, neutralKeys);
+        processKeyboardInput(releasePress, neutralKeys);
+        if (currentScreen != Screen::DeleteProjectConfirm) {
+            result = {false, "Device Project Delete confirmation could not be re-entered"};
+        }
+    }
+    if (result.success) {
+        processKeyboardInput(enterPress, neutralKeys);
+        processKeyboardInput(releasePress, neutralKeys);
+        const String missingError =
+            "Project metadata does not exist for id " + fixture.project.summary.id;
+        const cardputer::ProjectDocumentResult deleted =
+            cardputer::loadProject(fixture.project.summary.id);
+        const cardputer::ProjectStorageManifestResult manifest =
+            cardputer::loadProjectStorageManifest();
+        const cardputer::ProjectDocumentResult replacement =
+            manifest.success &&
+                    manifest.manifest.activeProjectId != fixture.project.summary.id
+                ? cardputer::loadProject(manifest.manifest.activeProjectId)
+                : cardputer::ProjectDocumentResult{
+                      false, {}, "Replacement Project identity is invalid"};
+        projectDeleted = !deleted.success && deleted.error == missingError &&
+            currentScreen == Screen::ProjectList && menuStatus == "Project deleted";
+        replacementReady = manifest.success &&
+            manifest.manifest.activeProjectId != fixture.project.summary.id &&
+            replacement.success;
+        pageZeroReady = projectPageOffset == 0 && projectPreviousPageOffsets.empty();
+        if (!projectDeleted || !replacementReady || !pageZeroReady) {
+            result = {false, "Device Project Delete postconditions did not match"};
+        }
+    }
+
+    String cleanupError;
+    bool originalSelectionVerified = false;
+    if (fixture.success && originalProject.success) {
+        const cardputer::OperationResult restored = activateProject(originalProjectId);
+        if (!restored.success) {
+            cleanupError = "Original Project restoration failed: " + restored.error;
         } else {
-            openProjectActions(source.project.summary);
-            const std::vector<String> actions = projectActionItems();
-            const bool renameRoute = actions.size() == 13 &&
-                actions[6] == "Rename project" &&
-                actions[10].startsWith("API profile:") &&
-                actions[11] == "Capability policies";
-            openProjectImportList();
-            const bool importRoute = currentScreen == Screen::WorkspaceFileList &&
-                workspaceListMode == WorkspaceListMode::ImportProject;
-            uiRoutesReady = renameRoute && importRoute;
-            if (!uiRoutesReady) {
-                result = {false, "Project device UI routes are incomplete"};
+            const cardputer::ProjectStorageManifestResult restoredManifest =
+                cardputer::loadProjectStorageManifest();
+            if (!restoredManifest.success) {
+                cleanupError =
+                    "Original Project restoration verification failed: " +
+                    restoredManifest.error;
+            } else if (activeProjectId != originalProjectId ||
+                       restoredManifest.manifest.activeProjectId != originalProjectId) {
+                cleanupError =
+                    "Original Project restoration identities did not match";
+            } else {
+                originalSelectionVerified = true;
             }
         }
     }
-    if (imported.success) {
-        const cardputer::OperationResult cleanup = cardputer::deleteProject(
-            imported.project.summary.id);
-        if (result.success && !cleanup.success) {
-            result = cleanup;
+    if (fixture.success) {
+        const String missingError =
+            "Project metadata does not exist for id " + fixture.project.summary.id;
+        const cardputer::ProjectDocumentResult remaining =
+            cardputer::loadProject(fixture.project.summary.id);
+        if (remaining.success) {
+            if (!originalSelectionVerified) {
+                const String error =
+                    "Fixture Project was retained because original selection is unverified";
+                cleanupError = cleanupError.isEmpty()
+                    ? error : cleanupError + "; " + error;
+            } else {
+                const cardputer::OperationResult removed =
+                    cardputer::deleteProject(fixture.project.summary.id);
+                if (!removed.success) {
+                    const String error = "Fixture Project cleanup failed: " + removed.error;
+                    cleanupError = cleanupError.isEmpty()
+                        ? error : cleanupError + "; " + error;
+                }
+            }
+        } else if (remaining.error != missingError) {
+            const String error = "Fixture Project cleanup lookup failed: " + remaining.error;
+            cleanupError = cleanupError.isEmpty()
+                ? error : cleanupError + "; " + error;
+        }
+        const cardputer::ProjectDocumentResult absentFirst =
+            cardputer::loadProject(fixture.project.summary.id);
+        const cardputer::ProjectDocumentResult absentSecond =
+            cardputer::loadProject(fixture.project.summary.id);
+        if (absentFirst.success || absentFirst.error != missingError ||
+            absentSecond.success || absentSecond.error != missingError) {
+            const String error = "Fixture Project absence verification failed";
+            cleanupError = cleanupError.isEmpty()
+                ? error : cleanupError + "; " + error;
         }
     }
-    if (duplicate.success) {
-        const cardputer::OperationResult cleanup = cardputer::deleteProject(
-            duplicate.project.summary.id);
-        if (result.success && !cleanup.success) {
-            result = cleanup;
-        }
+    cleanupComplete = cleanupError.isEmpty();
+    if (!cleanupComplete) {
+        result.error = result.success
+            ? "Cleanup failed: " + cleanupError
+            : result.error + "; cleanup failed: " + cleanupError;
+        result.success = false;
     }
-    if (source.success) {
-        const cardputer::OperationResult cleanup = cardputer::deleteProject(
-            source.project.summary.id);
-        if (result.success && !cleanup.success) {
-            result = cleanup;
-        }
-    }
-    if (SD.exists(bundlePath) && !SD.remove(bundlePath) && result.success) {
-        result = {false, "Project parity bundle cleanup failed"};
-    }
-    if (SD.exists(sharedPath)) {
-        const cardputer::OperationResult cleanup = cardputer::deleteWorkspaceFile(sharedName);
-        if (result.success && !cleanup.success) {
-            result = cleanup;
-        }
-    }
-    const cardputer::OperationResult validation = cardputer::validateCommittedProjectStorage();
-    if (result.success && !validation.success) {
-        result = validation;
-    }
+
     currentScreen = Screen::MainCarousel;
     renderCarousel();
-    Serial.printf("PROJECTPARITYTEST result=%s ui=%s error=%s\n",
-                  result.success ? "pass" : "failed",
-                  uiRoutesReady ? "pass" : "failed",
-                  result.success ? "none" : result.error.c_str());
+    const std::uint32_t heapAfter = ESP.getFreeHeap();
+    const std::uint32_t largestAfter =
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    const std::uint32_t minimumHeap = ESP.getMinFreeHeap();
+    const std::uint32_t stack = uxTaskGetStackHighWaterMark(nullptr);
+    const bool resourcesReady = heapAfter >= 70U * 1024U &&
+        largestAfter >= 28U * 1024U && stack > 0 &&
+        heapAfter + 4096U >= heapBefore;
+    const bool uiReady = emptyRenameRejected && renameCanceled && renameSaved &&
+        laterSavePreserved && deleteCanceled && projectDeleted && replacementReady &&
+        pageZeroReady;
+    if (result.success && (!uiReady || !resourcesReady)) {
+        result = {
+            false,
+            uiReady ? String("Device action resource limits failed")
+                    : String("Device action observations are incomplete"),
+        };
+    }
+    const String error = serialSafeError(result.error, 180);
+    Serial.printf(
+        "PROJECTPARITYTEST result=%s ui=%s empty=%s rename_cancel=%s rename=%s later_save=%s delete_cancel=%s delete=%s replacement=%s page_zero=%s cleanup=%s resources=%s heap_before=%u heap_after=%u largest_before=%u largest_after=%u minimum_heap=%u stack_free=%u error=%s\n",
+        result.success ? "pass" : "failed",
+        uiReady ? "pass" : "failed",
+        emptyRenameRejected ? "pass" : "failed",
+        renameCanceled ? "pass" : "failed",
+        renameSaved ? "pass" : "failed",
+        laterSavePreserved ? "pass" : "failed",
+        deleteCanceled ? "pass" : "failed",
+        projectDeleted ? "pass" : "failed",
+        replacementReady ? "pass" : "failed",
+        pageZeroReady ? "pass" : "failed",
+        cleanupComplete ? "pass" : "failed",
+        resourcesReady ? "pass" : "failed",
+        static_cast<unsigned int>(heapBefore),
+        static_cast<unsigned int>(heapAfter),
+        static_cast<unsigned int>(largestBefore),
+        static_cast<unsigned int>(largestAfter),
+        static_cast<unsigned int>(minimumHeap),
+        static_cast<unsigned int>(stack),
+        result.success ? "none" : error.c_str());
 }
-
 struct P2SharedOwnershipResult {
     bool success;
     String state;
@@ -4773,124 +4945,6 @@ void runP2RequestSettingsTest(const String& nonce)
         cleanup ? "pass" : "failed", passed ? "none" : error.c_str());
 }
 
-void runChatQolTest()
-{
-    const String exportName = "firmware_chat_export.md";
-    const String bundleName = "firmware_chat_export.chat.jsonl";
-    const String exportPath = cardputer::workspaceFilePath(exportName);
-    const String bundlePath = cardputer::workspaceFilePath(bundleName);
-    if (SD.exists(exportPath)) {
-        SD.remove(exportPath);
-    }
-    if (SD.exists(bundlePath)) {
-        SD.remove(bundlePath);
-    }
-    const cardputer::ChatDocumentResult created = cardputer::createChat("Chat QoL test");
-    if (!created.success) {
-        Serial.println("CHATQOLTEST result=failed stage=create");
-        return;
-    }
-    cardputer::ChatDocument source = created.chat;
-    source.messages = {{"user", "active"}, {"assistant", "answer"}};
-    source.instructions = "Be concise.";
-    source.draft = "unfinished";
-    source.summary.pinned = true;
-    source.toolPolicy = cardputer::setLegacySshToolsEnabled(
-        diagnosticScopedToolPolicy(), true);
-    const std::vector<cardputer::Message> archivedMessages = {
-        {"user", "old"}, {"assistant", "reply"},
-    };
-    cardputer::OperationResult result = cardputer::archiveChatMessages(
-        source.summary.id, archivedMessages);
-    if (result.success) {
-        source.summary.archivedMessageCount = archivedMessages.size();
-        result = cardputer::saveChat(source);
-    }
-    const cardputer::ChatDocumentResult loaded = result.success
-        ? cardputer::loadChat(source.summary.id)
-        : cardputer::ChatDocumentResult{false, {}, result.error};
-    if (result.success && (!loaded.success || !loaded.chat.summary.pinned ||
-                           loaded.chat.summary.archivedMessageCount != 2 ||
-                           loaded.chat.draft != "unfinished" ||
-                           loaded.chat.toolPolicy != source.toolPolicy)) {
-        result = {false, "Chat version-4 metadata round trip failed"};
-    }
-    const cardputer::ArchivedMessagesPageResult archivedPage = result.success
-        ? cardputer::readArchivedChatMessages(source.summary.id, 0, 8, 12000)
-        : cardputer::ArchivedMessagesPageResult{false, {}, 0, true, result.error};
-    if (result.success && (!archivedPage.success || archivedPage.messages.size() != 2 ||
-                           archivedPage.messages[0].content != "old" ||
-                           !archivedPage.eof)) {
-        result = {false, "Archived chat viewer page verification failed"};
-    }
-    const cardputer::ChatDocumentResult duplicated = result.success
-        ? cardputer::duplicateChat(source.summary.id)
-        : cardputer::ChatDocumentResult{false, {}, result.error};
-    if (result.success && (!duplicated.success || duplicated.chat.messages.size() != 2 ||
-                           duplicated.chat.draft != "unfinished" ||
-                           duplicated.chat.toolPolicy != source.toolPolicy)) {
-        result = {false, "Chat duplication verification failed"};
-    }
-    if (result.success) {
-        result = cardputer::exportChatToWorkspace(source.summary.id, exportName);
-    }
-    if (result.success && !SD.exists(exportPath)) {
-        result = {false, "Chat export file was not created"};
-    }
-    if (result.success) {
-        result = cardputer::exportChatBundleToWorkspace(source.summary.id, bundleName);
-    }
-    const cardputer::ChatDocumentResult imported = result.success
-        ? cardputer::importChatBundleFromWorkspace(bundleName)
-        : cardputer::ChatDocumentResult{false, {}, result.error};
-    const cardputer::ScopedToolPermissionPolicy importedPolicy =
-        cardputer::setLegacySshToolsEnabled(source.toolPolicy, false);
-    if (result.success && (!imported.success || imported.chat.messages.size() != 2 ||
-                           imported.chat.summary.archivedMessageCount != 2 ||
-                           imported.chat.instructions != "Be concise." ||
-                           imported.chat.toolPolicy != importedPolicy)) {
-        result = {false, "Portable chat import verification failed"};
-    }
-    if (result.success) {
-        result = cardputer::clearChatHistory(source.summary.id);
-    }
-    const cardputer::ChatDocumentResult cleared = result.success
-        ? cardputer::loadChat(source.summary.id)
-        : cardputer::ChatDocumentResult{false, {}, result.error};
-    if (result.success && (!cleared.success || !cleared.chat.messages.empty() ||
-                           cleared.chat.summary.archivedMessageCount != 0 ||
-                           cleared.chat.instructions != "Be concise.")) {
-        result = {false, "Clear chat verification failed"};
-    }
-    if (duplicated.success) {
-        const cardputer::OperationResult cleanup = cardputer::deleteChat(
-            duplicated.chat.summary.id);
-        if (result.success && !cleanup.success) {
-            result = cleanup;
-        }
-    }
-    if (imported.success) {
-        const cardputer::OperationResult cleanup = cardputer::deleteChat(
-            imported.chat.summary.id);
-        if (result.success && !cleanup.success) {
-            result = cleanup;
-        }
-    }
-    const cardputer::OperationResult sourceCleanup = cardputer::deleteChat(source.summary.id);
-    if (result.success && !sourceCleanup.success) {
-        result = sourceCleanup;
-    }
-    if (SD.exists(exportPath) && !SD.remove(exportPath) && result.success) {
-        result = {false, "Chat export cleanup failed"};
-    }
-    if (SD.exists(bundlePath) && !SD.remove(bundlePath) && result.success) {
-        result = {false, "Portable chat bundle cleanup failed"};
-    }
-    Serial.printf("CHATQOLTEST result=%s error=%s\n",
-                  result.success ? "pass" : "failed",
-                  result.success ? "none" : result.error.c_str());
-}
-
 constexpr std::size_t kWorkspaceScaleFileCount = 500;
 constexpr char kWorkspaceScaleContent[] = "P2-WORKSPACE-SCALE\n";
 
@@ -5645,6 +5699,46 @@ void runUiBenchmark()
                   static_cast<unsigned int>(heapAfter),
                   static_cast<unsigned int>(largestHeapBefore),
                   static_cast<unsigned int>(largestHeapAfter));
+}
+
+void runCarouselDiagnostic()
+{
+    auto cards = carouselCards();
+    bool modelSanitized = false;
+    bool networkSanitized = false;
+    for (auto& card : cards) {
+        if (card.icon == cardputer::CarouselIcon::Ai) {
+            card.subtitle = "Representative model";
+            modelSanitized = true;
+        } else if (card.icon == cardputer::CarouselIcon::Network) {
+            card.subtitle = "Connected: Test Wi-Fi";
+            networkSanitized = true;
+        }
+    }
+    const std::uint32_t heapBefore = ESP.getFreeHeap();
+    const std::uint32_t largestBefore =
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    cardputer::CarouselDiagnosticResult result = {
+        {false, "Carousel diagnostic catalogue is missing dynamic cards"}, 0, 0};
+    if (modelSanitized && networkSanitized) {
+        result = cardputer::runCarouselDiagnostic(cards);
+    }
+    const std::uint32_t heapAfter = ESP.getFreeHeap();
+    const std::uint32_t largestAfter =
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    const std::uint32_t stack = uxTaskGetStackHighWaterMark(nullptr);
+    render();
+    const String error = serialSafeError(result.operation.error, 180);
+    Serial.printf(
+        "CAROUSELDIAG result=%s next_us=%u previous_us=%u heap_before=%u heap_after=%u largest_before=%u largest_after=%u stack=%u error=%s\n",
+        result.operation.success ? "pass" : "failed",
+        static_cast<unsigned int>(result.nextDurationUs),
+        static_cast<unsigned int>(result.previousDurationUs),
+        static_cast<unsigned int>(heapBefore),
+        static_cast<unsigned int>(heapAfter),
+        static_cast<unsigned int>(largestBefore),
+        static_cast<unsigned int>(largestAfter),
+        static_cast<unsigned int>(stack), error.c_str());
 }
 
 constexpr const char* kP6ProviderFillerNamespace = "assistant";
@@ -6958,6 +7052,10 @@ void handleSerialCommand(const String& command)
         runUiBenchmark();
         return;
     }
+    if (command == "CAROUSELDIAG") {
+        runCarouselDiagnostic();
+        return;
+    }
     if (command == "APITEST") {
         runApiTest();
         return;
@@ -7153,10 +7251,6 @@ void handleSerialCommand(const String& command)
     }
     if (command == "INSTRUCTIONTEST") {
         runInstructionPrecedenceTest();
-        return;
-    }
-    if (command == "CHATQOLTEST") {
-        runChatQolTest();
         return;
     }
     const String p2UnicodeSetupPrefix = "P2UNICODESETUP";

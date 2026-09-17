@@ -77,10 +77,14 @@ Status values are `pending`, `in_progress`, and `completed`.
 | P6-04 | Preserve active project, active view and drafts through the existing Web reconnect path | Same-address reconnect after transient disconnect and Python handoff; active project/view/draft restored; stale or missing state fails explicitly; no exact-scroll claim | completed |
 | P6-05 | Bring the Web Console to the Architect-reviewed replacement direction, add explicit discovered-network Wi-Fi selection through the smallest reviewed existing-owner backend mapping, and finish desktop/tablet/phone polish through the existing asset boundary | Every required Web capability reachable; explicit Wi-Fi scan/select/hidden-manual/connect states and other degraded states; stable-ID interaction checks; 1280, 900 and 390 px screenshots without overlap; soak and resource evidence | completed |
 | P6-05A | Bring the existing basic setup/provisioning page and save/error responses to the accepted shared visual style | All Wi-Fi/API/STT/search/TTS fields and actions remain usable at desktop/tablet/phone sizes; actual-source form/state/interaction evidence and unchanged write-only secret/validation/save/restart owners; flash-resident setup without SD or external assets; pinned build/resources under the 2026-09-17 proportional-evidence decision | completed |
-| P6-05B | Bring the existing manual Python login/workspace/return pages to the accepted shared visual style and deliver them through the existing VFS image | Script list/editor/output/actions, splitters and responsive layout remain usable; login and same-address CardMind return preserved; no execution/authentication changes; exact updated VFS delivery plus focused real-browser/runtime evidence | pending |
-| P6-06 | Bring the 240x135 Device UI to the Architect-reviewed replacement direction through existing screen/input owners, including complete Python-source navigation and return to the originating Chat | Every required Device capability reachable; coherent navigation and compact states; Python source review returns to its originating Chat without changing approval state; provider/SD/optional-API degradation; no Web-only requirement leakage; device resources and latency | pending |
-| P6-07 | Reconcile cross-surface behavior and run focused integration acceptance | Names/state/permissions consistent across Device and Web; profiles, sessions, presence, reconnect, SSH and Python full-source review/return boundaries interoperate; forbidden effects absent; exact-owned cleanup | pending |
+| P6-06 | Bring the 240x135 Device UI to the Architect-reviewed replacement direction through existing screen/input owners | Every required Device capability reachable; coherent navigation and compact states; provider/SD/optional-API degradation; no Web-only requirement leakage; device resources and latency | completed |
+| P6-07 | Reconcile cross-surface behavior and run focused integration acceptance | Names/state/permissions consistent across Device and Web; profiles, sessions, presence, reconnect and SSH interoperate; inherited Phase 5 behavior remains regression-free; forbidden effects absent; exact-owned cleanup | pending |
 | P6-08 | Establish the stable Wi-Fi release candidate, complete full firmware acceptance and close Phase 6 | Full E2E of all implemented functionality through P6 plus host/Device/Web regression; exact build options and binary hash; flash/RAM/heap/largest-block/stack/latency; screenshots; soak; cleanup including quarantined P2-21 debt; independent reviews; green CI; reviewed phase merge to `develop`, followed by Architect-owned `main` release under the 2026-09-15 user mandate | pending |
+
+P6-05B was removed from this release by the user's explicit 2026-09-16 scope
+decision. This is cancellation, not completion or runtime verification. Phase 5
+Python functionality remains unchanged; historical P6-05B notes below are
+superseded and provide no acceptance or publication authority.
 
 ## P6-01 reopened by Architect — 2026-09-15
 
@@ -5815,3 +5819,659 @@ land on FIX-PERF-01's already-published return/clamp interface; input preparatio
 remains FIX-PERF-01-owned. No cache, worker, storage, API, request, history-limit,
 fallback or additional diagnostic is included. No commit, stage or remote
 publication has yet occurred under this GO.
+
+## P6-06 observed Device-proof gap — 2026-09-15
+
+A read-only source inventory, followed by Architect inspection of `ui.h`, `ui.cpp`,
+`KeyboardNavigation.ino::handleKeyboard`, `printStatus` and the main sleep/wake loop,
+found no existing general remote key-injection or exported screen-capture path.
+The real keyboard dispatcher reads `M5Cardputer.Keyboard.keyList()`/`keysState()`;
+the UI owns a private `LGFX_Sprite`. Existing UIBENCH/HOTFIXINPUTTEST diagnostics
+call real renderers and measure time/resources, but do not prove menu-key reachability
+or rendered pixels. STATUS reports saved brightness, not `displaySleeping` or the
+actual display setting. Web ready is emitted before the initial render.
+
+This is a limitation of available proof, not evidence of a physical hardware fault.
+The separately user-authorized preflight on 2026-09-15 observed one PONG in 45 ms,
+then closed/disposed its ordinary serial session without a reset or state change;
+it is not P6-01/P6-04 acceptance. No physical intervention is currently required.
+
+P6-06 must freeze the smallest unattended proof through the real input/render owners.
+Do not claim full Device navigation or visual acceptance from a prototype, source
+inspection, saved settings, renderer timing or ready marker alone. If existing
+owners cannot supply the required observation, only the minimum reviewed input or
+render-observation seam needed for this acceptance belongs to P6-06; no general
+remote-control protocol, alternate dispatcher, second UI or test framework is
+requested. Any image/readout must exclude credentials and secret-bearing screens;
+no secret may enter serial output, captures or diagnostics. Production resource,
+cleanup and failed-path constraints remain unchanged. This evidence note starts no
+P6-06 implementation and does not alter the active P6-01 correction.
+
+### P6-06 activation and pre-edit GO
+
+At `2026-09-16T14:02:16+03:00`, Architect made P6-04 `pending` with its external
+blocker and frozen failed path unchanged, activated P6-06 as the sole `in_progress`
+row, and returned explicit `P6-06 PRE-EDIT GO`. The row clock starts at this
+transition. The current root-cause hypothesis is that the rejected animated palette
+and exactly two missing Device action consumers can be corrected through the existing
+screen, input, render and storage owners without a parallel framework. The expected
+information from the first implementation and cheap checks is whether that six-file
+boundary preserves every existing route and native geometry while compiling without
+new allocation or animation ownership.
+
+The frozen production write set is `src/ui.cpp`, `src/ui.h`, `DeviceMenus.ino`,
+`CardputerAssistant.ino` and `KeyboardNavigation.ino`. `SerialDiagnostics.ino` may
+change only its existing Project-action route invariant from 13 to 14 entries and
+require the new Delete label. The accepted presentation reuses the single RGB565
+sprite, existing 10/12/14 fonts and native 17/99/17, list, viewer, editor and QR
+geometry; it applies the reviewed graphite/warm-gray/amber roles, a non-color focus
+marker and one static Home redraw with all nine ordered icons, full selected label,
+status, neighbour names and `n/9`. It removes the six-frame Home animation and adds
+no asset, font, framebuffer, allocation, widget, theme, input or navigation system.
+
+Device Project Delete reuses the existing Project action, confirmation, activation,
+manifest and `deleteProject` owners. An active Project is never removed merely because
+`activateProject` returned success: the existing manifest must be reopened and its
+durable `activeProjectId` must equal the chosen replacement first. This specifically
+rejects the inherited SD-full non-persisting selection result. The old Project is not
+deleted on failed or unknown activation/verification. `deleteProject` can restore its
+index entry after directory-removal failure but cannot restore directory contents
+already removed; the UI must expose the actual failure and make no atomic rollback or
+old-content-intact claim. Returning to page zero clears Project pagination history.
+
+Device Chat Rename reuses the existing 256-byte valid-UTF-8 input, 28-cell
+`makeChatTitle` normalization, timestamp and metadata-save owners. After a successful
+save it reloads authoritative metadata and synchronizes selected and active in-memory
+titles before the fallible Chat-list refresh, preventing a later `saveCurrentChat`
+from overwriting a durable rename with stale state. Read, save and refresh failures
+remain distinct and explicit; no metadata rollback or storage redesign is added.
+
+No new test family, harness, key-injection protocol, framebuffer exporter, proof seam,
+Web/Python change, P6-04 probe or Device recovery action is authorized. Existing
+storage evidence is reused. Cheap relevant checks precede at most one exact pinned
+compile; no upload follows. UIBENCH/HOTFIXINPUTTEST remain performance evidence only.
+Runtime and visual closure remain blocked wherever a healthy unattended real-key and
+display observation is unavailable; prototype, source and compilation cannot replace
+that evidence.
+
+### P6-06 source and compile-only evidence
+
+By `2026-09-16T14:54:44+03:00`, the reviewed six-file boundary was implemented
+without a Web, Python, P6-04, P6-05A, COM, HTTP or Device action. Home now performs
+one static redraw with the existing sprite, fonts, icons and native geometry; all
+nine destinations retain their order, use one warm accent, show the full selected
+label, neighbour names, status and `n/9`, and expose selection through a rectangular
+double outline plus a solid left marker. Exact-source search found no remaining
+`animateCarousel` or `delay(13)` owner. Direct color search found only the eleven
+file-local RGB565 palette roles and the existing white QR canvas; pinned M5GFX
+`LGFXBase.cpp:2683-2730` explicitly renders that QR margin/background white and its
+modules black on white, so the QR boundary remains unchanged.
+
+The Project action list now has 14 entries and the retained serial invariant requires
+`Delete project` at index 12. The confirmation handler selects or creates a
+replacement for the active Project, calls the existing activation owner, reloads the
+manifest and requires its durable `activeProjectId` to equal that replacement before
+calling the existing delete owner. It clears pagination history and reloads page zero;
+failure text distinguishes deletion from a post-delete list-refresh failure and makes
+no rollback claim. The Chat action list now exposes `Rename chat`; its existing-editor
+path rejects empty or invalid UTF-8 input, enforces 256 input bytes, normalizes through
+the existing 28-cell title owner, reloads authoritative metadata after every save
+attempt, synchronizes selected/active in-memory titles before list refresh, and keeps
+read, save/partial-update, verification and refresh failures distinct.
+
+The exact pinned M5Cardputer, M5Unified, M5GFX and ArduinoJson versions passed their
+pre-build gate. The scoped `git diff --check` passed, and the CI-equivalent strict WSL
+host suite passed with `host_tests: PASS` through the collision-checked literal
+`/tmp/cardmind-host-tests-p606` owner and its exit trap. One exact native-Windows
+compile then passed with the required config and FQBN and no upload: the CLI reported
+3,641,690 sketch bytes, 65,956 global bytes and 261,724 bytes left for local variables.
+Generated `build.options.json` is 1,736 bytes at SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`; it contains
+the exact required FQBN and two references to one unique M5Stack ESP32 3.2.1 directory,
+with no 3.3.9 or other resolved core.
+
+The actual application binary is 3,641,872 bytes at SHA-256
+`B0BB483DD33555E6A9905B764D4B80F78EA4C09FC2DF27BC2A9B2AB006B3DD7B`.
+Against the authoritative 4,194,304-byte app partition it occupies 86.82899 percent
+and leaves 552,432 bytes. It is 5,184 bytes larger than the P6-05A binary; global
+allocation is 48 bytes higher than P6-05A. The binary remains 28,144 bytes below the
+3,670,016-byte CI maximum and the same 28,144 bytes above the 524,288-byte minimum
+free reserve. The ELF is 45,947,600 bytes at SHA-256
+`89E154D7053AAEEA27FA86A3FB92FACF786FB8EF2F944F1F67803B70C052E704`.
+The CLI's generic 21-percent message is not used as app-partition occupancy.
+
+This checkpoint is 52 minutes 28 seconds after row activation; evidence progressed
+through distinct implementation, source, host and compile gates, so no unresolved
+hypothesis reached a 30-minute alert or 60-minute pivot. Runtime heap, largest block,
+stack margin, key latency and display acceptance remain unmeasured because the failed
+Device path is frozen and no independently healthy unattended real-key/display path
+is available. P6-06 therefore remains the sole `in_progress` row and this source/build
+package is ready only for mandatory Architect closure review, not completion, staging,
+commit or publication.
+
+### P6-06 Architect closure STOP and bounded correction
+
+At `2026-09-16T15:09:37+03:00`, Architect personally inspected all six changed
+source files plus the generated build options and binary. The reported source hashes,
+exact FQBN, M5Stack ESP32 3.2.1 resolution and 552,432-byte app-partition reserve
+matched. Architect returned source acceptance `STOP`; runtime/visual closure also
+remains `STOP`. The review proved exactly five bounded correction owners:
+
+1. The new Chat Rename footer advertises `FN+DEL clear`, while the existing input
+   owner maps Ctrl+Backspace to clear and Fn+Delete to one-code-point backspace. Only
+   the new footer must name the real keys.
+2. Chat error status uses light text on the danger background at about 2.30:1
+   contrast, and the confirmation trash icon uses that same light role on danger.
+   Both danger-background foregrounds must reuse the canvas role already used by
+   existing confirmation/recording presentation.
+3. The shared editor renders seven 12-pixel lines on 13-pixel steps from y=19; the
+   last line reaches the status row starting at y=105. Limit the existing tail-scrolled
+   editor window to six lines without changing fonts, status or footer geometry.
+4. Project Delete classifies the selected Project as active from RAM only. A prior
+   SD-full non-persisting activation can leave the manifest pointing to that Project
+   while RAM points elsewhere. Load the manifest before classification, fail without
+   deletion if that read fails, and require replacement activation plus durable
+   verification when the selected ID matches either RAM or manifest active identity.
+5. Chat Rename currently reloads canonical metadata before updating in-memory titles.
+   If a known-successful save is followed by a failed reload, later
+   `saveCurrentChat` can restore the stale title. On known save success, update selected
+   and matching active in-memory titles from the normalized requested title before the
+   fallible reload; a successful reload remains authoritative and reload failure stays
+   explicit.
+
+Architect returned pre-edit `GO` for only these five corrections. The correction
+write set is `src/ui.cpp`, `CardputerAssistant.ino`, `KeyboardNavigation.ino` and this
+trace; no schema, storage owner, route, framework, test family or proof protocol is
+added. The frozen Device/COM/HTTP path, P6-04/P6-05A files and cancelled Python work
+remain untouched. One changed-boundary compile may follow combined source acceptance;
+there is no upload, Device action, completion, staging, commit or publication authority.
+
+### P6-06 source correction GO and final compile-only result
+
+At `2026-09-16T15:14:00+03:00`, Architect personally re-read all five corrected
+paths and matched the corrected source hashes: `CardputerAssistant.ino`
+`43C36497098FE247D43B55A1E97BF6E1DD44679F03C2C70D9AD95E9EFAB38601`,
+`KeyboardNavigation.ino`
+`669ED5D8BF1C76022352703AC3DB46DA7CB7EF8C23A0D72280E509BAC467168F`
+and `src/ui.cpp`
+`6F88D82E8AD4517DE5713B4FD7E7766141D68ED647D1A1DDBD7C34BE38F17CD8`.
+The footer now names Ctrl+Backspace and fits its existing 44-cell clip; six editor
+lines end before the y=105 status row; danger foreground contrast is about 6.19:1.
+Architect also verified the manifest read/error gate, RAM-or-durable active identity,
+final durable replacement verification and known-save title synchronization before
+fallible reload. The same independent reviewer used its one permitted blocker recheck
+and returned `GO` on both persistence corrections. Scoped `git diff --check` passed.
+Architect returned `P6-06 SOURCE CORRECTION GO` and authorized one corrected-boundary
+compile only; runtime/visual row closure remained `STOP`.
+
+That one exact pinned compile completed by `2026-09-16T15:18:28+03:00` without an
+upload. The CLI reported 3,642,170 sketch bytes, unchanged 65,956 global bytes and
+261,724 bytes left for local variables. The final application binary is 3,642,352
+bytes at SHA-256
+`D8D4FD087F60E608F6F89B904320A7FFB8D3FF3B121E58F7288A823A674ED9C9`;
+it is 480 bytes larger than the superseded pre-correction P6-06 binary and 5,664 bytes
+larger than the P6-05A binary. It occupies 86.84044 percent of the 4,194,304-byte app
+partition and leaves 551,952 bytes. The final image remains 27,664 bytes inside both
+the 3,670,016-byte maximum-binary gate and the 524,288-byte minimum-free gate. The
+45,949,012-byte ELF has SHA-256
+`2DF1DD3D9026CE66A0750ECECD13B99A32DB7484F68EC80DB412AB35F6D456E7`.
+
+Final `build.options.json` remains 1,736 bytes at SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`,
+with the exact required FQBN, one unique resolved M5Stack ESP32 3.2.1 directory and
+no 3.3.9 or other core. The unchanged host production boundary was not retested. No
+Web, Python, COM, HTTP, Device, upload, reset, fixture or mutable cleanup action
+occurred. Runtime heap, largest block, stack margin, real-key latency and display
+acceptance are still unmeasured, so P6-06 remains the sole `in_progress` row and is
+not eligible for completion, staging, commit or publication.
+
+### P6-06 deferred Device Chat responsiveness scope — 2026-09-16
+
+A read-only source audit for the user's reported slow Device Chat interaction found
+three inherited application-version-1.12.1 consumer costs. In
+KeyboardNavigation.ino:3124..3153, scrolling calls maximumChatScrollOffset() and
+therefore transcriptLines(), then rendering calls showChat() and computes
+transcriptLines() again. In ui.cpp:609, updateChatInput() wraps the complete draft
+twice through the existing helper at line 126 for its sprite and display draw
+targets. In main.ino:1388, openChatActions() loads the full bounded 64/64-KiB tail
+and Project document, then its Open path calls activateChat() at line 900 and
+repeats the load. The unflashed P6-06 changes are not the cause.
+
+Architect assigns three minimal UI-consumer corrections to P6-06 after P6-04 and
+P6-05: prepare one input-line layout for both draw targets, compute one transcript
+layout and clamp effective scroll from it, and load the full Chat tail in actions
+only when the selected action needs it. This adds no cache framework, storage
+format, retained test harness or general storage rewrite. The dirty-draft
+whole-index rewrite remains inherited P2/P3 ownership and does not authorize
+storage edits. Existing UI diagnostics must provide scoped before/after timings at
+known draft length, tail size and Chat count; no speed claim is valid before those
+measurements and no full-storage benchmark is required. P6-06 remains pending.
+
+### P6-06 physical Home defect and correction activation — 2026-09-16
+
+At `2026-09-16T20:15:33+03:00`, Architect returned P6-05 to `pending` and
+activated P6-06 for the user's real-Device Home report. Phase confirmed that its
+post-upload P6-05 runtime observation had not started and no COM8 or HTTP holder
+was open. Two disposable browser-helper construction failures happened before
+file creation or Device access; that construction approach is stopped. No runtime
+pass or failure is inferred from the user's concurrent physical navigation.
+
+The photo shows the in-card ENTER intersecting the lower border. Current
+`drawCarouselCard` uses x=30, width=180 and ENTER at y=85; the neighbour label is
+left-anchored at x=166. Source also confirms that the prior P6-06 decision removed
+`animateCarousel` and made `moveCarousel` call the static renderer. Architect
+supersedes that static-Home design in ROADMAP: six-pixel side margins, one border,
+full readable card content, one footer action, edge-aligned neighbours, centered
+position, and a short directional transition on Left/Right only. The correction
+owns only carousel code in `src/ui.cpp`, `src/ui.h` and `DeviceMenus.ino`.
+Integrated Chat performance, Wi-Fi policy, Web state and storage remain separate.
+
+The physical report disproves the sufficiency of prior source/prototype visual
+acceptance. Existing UIBENCH and HOTFIXINPUTTEST do not expose native Home pixels.
+Architect authorizes a narrow exception to the earlier no-exporter proof lock:
+one fixed Home-only diagnostic through the existing SerialDiagnostics dispatcher
+may render the nine cards with neutral model/network subtitles and stream the
+existing 240x135 RGB565 canvas. No arbitrary-screen export, new framebuffer,
+SD fixture, HTTP route, key injection, framework or working-test rewrite is
+authorized. Actual transition timing is measured separately from pixel transfer;
+the existing render owner restores the prior visible screen. Serial short-write
+or format mismatch must fail explicitly. Native M5GFX `getBuffer`, `bufferLength`
+and `rgb565_2Byte`/`swap565_t` provide the existing big-endian pixel representation.
+The independent pre-edit reviewer includes this smallest proof boundary. Production
+editing still waits for its concrete verdict and Architect GO. No current Home
+visual, transition-latency or P6-06 closure acceptance is claimed.
+
+The independent bounded pre-edit review returned GO. Installed `efontCN_10`
+has 10-pixel height and five-pixel Latin advance; the 26-cell subtitle occupies
+at most 130 pixels within the expanded text region. `efontCN_14` renders the
+longest fixed title, WEB CONSOLE, in 77 pixels. Neighbour labels including arrows
+occupy at most 65 pixels and fit clear of the centered position. Architect issued
+`P6-06 HOME CORRECTION PRE-EDIT GO` with two implementation constraints: frame six
+is the final x=6 position without a redundant seventh push, and each per-card clip
+is cleared immediately after that card. Source inspection and native static
+captures still do not establish perceived animation smoothness; retain that
+distinction in runtime evidence.
+
+### P6-06 bounded Home correction evidence and P6-05 reactivation — 2026-09-16
+
+The reviewed correction was implemented through the existing Home owners only.
+The selected card is at x=6, y=22 with size 228x75, one thin signal border,
+the existing icon and fonts, a full title and two 26-cell subtitle lines. The
+redundant in-card ENTER was removed while the footer action remains. Full fixed
+neighbour names use the left x=5 and native right x=235 anchors with the page
+position centered. `moveCarousel` now preserves the previous index and calls the
+restored six-frame, 240-pixel directional transition; frame six ends at x=6 with
+no seventh push. Each card clears its clip before navigation and footer drawing.
+Static refresh remains on `showCarousel`. No scheduler, cache, persistent buffer,
+storage, Web, power or Chat responsibility was added.
+
+The fixed `CAROUSELDIAG` proof uses the existing dispatcher, actual
+`carouselCards` catalogue, production fonts and renderer, with only model,
+network and status values replaced by explicit non-secret test data. It rejects
+dimensions other than 240x135, a non-RGB565 canvas, a buffer length other than
+64,800 bytes and any short serial write. It streams the same private canvas that
+was pushed to the display, allocates no second image buffer, measures production
+wraparound transitions separately from transfer and calls the existing `render()`
+owner to restore the current screen. The scoped diff check passed.
+
+The one pinned build in `build/p6-home-correction` exited zero. The exact FQBN
+was `m5stack:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=custom`;
+both resolved hardware references identify the same M5Stack ESP32 3.2.1
+directory. The sketch used 3,653,922 bytes, globals used 65,956 bytes and
+261,724 bytes remained for local variables. `build.options.json` retained
+SHA-256 `20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`.
+The 3,654,112-byte application binary has SHA-256
+`2A5F9B84A316C071CD0EEE0AA50EF87EA2DE036420CA206A76B10E236B3CA8BA`
+and leaves 15,904 bytes against the accepted 3,670,016-byte effective image
+limit. No rebuild followed.
+
+Architect performed the one candidate upload. It exited zero, every esptool block
+passed data-hash verification and COM8 returned through the normal vendor
+post-upload reset. A new capture run used one retained readiness sequence, received
+normal `STATUS`, then received exactly nine zero-based records of 64,800 bytes
+and the passing final `CAROUSELDIAG` result before returning to the application
+and closing COM8. Architect personally inspected all nine actual 240x135 PNGs
+under
+`C:\Users\84vs1\.codex\visualizations\2026\09\16\01a0a682-5410-7ed1-8f67-c2ab499bf055\home-native-1722\`.
+Every card has the single border without the former ENTER collision, the widened
+composition, full edge-anchored neighbour names, centered page position and
+complete title/description, including WEB CONSOLE.
+
+The actual production 9-to-1 Next transition measured 118,945 microseconds and
+the 1-to-9 Previous transition measured 119,001 microseconds at Balanced profile
+1 and 160 MHz, both within the frozen 120-millisecond limit. Baseline resources
+were free heap 121,720 bytes, largest block 57,332 bytes, minimum heap 109,728
+bytes and stack margin 7,800 bytes with reset reason 1. The diagnostic changed
+free heap from 120,680 to 120,432 bytes, left the largest block at 57,332 bytes
+and retained a 7,800-byte stack margin. The 248-byte free-heap delta does not
+block this bounded renderer/transport proof. It is not a current-draw,
+physical-key-latency or perceived-smoothness claim.
+
+No SD data, setting, API credential or Wi-Fi configuration was changed and the
+diagnostic created no Device fixture. The earlier optional UIBENCH observer
+attempts remain failed observer evidence with no benchmark measurement; this
+successful Home proof does not rewrite them. Architect returned explicit
+`HOME CORRECTION source/native-pixel/bounded-latency GO` and prohibited further
+Home code, build, upload or native checks absent a new defect. At
+`2026-09-16T20:47:06+03:00`, P6-06 returned to `pending` for its unchanged
+full Device and display-timeout gates, and P6-05 became the sole
+`in_progress` row for its not-yet-started post-upload runtime acceptance.
+
+### P6-06 icon-backplate follow-up activation — 2026-09-16
+
+At `2026-09-16T20:51:39+03:00`, the user reported that the corrected Home is
+better and requested removal of the differently colored background behind each
+icon. The P6-05 runtime observer had not started: no COM8 handle, Console command,
+HTTP request, browser interaction, fixture, setting or Device state change occurred
+after its brief activation. P6-05 therefore returned safely to `pending` and
+P6-06 became the sole `in_progress` row.
+
+Architect continued the accepted Home design with explicit pre-edit GO for one
+production-line removal only:
+`fillRect(x + 8, kCarouselCardY + 15, 43, 43, kBand)` in
+`drawCarouselCard`. Icons must render directly on the existing `kRaised` card
+background. Card geometry, border, fonts, colors, content, neighbour/page/footer
+layout, six-frame animation, diagnostic protocol, other production owners and
+all prior verified timing/resource facts remain unchanged. The smallest proof is
+scoped diff checking, one incremental pinned compile in the existing exact-owned
+`build/p6-home-correction` directory, and Architect-owned native
+`CAROUSELDIAG` visual confirmation using the existing proof path. No new
+reviewer, harness, proof seam, P6-05 runtime action or upload is authorized before
+the source/build packet and explicit Device-slot handoff.
+
+### P6-06 icon-backplate correction evidence and P6-05 reactivation — 2026-09-16
+
+The exact accepted production delta removed only the one icon-backplate
+`fillRect`; `drawCarouselIcon` now draws directly on the existing `kRaised`
+card background. The frozen `ui.cpp` SHA-256 is
+`66C889AE76D0CB8EE2B87193E962C5039223CF044CC5203FBCEE999B17BEB8F2`.
+Scoped diff checking passed and Architect personally verified that no other
+source delta entered the accepted Home boundary.
+
+The one incremental pinned compile in the existing exact-owned
+`build/p6-home-correction` directory exited zero. The sketch used 3,653,890
+bytes, globals used 65,956 bytes and 261,724 bytes remained for local variables.
+The exact FQBN and unique M5Stack ESP32 3.2.1 hardware directory were unchanged;
+`build.options.json` retained SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`.
+The 3,654,080-byte application binary has SHA-256
+`9FD88B0C2B0992D4E60540CD4BDC9D553F185CD31780429E92573B2F3E0B78C4`
+and 15,936 bytes remain against the accepted 3,670,016-byte effective image
+limit. No further build followed.
+
+Architect's one upload of that exact binary exited zero and every esptool block
+passed data-hash verification. One normal readiness plus unchanged
+`CAROUSELDIAG` run passed and returned all nine complete 64,800-byte frames.
+Architect personally inspected the actual 240x135 PNGs under
+`C:\Users\84vs1\.codex\visualizations\2026\09\16\01a0a682-5410-7ed1-8f67-c2ab499bf055\home-no-backplate-1800\`.
+All nine icons render on the uniform card background with no other layout change.
+The 9-to-1 Next transition measured 118,945 microseconds and the 1-to-9 Previous
+transition measured 119,002 microseconds, again within the 120-millisecond limit.
+
+Baseline resources were free heap 121,100 bytes, largest block 56,308 bytes,
+minimum heap 109,136 bytes and stack margin 7,800 bytes at power profile 1,
+160 MHz and reset reason 1. Diagnostic free heap changed from 120,060 to
+119,980 bytes, the largest block remained 56,308 bytes and stack margin remained
+7,800 bytes. The renderer restored the screen, COM8 closed, the disposable
+receiver was removed and no fixture, setting, SD data, API credential or Wi-Fi
+configuration changed.
+
+Architect returned explicit icon-backplate correction GO and prohibited further
+Home changes or repeated proof absent a new defect. At
+`2026-09-16T20:58:46+03:00`, P6-06 returned to `pending` for its unchanged
+remaining Device gates and P6-05 became the sole `in_progress` row for its
+not-yet-started post-upload runtime acceptance. The separately reported
+intermittent typing lag remains open under FIX-PERF-01 read-only diagnosis and is
+not accepted or absorbed by this Home evidence.
+
+### P6-06 reactivation and reviewed wake/status boundary — 2026-09-17 00:29:56 UTC
+
+After remote P6-05A verification, P6-06 becomes the sole `in_progress` row.
+The current root-cause hypothesis is that entering or leaving Web Console after
+display idle can retain stale sleep/activity state because `openWebConsole()` does
+not reassert the configured display command or refresh the activity clock at those
+ownership boundaries. The expected observation from the already reviewed minimal
+correction is an awake configured display on entry and both existing returns, plus
+status visibility into logical sleeping state and the library's cached commanded
+brightness byte. No physical-panel readback is claimed.
+
+The independently reviewed write boundary is limited to the existing
+`openWebConsole()` owner in `DeviceMenus.ino`, the existing STATUS producer in
+`SerialDiagnostics.ino`, and this trace. On entry it refreshes
+`lastUserActivityAt`, clears `displaySleeping`, and reapplies configured brightness
+before `ensureNetworkReady()`; both existing return paths refresh the activity
+clock. STATUS adds only `sleeping` and the actual commanded
+`M5Cardputer.Display.getBrightness()` value alongside configured brightness. No
+helper, selector, framework, Power function or unrelated Device behavior changes.
+No build, COM8, HTTP or runtime action is authorized by this activation alone.
+
+### P6-06 wake/status runtime acceptance — 2026-09-17 00:42–00:45 UTC
+
+The reviewed wake/status correction compiled on the exact FQBN and unique M5Stack
+ESP32 core 3.2.1. Its application was 3,669,376 bytes, the sketch was 3,669,190
+bytes and globals used 65,956 bytes. The application SHA-256 was
+`892C0BC4624E30532513904FB83312524293660F13F742CBD2D2DB0DDF117A41`, the ELF
+SHA-256 was `5116D329A4F0277E33219D329BB1BA4876237DD82BF12E30ED85C8494BF64B01`
+and build-options SHA-256 remained
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`.
+The application retained 640 bytes under the accepted CI image budget and
+524,928 bytes of physical application-partition space.
+
+On the installed exact image, normal status reported commanded brightness 255
+and `sleeping=no`. After the configured one-minute interval plus five seconds,
+status reported brightness 0 and `sleeping=yes`. `CONSOLE` then reached ready
+from that sleeping state, remained held for another 65 seconds, and the exact
+`EXIT` reached stopped. Immediate and two-second post-exit status both reported
+255 and `sleeping=no`. The test restored the five-minute setting, stopped the
+second holder exactly and finished at 255 and `sleeping=no`. This is cached
+commanded-brightness evidence, not a physical-panel readback claim.
+
+The initial resource sample was free heap 118,284 bytes, largest block 54,260,
+lifetime minimum 106,116 and stack margin 7,784. The first closed Console was
+95,756/31,732/78,632/5,608; final was 95,848/31,732/78,632/5,608, a 92-byte
+free-heap increase relative to the first close. Reset reason 11, history 17,
+chats 3, the non-sleep settings digest, ready SD, connected Wi-Fi and configured
+API access were unchanged. Artifacts are `artifacts/architect-p606-wake.log`
+and the corresponding exact sleep-status JSON observations. Architect returned
+explicit GO for this wake/status boundary and prohibited repeating it absent a
+new defect. That GO did not close P6-06.
+
+### P6-06 Device consumer/native proof and resource STOP — 2026-09-17 01:23–01:40 UTC
+
+With the wake boundary closed, the remaining hypothesis was that the shipped
+Device Rename Chat and Delete Project consumers plus representative non-Home
+native screens needed direct execution/visual evidence, while previously
+accepted Home and FIX-PERF latency evidence must not be repeated. The frozen
+smallest proof reuses the existing keyboard dispatch body with explicit borrowed
+key-list and typed key-state arguments while the physical wrapper retains
+scanner/repeat ownership. The existing `PROJECTPARITYTEST` owns one exact Project
+and Chat and executes Rename empty rejection, cancel, normalized save and later
+normal save, then Project Delete cancel, durable replacement and page-zero
+postconditions. The existing private `CAROUSELDIAG` keeps its nine accepted Home
+frames and adds ten fixed sanitized frames, for exactly 19 RGB565 frames through
+the same sprite and unchanged serial header. No general input protocol, remote
+control, public frame API, new buffer, selector family or vendor mutation was
+added. One independent pre-edit review returned GO.
+
+Architect's first source read found one concrete cleanup STOP: an atomic manifest
+write can return failure after its target rename succeeds, so RAM identity alone
+could not authorize fixture deletion. The corrected cleanup always performs a
+normal activation of the original Project after any created fixture, reloads the
+manifest, requires both RAM and durable active identities to equal the original,
+and only then permits deletion of a still-existing fixture. Failure or unknown
+state is aggregated as cleanup failure and leaves the potentially active fixture
+intact. A fresh independent code review and Architect's personal re-read then
+returned source GO for the corrected bounded implementation.
+
+Diff checking, the PowerShell runner parser, physical-wrapper/source-contract
+checks, the exact 19-frame inventory and dependency-pin checks passed. Two first
+host-suite launches did not compile because the Windows-to-WSL command boundary
+removed the temporary output-path variable; the materially corrected invocation
+used one collision-checked literal `/tmp/cardmind-host-tests-p606`, removed it on
+exit and passed `host_tests`. Those two invocation failures are harness evidence,
+not firmware failures.
+
+The one exact pinned firmware compile passed, with exact FQBN, one unique core
+3.2.1 and unchanged options SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`.
+The sketch was 3,682,682 bytes, globals used 65,956 bytes, the 3,682,864-byte
+application SHA-256 was
+`2E94D43C61F5CDDB195F22F384399455DF963625582631BD771B433C9F10A14F`,
+and the ELF SHA-256 was
+`29860E053DA922467B10CFAE41E164E6690CE30090B3E91FC93EC062D84CD367`.
+This candidate is 12,848 bytes above the accepted 3,670,016-byte CI application
+budget despite retaining 511,440 bytes of physical partition space. Map evidence
+attributes about 4,490 added bytes to the expanded Project action diagnostic,
+3,367 to the ten non-Home native-frame producers and 2,629 to the shared keyboard
+dispatch extraction, with remaining growth in associated literals, link layout
+and alignment. The resource gate therefore STOPPED this candidate before upload.
+No reserve was weakened, no speculative optimization or second build started,
+and P6-06 remains the sole `in_progress` row pending Architect's bounded resource
+decision and the still-open Device/native runtime proof.
+
+### P6-06 diagnostic retirement and corrected resource build — 2026-09-17 01:51 UTC
+
+Architect recorded the bounded diagnostic flash-budget decision in `ROADMAP.md`:
+retire only the obsolete standalone-chat `runChatQolTest()`, its `CHATQOLTEST`
+serial dispatcher and its single default/offline runner case. The standalone-chat
+storage declarations and implementations, all product and migration code,
+`P2LARGE` and every other diagnostic remain unchanged. Retained Phase 3 evidence
+already owns the exact standalone compatibility round trip, while the current
+Project round trip covers two chats, rename, duplicate, archive/restore, shared
+link, Project bundle and cleanup. Source inventory found the four old
+standalone-chat duplicate/export/bundle-import functions had no current Device or
+Web consumer and were called only by this diagnostic.
+
+Before the edit, linked-map sections exclusive to the obsolete diagnostic and
+its two lambdas measured 18,370 bytes: 15,361 text, 284 literals, 1,352 exception
+tables and 1,373 mergeable string data; excluding all mergeable data, the lower
+bound was 16,997 bytes. This was a pre-build linked-section estimate, not a claim
+of exact image savings. The exact three-boundary deletion then passed diff
+checking, the runner PowerShell parser, a zero-reference source scan and checks
+that all four standalone compatibility declarations and implementations remain.
+Per the reviewed decision, the unchanged host suite was not repeated and no new
+test or production abstraction was added.
+
+The one corrected pinned rebuild passed with the exact FQBN, one unique M5Stack
+ESP32 core 3.2.1 and options SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`.
+The sketch is 3,662,426 bytes, globals use 65,956 bytes, and the 3,662,608-byte
+application has SHA-256
+`57C7C4C3DEB0C65EFE8C6D4F1345047D34CADCC1620A6486DECDF1C0C3DA0AB1`.
+The 46,199,004-byte ELF SHA-256 is
+`2E156DC1844D507B4BEAD31F8A63D63529F886E90DF4B1D9886DAFDB891ED84B`.
+Actual application-image savings versus the stopped candidate are 20,256 bytes;
+7,408 bytes remain under the accepted CI limit and physical application-partition
+space is 531,696 bytes, above the 524,288-byte reserve. The removed command and
+function are absent from the final link map. Both resource gates now pass. No
+upload has occurred; Architect still owns the exact Project action and 19-frame
+native runtime proof, and P6-06 remains `in_progress`.
+
+### P6-06 first action/native runtime and oracle classification — 2026-09-17 01:59–02:00 UTC
+
+Architect uploaded and ran the exact `57C7C4C3...` image. All 19 native frames
+were captured and the ten added screen families were personally inspected. Nine
+added families passed. Frame 18 exposed one concrete visual defect: the existing
+30-pixel Device carousel icon at `(4,-5)` occupied about 27 by 25 visible pixels,
+cropped at the top and extended below the 18-pixel diagnostics header. The
+reviewed minimal correction replaces only that header icon with the existing
+8-by-8 Settings bitmap at `(4,4)` and moves the unchanged title cursor from x=40
+to x=16. No Home screen or other renderer changes.
+
+The first `PROJECTPARITYTEST` cold cycle passed every functional, cancel,
+durability, replacement, page-zero and exact-owned cleanup field. Its aggregate
+resource field failed only the diagnostic's new relative-largest-block conjunct:
+free heap was 118,228 before and 116,768 after, largest block 56,308 before and
+45,044 after, lifetime minimum 102,796 and stack margin 4,168 bytes. A separate
+normal status after return passed with free heap 117,632, largest block 45,044,
+history 17, chats 3 and reset reason 11 unchanged. The root launcher also emitted
+a spurious PowerShell `LASTEXITCODE` guard failure after the script had completed;
+that launcher defect is not Device evidence. The failed cold-run artifact remains
+`artifacts/architect-p606-actions.log` together with the normal post-status
+observation.
+
+One unchanged steady-baseline cycle from 01:59:53 through 02:00:08 UTC then
+passed every field under the existing oracle. Status moved from free heap
+117,584/largest block 45,044 to 117,636/46,068; lifetime minimum was 102,784 and
+stack margin 4,168. Original history 17, chats 3 and reset reason 11 remained
+unchanged. Artifact: `artifacts/architect-p606-actions-steady.log`. The one
+repeated cycle observed no progressive loss; the cold and steady observations
+are consistent with retained first-use UI/allocator layout, but do not prove that
+internal allocator mechanism. The added
+`largestAfter + 4096 >= largestBefore` comparison is not a roadmap requirement
+and assumes an unchanged allocation layout after first UI use. The reviewed
+oracle correction removes only that conjunct, while retaining the absolute
+70 KiB free-heap floor, 28 KiB largest-block floor, nonzero stack margin and no
+more than 4 KiB total free-heap loss; both largest-block values remain reported.
+No allocator or product optimization is authorized. This evidence does not claim
+physical key input, absence of all future fragmentation, or final SSH/TLS release
+acceptance; the steady case used direct dispatch while the backlight was asleep.
+
+### P6-06 visual/oracle correction build — 2026-09-17 02:06 UTC
+
+The reviewed diagnostics-header production correction and the independently
+classified test-oracle correction were applied as separate boundaries. Static
+checks confirmed the retained 70 KiB heap floor, 28 KiB largest-block floor,
+nonzero stack requirement and 4 KiB total free-heap-loss limit; only the disproved
+relative largest-block comparison is absent. The diagnostics header now uses the
+existing 8-by-8 Settings bitmap at `(4,4)` with its title at x=16. Diff checking
+and the runner parser passed. No new test was added and the unchanged host suite
+was not repeated.
+
+The one exact pinned build passed: sketch 3,662,358 bytes, globals 65,956 bytes,
+application 3,662,544 bytes with SHA-256
+`7934C7996C28DF1190030DF5D28D78706F49A7C82B0094B71543A1DAA067E2F6`, and
+46,196,612-byte ELF with SHA-256
+`1AB131AC438580B4637B4E6D56589101203AE7620A38E18BF0FA91D697974627`.
+The exact FQBN, one unique M5Stack core 3.2.1 and options SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`
+remain unchanged. CI image headroom is 7,472 bytes and physical partition spare
+is 531,760 bytes, so both gates pass. This source/build checkpoint is not runtime
+acceptance: no corrected-image upload has occurred, and Architect still owns the
+repeat existing 19-frame capture plus one consumer run before closure review.
+
+### P6-06 final runtime acceptance and Architect closure GO — 2026-09-17 02:13:24 UTC
+
+Architect personally reviewed the actual row-owned source and diff, resolved
+design/code blockers, retained Home/wake/render evidence and final runtime on the
+exact application SHA-256
+`7934C7996C28DF1190030DF5D28D78706F49A7C82B0094B71543A1DAA067E2F6`.
+The pinned options, exact FQBN and unique M5Stack core 3.2.1 were verified before
+the single esptool 4.9.0 upload. Hash verification, RTS handling and COM8
+completion were normal. Retained artifacts are
+`artifacts/architect-p606-final-upload.log` and
+`artifacts/architect-p606-final-initial-status.log`.
+
+The final native capture at
+`artifacts/architect-p606-native-final-20260917` contains all 19 frames. Frames
+0 through 17 are byte-identical to the previously personally inspected frames;
+only corrected frame 18 changed. Architect inspected frame 18 at native 240x135
+and at 3x scale: icon and title are wholly inside the header with no overlap or
+clipping. `CAROUSELDIAG` passed with next/previous wrap timings 118,955/119,989
+microseconds, free heap 117,424 to 117,168 bytes, largest block unchanged at
+55,284 and stack margin 7,800. Normal status afterward reported free heap 118,284,
+largest block 55,284 and lifetime minimum 108,484.
+
+The final `PROJECTPARITYTEST` ran from 02:12:52.307 through 02:13:07.485 UTC on
+an awake cold baseline. Every `ui`, empty validation, rename cancel, rename,
+later-save, delete cancel, delete, replacement, page-zero, cleanup and resource
+field passed. Free heap was 118,156 before and 116,688 after, largest block
+55,284 before and 47,092 after, lifetime minimum 102,680 and stack margin 4,184.
+Final normal status reported free heap 117,560, largest block 47,092, history 17,
+chats 3, reset reason 11, ready SD, connected Wi-Fi, configured API access and
+`sleeping=no`. Artifact: `artifacts/architect-p606-actions-final.log`.
+
+There was no reset, readiness loss, secret exposure or Wi-Fi/configuration
+mutation. Cleanup verified the exact fixture absent twice and both RAM and durable
+selection restored to the original Project. The final application retains 531,760
+bytes of partition space and globals use 65,956 bytes. The historical
+`flash_text` metric remains P6-08-owned; this closure does not claim a green
+overall resource/CI gate or final SSH/TLS acceptance. Synthetic dispatch and
+sanitized native frames prove the accepted Device consumers and pixels, not
+physical keyboard scanning or electrical key-to-pixel latency.
+
+Architect returned explicit `P6-06 CLOSURE GO` for the complete row, including
+the unchanged accepted Home and wake evidence. P6-06 is now `completed`. P6-07
+remains `pending` during the zero-active-row publication window; no P6-07
+implementation or runtime work is authorized before exact remote P6-06 SHA
+verification.

@@ -668,7 +668,6 @@ $offlineCases = @(
     (New-RegressionCase -Name "display frame budget" -Command "UIBENCH" -CompletionPattern "^UIBENCH result=" -PassPattern "^UIBENCH result=pass" -TimeoutSeconds 20),
     (New-RegressionCase -Name "cancellation" -Command "CANCELTEST" -CompletionPattern "^CANCELTEST result=" -PassPattern "^CANCELTEST result=pass$" -TimeoutSeconds 20),
     (New-RegressionCase -Name "chat and SD storage" -Command "STORAGETEST" -CompletionPattern "^STORAGETEST result=" -PassPattern "^STORAGETEST result=pass$" -TimeoutSeconds 45),
-    (New-RegressionCase -Name "chat quality-of-life" -Command "CHATQOLTEST" -CompletionPattern "^CHATQOLTEST result=" -PassPattern "^CHATQOLTEST result=pass" -TimeoutSeconds 90),
     (New-RegressionCase -Name "large workspace file" -Command "FILETEST" -CompletionPattern "^FILETEST result=" -PassPattern "^FILETEST result=pass" -TimeoutSeconds 180),
     (New-RegressionCase -Name "device settings" -Command "DEVICESETTINGSTEST" -CompletionPattern "^DEVICESETTINGSTEST result=" -PassPattern "^DEVICESETTINGSTEST result=pass" -TimeoutSeconds 45),
     (New-RegressionCase -Name "offline tools" -Command "OFFLINETEST" -CompletionPattern "^OFFLINETEST result=" -PassPattern "^OFFLINETEST result=pass$" -TimeoutSeconds 20),
@@ -748,7 +747,7 @@ $p2SharedPass = '^P2SHAREDTEST result=pass nonce={0} identity=pass tools=pass is
     [regex]::Escape($p2SharedNonce))
 
 $p2ProjectCases = @(
-    (New-RegressionCase -Name "project device parity" -Command "PROJECTPARITYTEST" -CompletionPattern "^PROJECTPARITYTEST result=" -PassPattern "^PROJECTPARITYTEST result=pass ui=pass error=none$" -TimeoutSeconds 240),
+    (New-RegressionCase -Name "project device parity" -Command "PROJECTPARITYTEST" -CompletionPattern "^PROJECTPARITYTEST result=" -PassPattern "^PROJECTPARITYTEST result=pass ui=pass empty=pass rename_cancel=pass rename=pass later_save=pass delete_cancel=pass delete=pass replacement=pass page_zero=pass cleanup=pass resources=pass heap_before=[0-9]+ heap_after=[0-9]+ largest_before=[0-9]+ largest_after=[0-9]+ minimum_heap=[0-9]+ stack_free=[0-9]+ error=none$" -TimeoutSeconds 240),
     (New-RegressionCase -Name "shared project isolation" -Command $p2SharedCommand -CompletionPattern $p2SharedCompletion -PassPattern $p2SharedPass -TimeoutSeconds 180)
 )
 

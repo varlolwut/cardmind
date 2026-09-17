@@ -35,6 +35,12 @@ struct CarouselCard {
     CarouselIcon icon;
 };
 
+struct CarouselDiagnosticResult {
+    OperationResult operation;
+    std::uint32_t nextDurationUs;
+    std::uint32_t previousDurationUs;
+};
+
 struct DeviceDiagnosticsView {
     String firmware;
     String battery;
@@ -109,6 +115,8 @@ void animateCarousel(const std::vector<CarouselCard>& cards,
                      int batteryLevel,
                      bool batteryCharging,
                      const String& status);
+CarouselDiagnosticResult runCarouselDiagnostic(
+    const std::vector<CarouselCard>& cards);
 void showSelectionList(const String& title,
                        const std::vector<String>& items,
                        std::size_t selectedIndex,
