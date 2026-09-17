@@ -78,7 +78,7 @@ Status values are `pending`, `in_progress`, and `completed`.
 | P6-05 | Bring the Web Console to the Architect-reviewed replacement direction, add explicit discovered-network Wi-Fi selection through the smallest reviewed existing-owner backend mapping, and finish desktop/tablet/phone polish through the existing asset boundary | Every required Web capability reachable; explicit Wi-Fi scan/select/hidden-manual/connect states and other degraded states; stable-ID interaction checks; 1280, 900 and 390 px screenshots without overlap; soak and resource evidence | completed |
 | P6-05A | Bring the existing basic setup/provisioning page and save/error responses to the accepted shared visual style | All Wi-Fi/API/STT/search/TTS fields and actions remain usable at desktop/tablet/phone sizes; actual-source form/state/interaction evidence and unchanged write-only secret/validation/save/restart owners; flash-resident setup without SD or external assets; pinned build/resources under the 2026-09-17 proportional-evidence decision | completed |
 | P6-06 | Bring the 240x135 Device UI to the Architect-reviewed replacement direction through existing screen/input owners | Every required Device capability reachable; coherent navigation and compact states; provider/SD/optional-API degradation; no Web-only requirement leakage; device resources and latency | completed |
-| P6-07 | Reconcile cross-surface behavior and run focused integration acceptance | Names/state/permissions consistent across Device and Web; profiles, sessions, presence, reconnect and SSH interoperate; inherited Phase 5 behavior remains regression-free; forbidden effects absent; exact-owned cleanup | pending |
+| P6-07 | Reconcile cross-surface behavior and run focused integration acceptance | Names/state/permissions consistent across Device and Web; profiles, sessions, presence, reconnect and SSH interoperate; inherited Phase 5 behavior remains regression-free; forbidden effects absent; exact-owned cleanup | completed |
 | P6-08 | Establish the stable Wi-Fi release candidate, complete full firmware acceptance and close Phase 6 | Full E2E of all implemented functionality through P6 plus host/Device/Web regression; exact build options and binary hash; flash/RAM/heap/largest-block/stack/latency; screenshots; soak; cleanup including quarantined P2-21 debt; independent reviews; green CI; reviewed phase merge to `develop`, followed by Architect-owned `main` release under the 2026-09-15 user mandate | pending |
 
 P6-05B was removed from this release by the user's explicit 2026-09-16 scope
@@ -6475,3 +6475,126 @@ the unchanged accepted Home and wake evidence. P6-06 is now `completed`. P6-07
 remains `pending` during the zero-active-row publication window; no P6-07
 implementation or runtime work is authorized before exact remote P6-06 SHA
 verification.
+
+### P6-06 verified publication and P6-07 activation — 2026-09-17 02:31:23 UTC
+
+Native fast-forward publication produced exact local and remote commit
+`8757a6297ff3d13ed820185c99d38f1d7fff9028` on
+`feature/phase-6-ui-stable-baseline`, with exact parent
+`527a33dbc11e43a081e08a4176c6d3c50db4fefb`. Authenticated GitHub MCP
+verification confirmed the branch head, commit subject, exact eight-path set,
+all eight remote blob SHAs and linked Author/Committer identity
+`varlolwut`/`30726976` with the required noreply email. The unchanged local
+read-only row-close checker passed against an exact clean temporary checkout;
+that exact-owned temporary checkout was removed afterward.
+
+No new product or runtime evidence was created during publication. With the
+remote SHA verified, P6-07 is now the sole `in_progress` row. Initial P6-07 work
+is limited to the already authorized read-only inventory and frozen proof/design
+boundary until Architect returns the row's explicit pre-edit design decision.
+
+### P6-07 pre-edit design GO and proof freeze — 2026-09-17 02:33 UTC
+
+Active-row work starts from the hypothesis that the existing `full`
+`hardware_web_e2e` path already covers the required Project, Shared workspace,
+SSH and provider integration, but is not acceptance-eligible because it can trust
+an unknown SSH host, leaves its two prompt turns in the restored pre-test Project,
+marks workspace ownership only after upload returns, swallows independent cleanup
+failures on its failure path, has no pass boundary after the newly required
+prompt-owning Project cleanup, and can lose the first HTTP transport classification
+when a nested round trip wraps the error. The old normal full path already deleted
+its workspace probe and stopped SSH before its pass; no contrary claim is made.
+
+Architect froze the smallest correction after one fresh independent design review
+and its single blocker recheck returned GO. The write set is exactly
+`tools/hardware_web_e2e.mjs`, `tools/hardware_web_e2e.ps1` and this trace. Reuse the
+existing `full` route and shared SSH/transport owners: require an initially idle SSH
+state; reject rather than auto-trust an unknown host; mark an SSH start attempt before
+the request; collision-check and mark the exact root workspace probe before upload;
+run both prompts in one returned-ID-owned outer Project restored around the existing
+Project round trip; set explicit tool intent `none`; retain a positive connected SSH
+worker stack value; aggregate exact-owned cleanup and restore the original Project;
+and latch the first transport error so the existing exit-20 holder-stop path remains
+authoritative even after a nested wrapper. Emit full-suite pass only after cleanup.
+
+The frozen proof is one Node syntax check, one PowerShell parser check and direct
+source-order assertions, followed by Architect review of the actual diff before any
+COM/HTTP run. After that review, run the existing `full` selector once against the
+already accepted firmware image and obtain one normal `STATUS`. No firmware source,
+build/upload, other suite, resource floor, test framework or new scenario is in scope.
+
+### P6-07 source correction and pre-runtime GO — 2026-09-17 02:44:45 UTC
+
+The final bounded correction keeps the existing full integration route and changes
+only the two frozen harness files. `startSsh` now rejects `awaiting_trust`; full
+requires an initially idle terminal and marks its start attempt before mutation. The
+root workspace probe is collision-checked through the existing complete listing,
+marked before upload and verified absent during cleanup. Both provider prompts use
+explicit tool intent `none` inside one returned-ID-owned outer Project; the existing
+Project round trip restores that fixture, and the existing cleanup owner deletes it
+and restores the original selected Project. A creation attempt without a safely
+returned new ID restores the known original selection, deletes no unknown Project and
+remains a failure. The connected SSH worker stack value is required positive and
+retained in evidence.
+
+`fetchWithin` latches the first transport failure, refuses later fetches after it and
+the top-level full/p6-session boundary uses that first failure for exit 20. The
+PowerShell holder therefore sends no further Device command after transport loss.
+Full-suite cleanup failures are aggregated and its wrapper pass is emitted only after
+Node ownership cleanup and PowerShell finalization. Node syntax, PowerShell parsing,
+diff checks and direct source-order assertions passed. Final file evidence was:
+
+- `tools/hardware_web_e2e.mjs`: Git blob
+  `72dd63223220712c3d2a5439458f9205466147b8`, SHA-256
+  `CF6BB68CEDDB9FED78C99C698416A29AB320D2102BAC55CB3E7D520561B38631`;
+- `tools/hardware_web_e2e.ps1`: Git blob
+  `30345914213c2409080c3dedca530d79dfb664bc`, SHA-256
+  `97B4834B363E3954DB3DC169300F8DDD4EBA385D78E225C28AEB0EBA88918C16`.
+
+Architect personally reviewed the complete final two-file diff and returned explicit
+pre-runtime GO. No firmware source, build, upload or alternate suite changed.
+
+### P6-07 integration runtime and Architect closure GO — 2026-09-17 02:53:32.956 UTC
+
+Architect ran the one authorized existing `full` selector on the already accepted
+application SHA-256
+`7934C7996C28DF1190030DF5D28D78706F49A7C82B0094B71543A1DAA067E2F6`
+from 02:45:16.586 through 02:47:53.430 UTC. The retained artifacts are
+`artifacts/architect-p607-full-20260917.log`, `.log.node.out` and `.log.node.err`,
+with SHA-256 respectively
+`38A1267596C7B3B17E53A19AB350D5CCB8A5C382569FDE89852DB0647BDABAA5`,
+`CD3F7DD6E7241AFDF8B3E107ED6761C038F657E122D4398359A8672B23DD07BA`
+and the empty-file hash
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+The parent log contains one explicit `WEB_CONSOLE result=stopped` before one wrapper
+pass; stderr is empty.
+
+The full result passed the root workspace upload/read/window-save/delete boundary,
+Project rename/duplicate/archive/restore/link/bundle round trip, trusted interactive
+SSH, 20 state polls, both none-intent provider turns and exact-owned cleanup. The
+outer prompt Project was deleted and the original selected Project restored. Baseline
+heap/largest block/minimum were 86,640/31,732/73,256 bytes; with SSH open they were
+18,208/7,156/1,972 bytes and the SSH worker stack margin was 5,132 bytes; after SSH
+close heap/largest block recovered to 87,420/31,732 bytes. The active and closed prompt
+latencies were 25,360 and 42,404 microseconds as reported by the harness clock.
+
+The active prompt was initiated while SSH was open, but the production
+`streamStoredWebPrompt` owner closes SSH before provider TLS and emits its notice; this
+is not a claim of retained simultaneous SSH and provider TLS. Read-only source review
+accounted for 51,704 bytes of persistent libssh2 session buffers plus variable
+allocations and found no proven regression or reason to reopen the power work. The
+SSH worker stack margin above is distinct from the final normal main-loop stack value.
+
+Final normal `STATUS` from 02:53:20.623 through 02:53:32.956 UTC passed with firmware
+1.12.1, ready SD/chats/files/crash journal, ready Wi-Fi/TLS, history 17, chats 3,
+reset reason 11, heap 95,692, largest block 31,732, lifetime minimum 1,972, main-loop
+stack 872 and `sleeping=yes`. There was no readiness loss, reset, credential/secret or
+Wi-Fi mutation. Existing accepted P6-02/P6-03/P6-04 evidence supplies the unchanged
+profile, session, presence and reconnect contracts; this integration row creates no
+new Python acceptance claim.
+
+Architect personally reviewed the final source, artifacts, cleanup and qualification
+and returned explicit `P6-07 CLOSURE GO`. P6-07 active work completed at
+02:53:32.956 UTC with no 30-minute alert or 60-minute pivot. P6-07 is now
+`completed`; P6-08 remains `pending` during the zero-active-row publication window
+until the exact remote P6-07 SHA and blobs are verified.

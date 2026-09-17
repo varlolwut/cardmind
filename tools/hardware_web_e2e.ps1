@@ -945,7 +945,7 @@ $largeStreamSetupAttempted = $false
 $largeStreamWebVerified = $false
 $largeStreamDeviceVerified = $false
 $p6SessionWebVerified = $false
-$p6SessionTransportFailed = $false
+$httpTransportFailed = $false
 $largeStreamClean = $false
 $largeStreamLedgerPath = Join-Path (
     Get-Location).Path "artifacts\p2-21-large-stream-ledger.json"
@@ -1801,9 +1801,9 @@ try {
         -PassThru `
         -Wait
     $nodeExitCode = $nodeProcess.ExitCode
-    if ($Suite -eq "p6-session" -and $nodeExitCode -eq 20) {
-        $p6SessionTransportFailed = $true
-        throw "P6-03 HTTP transport failed; the Device path is terminated and fixture cleanup remains unresolved"
+    if ($Suite -in @("p6-session", "full") -and $nodeExitCode -eq 20) {
+        $httpTransportFailed = $true
+        throw "HTTP transport failed during $Suite; the Device path is terminated and exact-owned cleanup may be unresolved"
     }
     if ($Suite -eq "p6-providers" -and
         (Test-Path -LiteralPath $p6ProviderLedgerPath)) {
@@ -2413,9 +2413,11 @@ try {
         $atomicFailureLedgerPresent = $false
         Write-Host $idempotentCleanup
     }
-    Add-Content -LiteralPath $resolvedLogPath -Value (
-        "CARDMIND_WEB_E2E result=pass completed={0:o}" -f [DateTime]::UtcNow)
-    Write-Host "CARDMIND_WEB_E2E result=pass suite=$Suite log=$resolvedLogPath"
+    if ($Suite -ne "full") {
+        Add-Content -LiteralPath $resolvedLogPath -Value (
+            "CARDMIND_WEB_E2E result=pass completed={0:o}" -f [DateTime]::UtcNow)
+        Write-Host "CARDMIND_WEB_E2E result=pass suite=$Suite log=$resolvedLogPath"
+    }
 }
 finally {
     if ($Suite -eq "p6-providers" -and $p6ProviderArtifactsReserved -and
@@ -2442,7 +2444,7 @@ finally {
         if ($script:webConsoleConfirmedActive -and
             $script:serialReadinessConfirmed -and
             -not $script:serialReadinessLost -and
-            -not $p6SessionTransportFailed) {
+            -not $httpTransportFailed) {
             try {
                 Assert-SerialWriteAllowed -Serial $serial `
                     -ResolvedLogPath $resolvedLogPath `
@@ -2461,9 +2463,9 @@ finally {
             }
         }
         elseif ($script:webConsoleConfirmedActive) {
-            if ($p6SessionTransportFailed) {
+            if ($httpTransportFailed) {
                 $finalizerFailures.Add(
-                    "P6-03 HTTP transport failed; no further Device command or fixture cleanup was attempted")
+                    "HTTP transport failed; no further Device command or fixture cleanup was attempted")
             }
             else {
                 $finalizerFailures.Add(
@@ -2727,4 +2729,9 @@ finally {
     if ($finalizerFailures.Count -gt 0) {
         throw "Hardware Web E2E finalization failed: $($finalizerFailures -join '; ')"
     }
+}
+if ($Suite -eq "full") {
+    Add-Content -LiteralPath $resolvedLogPath -Value (
+        "CARDMIND_WEB_E2E result=pass completed={0:o}" -f [DateTime]::UtcNow)
+    Write-Host "CARDMIND_WEB_E2E result=pass suite=$Suite log=$resolvedLogPath"
 }

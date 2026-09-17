@@ -15,6 +15,7 @@ const p2LargeStreamDownloadMinimumHeapLossBytes = 4 * 4096;
 const p2LargeStreamJsonWindowMinimumHeapLossBytes = 3 * 12_288;
 const httpTransportFailureCode = 'CARDMIND_HTTP_TRANSPORT_FAILURE';
 const p6SessionTransportExitCode = 20;
+let firstHttpTransportFailure = null;
 const httpTransportMachineAllowlist = Object.freeze([
   'ABORT_ERR',
   'ECONNREFUSED',
@@ -125,6 +126,7 @@ function framedPromptRequest(promptValue, requestInstructions, maximumOutputToke
 }
 
 async function fetchWithin(url, options, timeoutMs) {
+  if (firstHttpTransportFailure !== null) throw firstHttpTransportFailure;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response;
@@ -133,7 +135,9 @@ async function fetchWithin(url, options, timeoutMs) {
     response = await fetch(url, {...options, signal: controller.signal});
     body = await response.arrayBuffer();
   } catch (error) {
-    throw createHttpTransportFailure(url, options, error);
+    const failure = createHttpTransportFailure(url, options, error);
+    if (firstHttpTransportFailure === null) firstHttpTransportFailure = failure;
+    throw failure;
   } finally {
     clearTimeout(timer);
   }
@@ -721,21 +725,14 @@ function recordSnapshot(measurements, label, document) {
 async function startSsh(baseUrl, auth) {
   await request(baseUrl, auth, '/api/ssh/start', {method: 'POST'});
   const deadline = performance.now() + maximumRequestMs;
-  let trustSubmitted = false;
   while (performance.now() < deadline) {
     const response = await request(baseUrl, auth, statePaths.ssh, {method: 'GET'});
     const document = await response.json();
     if (document.ssh_stage === 'connected' && document.ssh_terminal_open === true) {
       return document;
     }
-    if (document.ssh_stage === 'awaiting_trust' && !trustSubmitted) {
-      await request(baseUrl, auth, '/api/ssh/trust', {
-        method: 'POST',
-        body: form({
-          fingerprint: requireString(document.ssh_fingerprint, 'ssh_fingerprint'),
-        }),
-      });
-      trustSubmitted = true;
+    if (document.ssh_stage === 'awaiting_trust') {
+      throw new Error('SSH host is not already trusted; refusing automatic trust');
     }
     if (document.ssh_stage === 'failed') {
       throw new Error(`SSH background connection failed: ${document.ssh_error}`);
@@ -1464,11 +1461,15 @@ function parseSse(text) {
 
 async function prompt(baseUrl, auth, marker) {
   const startedAt = performance.now();
+  const options = promptRequest(`Reply with exactly: ${marker}`, '0');
   const response = await request(
     baseUrl,
     auth,
     '/api/prompt/raw',
-    promptRequest(`Reply with exactly: ${marker}`, '0'),
+    {
+      ...options,
+      headers: {...options.headers, 'X-CardMind-Tool-Intent': 'none'},
+    },
   );
   const body = await response.text();
   const events = parseSse(body);
@@ -7361,21 +7362,52 @@ async function main() {
   const baseline = await state(baseUrl, auth);
   console.log(JSON.stringify({stage: 'state_views', samples: stateTimings}));
   recordSnapshot(measurements, 'baseline', baseline);
-  let sshStarted = false;
+  if (baseline.ssh_stage !== 'idle' || baseline.ssh_terminal_open === true) {
+    throw new Error('Full integration requires an initially idle SSH terminal');
+  }
+  const originalProjectId = requireString(
+    (await activeChatState(baseUrl, auth)).project_id,
+    'full original project_id',
+  );
+  let sshStartAttempted = false;
   const workspaceProbe = `cardmind_web_e2e_${Date.now()}.txt`;
-  let workspaceProbeCreated = false;
+  let workspaceProbeMutationAttempted = false;
+  let integrationProjectCreationAttempted = false;
+  let integrationProjectId = '';
+  let evidence = null;
+  let testError = null;
+  const cleanupErrors = [];
   try {
     const sshStartedAt = performance.now();
+    sshStartAttempted = true;
     const connected = await startSsh(baseUrl, auth);
     const sshConnectMs = Math.round(performance.now() - sshStartedAt);
-    sshStarted = true;
+    if (!Number.isInteger(connected.ssh_worker_stack_free) ||
+        connected.ssh_worker_stack_free <= 0) {
+      throw new Error('Connected SSH state did not report a positive worker stack margin');
+    }
     recordSnapshot(measurements, 'ssh_open', await state(baseUrl, auth));
     await verifyInteractiveSsh(baseUrl, auth);
     const workspaceMarker = `SD-E2E-OK-${Date.now()}`;
+    if ((await listAllWorkspaceNames(baseUrl, auth)).includes(workspaceProbe)) {
+      throw new Error(`Workspace probe collision for '${workspaceProbe}'`);
+    }
+    workspaceProbeMutationAttempted = true;
     await uploadWorkspaceProbe(baseUrl, auth, workspaceProbe, workspaceMarker);
-    workspaceProbeCreated = true;
     await verifyWorkspaceRoundTrip(baseUrl, auth, workspaceProbe, workspaceMarker);
     await verifyWorkspaceWindowSave(baseUrl, auth, workspaceProbe, workspaceMarker);
+    const baselineProjectIds = await listAllProjectIds(baseUrl, auth);
+    integrationProjectCreationAttempted = true;
+    const createdResponse = await request(baseUrl, auth, '/api/project/new', {
+      method: 'POST',
+      body: form({title: `P6 integration ${Date.now()}`}),
+    });
+    const created = await createdResponse.json();
+    const returnedProjectId = requireString(created.project_id, 'full project_id');
+    if (baselineProjectIds.includes(returnedProjectId)) {
+      throw new Error('Full integration Project reused a baseline project id');
+    }
+    integrationProjectId = returnedProjectId;
     const projectRoundTrip = await verifyProjectRoundTrip(
       baseUrl,
       auth,
@@ -7384,21 +7416,26 @@ async function main() {
     await exerciseStatePolling(baseUrl, auth, 20);
     const activeSshPromptMs = await prompt(baseUrl, auth, 'WEB-E2E-SSH-OK');
     await deleteWorkspaceProbe(baseUrl, auth, workspaceProbe);
-    workspaceProbeCreated = false;
+    if ((await listAllWorkspaceNames(baseUrl, auth)).includes(workspaceProbe)) {
+      throw new Error(`Workspace cleanup left '${workspaceProbe}' present`);
+    }
+    workspaceProbeMutationAttempted = false;
     await stopSsh(baseUrl, auth);
-    sshStarted = false;
+    sshStartAttempted = false;
     recordSnapshot(measurements, 'ssh_closed', await state(baseUrl, auth));
     const closedSshPromptMs = await prompt(baseUrl, auth, 'WEB-E2E-CLOSED-OK');
     const recovered = measurements.at(-1);
     if (recovered.free_heap < 85_000 || recovered.largest_heap < 28_000) {
       throw new Error(`Heap did not recover after SSH: ${JSON.stringify(recovered)}`);
     }
-    console.log(JSON.stringify({
+    evidence = {
       result: 'pass',
+      suite,
       ssh_connect_ms: sshConnectMs,
       ssh_device_connect_ms: connected.ssh_connect_ms,
       ssh_device_authenticate_ms: connected.ssh_authenticate_ms,
       ssh_device_open_ms: connected.ssh_open_ms,
+      ssh_worker_stack_free: connected.ssh_worker_stack_free,
       interactive_ssh: 'pass',
       workspace_sd: 'pass',
       workspace_window_save: 'pass',
@@ -7407,19 +7444,54 @@ async function main() {
       active_ssh_prompt_ms: activeSshPromptMs,
       closed_ssh_prompt_ms: closedSshPromptMs,
       measurements,
-    }));
+    };
+  } catch (error) {
+    testError = error;
   } finally {
-    if (workspaceProbeCreated) {
-      await deleteWorkspaceProbe(baseUrl, auth, workspaceProbe).catch((error) => {
-        console.error(`Workspace cleanup failed: ${error.message}`);
-      });
+    if (integrationProjectCreationAttempted) {
+      try {
+        await cleanupOwnedProjectAndRestore(
+          baseUrl, auth, integrationProjectId, originalProjectId);
+        if (!integrationProjectId) {
+          cleanupErrors.push(
+            'project cleanup: creation was attempted but no owned project id was established',
+          );
+        }
+        integrationProjectCreationAttempted = false;
+        integrationProjectId = '';
+      } catch (error) {
+        cleanupErrors.push(`project cleanup: ${error.message}`);
+      }
     }
-    if (sshStarted) {
-      await stopSsh(baseUrl, auth).catch((error) => {
-        console.error(`SSH cleanup failed: ${error.message}`);
-      });
+    if (workspaceProbeMutationAttempted) {
+      try {
+        if ((await listAllWorkspaceNames(baseUrl, auth)).includes(workspaceProbe)) {
+          await deleteWorkspaceProbe(baseUrl, auth, workspaceProbe);
+        }
+        if ((await listAllWorkspaceNames(baseUrl, auth)).includes(workspaceProbe)) {
+          throw new Error(`workspace probe '${workspaceProbe}' is still present`);
+        }
+        workspaceProbeMutationAttempted = false;
+      } catch (error) {
+        cleanupErrors.push(`workspace cleanup: ${error.message}`);
+      }
+    }
+    if (sshStartAttempted) {
+      try {
+        await stopSsh(baseUrl, auth);
+        sshStartAttempted = false;
+      } catch (error) {
+        cleanupErrors.push(`SSH cleanup: ${error.message}`);
+      }
     }
   }
+  if (testError !== null || cleanupErrors.length > 0 || evidence === null) {
+    throw new Error(
+      `Full integration failed; test=${testError?.message ?? 'none'}; ` +
+      `cleanup=${cleanupErrors.length === 0 ? 'none' : cleanupErrors.join('; ')}`,
+    );
+  }
+  console.log(JSON.stringify({...evidence, cleanup: 'pass'}));
 }
 
 try {
@@ -7427,8 +7499,13 @@ try {
 } catch (error) {
   const suiteIndex = process.argv.indexOf('--suite');
   const suite = suiteIndex >= 0 ? process.argv[suiteIndex + 1] : 'full';
-  if (suite === 'p6-session' && isHttpTransportFailure(error)) {
-    console.error(`P6_SESSION_TRANSPORT_FAILURE ${p6SessionTransportReport(error)}`);
+  const transportError = firstHttpTransportFailure ??
+    (isHttpTransportFailure(error) ? error : null);
+  if (['p6-session', 'full'].includes(suite) &&
+      isHttpTransportFailure(transportError)) {
+    const label = suite === 'p6-session' ?
+      'P6_SESSION_TRANSPORT_FAILURE' : 'P6_INTEGRATION_TRANSPORT_FAILURE';
+    console.error(`${label} ${p6SessionTransportReport(transportError)}`);
     process.exitCode = p6SessionTransportExitCode;
   } else {
     throw error;
