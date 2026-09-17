@@ -75,7 +75,7 @@ Status values are `pending`, `in_progress`, and `completed`.
 | P6-02 | Add the bounded API-profile and model-preset contract through existing settings, persistence, Device and Web owners | Measured NVS capacity; explicit count/length limits; selection/default behavior; malformed/full-storage failure; reboot persistence; Device/Web parity; exact cleanup and resources | completed |
 | P6-03 | Add configurable authentication lifetime and independent multi-tab browser presence | Four exact lifetime choices; expiry and until-reboot semantics; aggregate visible-tab heartbeat; while WebServer is available, waiting within 30 seconds after the last heartbeat without auth loss; multi-tab correctness; blocking foreground request shown as Busy/unobservable and original timestamp evaluated at return without renewal; final-image startup rejection before login plus stale-token rejection through the shared clear owner | completed |
 | P6-04 | Preserve active project, active view and drafts through the existing Web reconnect path | Same-address reconnect after transient disconnect and Python handoff; active project/view/draft restored; stale or missing state fails explicitly; no exact-scroll claim | completed |
-| P6-05 | Bring the Web Console to the Architect-reviewed replacement direction, add explicit discovered-network Wi-Fi selection through the smallest reviewed existing-owner backend mapping, add Web Pending to complete Python source and back through existing P5 owners, and finish desktop/tablet/phone polish through the existing asset boundary | Every required Web capability reachable; explicit Wi-Fi scan/select/hidden-manual/connect states and other degraded states; complete-source review returns to the same Pending identity; stable-ID interaction checks; 1280, 900 and 390 px screenshots without overlap; soak and resource evidence | pending |
+| P6-05 | Bring the Web Console to the Architect-reviewed replacement direction, add explicit discovered-network Wi-Fi selection through the smallest reviewed existing-owner backend mapping, and finish desktop/tablet/phone polish through the existing asset boundary | Every required Web capability reachable; explicit Wi-Fi scan/select/hidden-manual/connect states and other degraded states; stable-ID interaction checks; 1280, 900 and 390 px screenshots without overlap; soak and resource evidence | completed |
 | P6-05A | Bring the existing basic setup/provisioning page and save/error responses to the accepted shared visual style | All Wi-Fi/API/STT/search/TTS fields and actions remain usable at desktop/tablet/phone sizes; write-only secrets and validation/save/restart semantics preserved; flash-resident setup works without SD or external assets; focused runtime and resource evidence | pending |
 | P6-05B | Bring the existing manual Python login/workspace/return pages to the accepted shared visual style and deliver them through the existing VFS image | Script list/editor/output/actions, splitters and responsive layout remain usable; login and same-address CardMind return preserved; no execution/authentication changes; exact updated VFS delivery plus focused real-browser/runtime evidence | pending |
 | P6-06 | Bring the 240x135 Device UI to the Architect-reviewed replacement direction through existing screen/input owners, including complete Python-source navigation and return to the originating Chat | Every required Device capability reachable; coherent navigation and compact states; Python source review returns to its originating Chat without changing approval state; provider/SD/optional-API degradation; no Web-only requirement leakage; device resources and latency | pending |
@@ -4817,3 +4817,542 @@ unhandled-modifier early return, plus this compact trace record. The accepted
 publication parent is636970153afc012454e0567fac5c7c5305197eda. All other Keyboard
 changes remain outside this commit. The separate navigation-consumer and
 populated-history TLS-stream obligations remain open.
+
+### P6-05 activation and shared-source ownership decision
+
+At 2026-09-16T15:55:43+03:00, Architect accepted the corrected P6-06 binary/options identity and
+suspended that row as pending: source/build GO, runtime/visual closure STOP. P6-05
+became the sole in_progress row for its bounded pre-edit review. This changes execution
+order and explicitly scoped source ownership only; it does not recover the failed Device
+path or turn offline evidence into runtime acceptance. The P6-05 clock starts here.
+
+Source hypothesis: the accepted presentation and missing ordinary Web actions can reuse
+existing UI, upload/copy/search, settings and synchronous Console owners. Expected proof
+is unchanged reconnect behavior, usable actual-source offline presentation and later real
+Device/Web acceptance; no mock backend is an acceptance substitute.
+
+Architect retained the exact pre-P6-05 P6-04 versions as local Git blobs without staging
+or committing. The index was empty after the operation:
+
+| Existing source | Git blob |
+| --- | --- |
+| assets/web_console.html | 2aee942c0021ba2130027bbbd7beb3ece1d1bf47 |
+| src/web_console.cpp | 5a90a09ea028c48e641d0c44b94fbe0998399df2 |
+| src/web_console_asset.h | cc54eca22dd0eafde251116faf6c4a7d073e5fed |
+| tests/web_console_ui_test.mjs | 033213667d093623b6a8fa393366bf9c8d89fd7e |
+
+Their raw SHA-256 values still match the previously frozen P6-04 package. Publication is
+sequential complete snapshots, not gzip-hunk splitting: after applicable runtime evidence
+and Architect closure GO, P6-04 publishes its complete reviewed source/header, then P6-05
+publishes its own delta and regenerated complete header. Verify the retained blobs and
+row-only diff before staging; an additional P6-04 source correction requires its own
+explicit ownership/review first. No WIP or batched-row commit is permitted.
+
+The earlier whole-file freeze is superseded only for P6-05-owned shared-asset presentation,
+missing foreground Web consumers and Wi-Fi routes/state. P6-04 reconnect/auth/codec and
+restoration semantics, its retained oracle and v3 pair, and the failed COM/HTTP path remain
+frozen. DeviceMenus may change only existing post-close Wi-Fi progress/result presentation;
+P6-06 Home/menu code remains untouched. Ordinary New Project draft isolation is P6-05:
+its current foreground handler omits the old-draft save and composer reset already present
+in New Chat and Project selection; no disconnect is needed to expose the defect. Reuse
+those two existing operations without changing reconnect storage/restoration contracts.
+
+The ROADMAP Wi-Fi outcome decision is binding: actual connected SSID is separate from
+configured settings, Save never means connected, close hands application to Cardputer,
+and only that existing owner reports connecting/connected/actual failure. There is no
+outcome bridge, rollback, background scanner or new persisted state. Python-specific work
+remains cancelled. Production edits await the single bounded pre-edit review of the final
+minimal design; this status transition is not implementation GO.
+
+### P6-05 frozen design, proof matrix and pre-edit GO
+
+By `2026-09-16T16:06+03:00`, one fresh bounded design reviewer and Architect
+independently accepted the same minimal P6-05 boundary. Architect returned explicit
+`P6-05 PRE-EDIT GO`. The active hypothesis remains that the accepted presentation and
+all missing ordinary Web actions fit the existing asset, route, storage, settings and
+synchronous Console owners without a parallel framework. The expected information
+from this coherent implementation is whether those owners can expose the required
+actions while the frozen P6-04 reconnect/auth/codec/restoration contract and P6-06
+Home/menu behavior remain unchanged.
+
+The frozen design adds exactly three routes: authenticated CSRF-protected
+`POST /api/file/copy`, authenticated storage-read `GET /api/search/sources`, and
+authenticated CSRF-protected storage-none `POST /api/wifi/scan`. New text creation
+does not add `/api/file/new`: it sends the existing `/api/file/upload` owner a native
+multipart `FormData` request containing a zero-byte text `Blob` and a validated text
+filename. Pinned ESP32 WebServer `Parsing.cpp` multipart semantics deliver START, a
+zero-sized WRITE and END for an empty part, and the existing upload START owner creates
+the file. File Copy wraps the complete existing `copyWorkspaceFile` call in
+`beginWebConsoleForegroundWork()` / `endWebConsoleForegroundWork()` on both success
+and failure, ends foreground work before refresh or response, preserves the owner's
+atomic-copy/collision/bookmark behavior and exact failure, and neither retries nor
+masks a possible post-copy bookmark failure.
+
+Latest sources are explicitly the latest Device cache loaded by the existing
+`loadLatestWebSearchSources()` owner. The response contains the cached query and
+title/URL/snippet items; the Web renderer uses DOM text nodes and creates a clickable
+link only for `http://` or `https://`, leaving every other URL as plain text. Wi-Fi
+scan reuses `scanWifiNetworks()` synchronously inside the existing foreground-work
+owner, releases its vendor scan results through that owner, changes no NVS or settings
+state and fails explicitly. State exposes actual connected SSID separately from saved
+configured SSID. Settings keep the existing write-only password and same-SSID blank
+password preservation semantics; Save reports only saved/awaiting Console close, and
+the existing post-close Cardputer owner alone presents connecting followed by actual
+success or error. There is no outcome bridge, rollback, background scan, new persisted
+state or lifecycle owner.
+
+The ordinary New Project handler first stores the old active-chat draft through the
+existing helper, clears the composer and request instructions, then invokes the
+existing create/refresh/select sequence. This matches New Chat and Project selection
+without changing reconnect encoding, restoration order or its retained oracle.
+
+The expected production write set is limited to
+`assets/web_console.html`, generated `src/web_console_asset.h`,
+`src/web_console.cpp`, `src/web_console_routes.h`, `src/web_console_routes.cpp`,
+`src/web_console_state.cpp`, the narrow existing post-close Wi-Fi presentation in
+`DeviceMenus.ino`, minimum actual-source fixture/static-response corrections in
+`tools/web_console_preview.mjs`, and this trace. `tests/web_console_ui_test.mjs`
+remains frozen. Preview code may present actual production source with static response
+shapes but owns no storage or network business logic and is not functional evidence.
+
+The frozen smallest proof matrix is:
+
+| Requirement or forbidden effect | Smallest accepted observation |
+| --- | --- |
+| Existing IDs, routes, reconnect/auth/codec/restoration, upload and settings owners remain intact | Scoped source/diff inventory plus the unchanged existing stable-ID Web suite |
+| New text, Copy, latest cached sources and Wi-Fi scan reach their real production owners | Source/route review and later healthy real Web runtime actions; offline preview is presentation evidence only |
+| File Copy, source URLs and Wi-Fi failures remain explicit with no retry, masking, NVS scan write or false connected claim | Changed-route review, response/state assertions in the existing proportional checks, and later real Web failure observations |
+| Accepted neutral layout keeps every required capability reachable | Actual-source offline interaction and screenshots at 1280, 900 and 390 px, plus 320x568, short 720x450 and 200-percent text checks for prior nav/composer/terminal/dialog risks |
+| Login preserves action, fields, errors, reconnect handoff and cache/auth behavior | Source review and actual-source login presentation; later healthy runtime login |
+| Device post-close Wi-Fi feedback changes presentation only | Scoped DeviceMenus diff, compile after separate Architect authorization, and later healthy Device observation |
+| Python, P6-04 oracle, failed COM/HTTP path, P6-06 Home/menu and unrelated dirty work remain untouched | Exact path diff and status inspection |
+
+Cheap asset consistency and the existing Web UI suite run only after the coherent
+source edit. Actual-source offline visual evidence and the complete row-owned diff then
+go to Architect for personal source/visual acceptance and to one fresh reviewer for the
+changed routes. No compile, upload, COM, HTTP, Device, staging, commit or publication is
+authorized before that acceptance and the separate compile authorization.
+
+### P6-05 source, static and actual-source visual evidence
+
+At 2026-09-16T17:26:32+03:00 the coherent P6-05 source package was
+evidence-ready but not complete. Production now uses the accepted neutral
+palette and layout, retains the P6-04 reconnect/auth/codec/restoration owners,
+adds exactly the three frozen routes, exposes latest cached search sources,
+New text, Save copy, Wi-Fi scan/manual selection and actual-versus-configured
+SSID, preserves write-only Wi-Fi secrets, and saves the old Chat draft before
+New Project clears the composer. DeviceMenus changes only the existing
+post-close Wi-Fi progress and actual-success presentation. Python-specific
+source remains outside this row.
+
+The generated asset was rebuilt from the production HTML:
+WEB_CONSOLE_ASSET source=165547 gzip=40703. The unchanged
+tests/web_console_ui_test.mjs blob remains
+033213667d093623b6a8fa393366bf9c8d89fd7e and its existing run returned
+WEB_CONSOLE_UI_TEST result=pass. Scoped git diff --check passed. Current
+source SHA-256 identities are:
+
+- assets/web_console.html:
+  A9C665707BCF04C2F341EB3E6FCB88BA4DD279D3019B8975471EA7321D8AAB89
+- src/web_console_asset.h:
+  0B9550A07D019DAFE60CBEA65AE35A595610FA9967DBEC19C94170868DF9FBF4
+- src/web_console.cpp:
+  AABABC9DBB4D4D6345780B5D6F7DD725706EE575E83E70C3EE5AFF9D057ADB93
+- src/web_console_routes.h:
+  4C1AB8533BC2C5266BDE1384EC3737A8CF15BF13DC565D11A35EBADBF02A9FF7
+- src/web_console_routes.cpp:
+  7ED15FAFA4694804FAD9259A71FF9D6479A22E5AA5EC347F0A329BE1A4D79ED7
+- src/web_console_state.cpp:
+  759C99680842F6C6E2E631A435F307B362860AE70B4202B4E3AB71CE79A46387
+- DeviceMenus.ino:
+  AC8564339F523C28617535356A6A42D7AD253607207E8B1B5B3E815F17A1CD93
+- tools/web_console_preview.mjs:
+  571A48592C6E0D8AFF46F581AEBC246F0C72736A45EBF5B6CCBA9EAA3C1AC518
+
+The bounded route audit counted 88 enum values and 88 positional handler
+entries with no null slot or dispatch mismatch. It verified the three
+registrations, SearchSources read guard, FileCopy write guard, WifiScan
+storage-none classification, authentication/CSRF checks and called API
+signatures. Its single remaining blocker was New text accepting a binary or
+extensionless name. The final client now mirrors the existing safe workspace
+path and text-extension policy before FormData. Direct current-source
+observation returned true for notes.txt and notes/review.md, false for
+notes.bin, notes and ../notes.txt; confirming notes.bin produced the visible
+error "Use a valid workspace path ending in a supported text extension." and
+zero requests, while notes.txt produced /api/file/upload followed by the
+existing /api/files refresh.
+
+Architect's first visual read found short-height Chat clipping, hidden
+mid-width navigation labels, unreadable narrow-rail session text, low selected
+Wi-Fi contrast, no way to reopen an already selected mobile Chat, 30-pixel
+mobile intent buttons and bottom-navigation overlap. The correction keeps
+controls at their accepted sizes, places session/address in the wide context
+header, retains the 92-pixel labelled rail through 720 pixels, makes the short
+and mobile Chat body explicitly scrollable, adds a 44-pixel Continue selected
+chat action through the existing detail owner, gives selected Wi-Fi dark
+foreground, and reserves bottom clearance for Stop/Send.
+
+Current-source CDP measurements observed no document-width overflow at 1280,
+900, 720, 390 or 320 pixels. At 900 and 720 the sidebar client and scroll
+widths are both 91 pixels and all four labels render. At 720x450 the Chat body
+is 344 pixels high with 578 pixels of scroll content and a retained 112-pixel
+message viewport; the top and bottom captures show history and the complete
+prompt/Send controls. At 390 pixels the mobile detail body is 654 pixels high
+with 1399 pixels of scroll content, all six intent buttons are 44 pixels, and
+at maximum scroll Send ends at y=740.640625 before the mobile navigation
+starts at y=774. Selected Wi-Fi renders rgb(31,33,31) on rgb(230,200,156).
+The 200-percent emulation has innerWidth 640 and document scrollWidth 625.
+
+Corrected actual-source presentation evidence is retained temporarily for
+Architect review at:
+
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-1280-fixed.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-900-fixed.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-720x450-top-fixed.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-720x450-bottom-fixed.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-390-master-fixed.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-390-detail-sources-top-final.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-390-detail-sources-bottom-final.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-390-settings-scan-fixed.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-320x568-master-fixed.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-200pct-fixed.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-390-files-master-final.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-390-files-detail-final.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-390-ssh-final.png
+- C:\Users\84vs1\AppData\Local\Temp\cardmind-p605-visual\p6-05-390-action-dialog-final.png
+
+These preview/CDP observations prove presentation and direct browser behavior
+only; static preview responses are not Device/Web functional acceptance. No
+compile, upload, COM, HTTP, Device, reset, staging, commit or publication was
+performed for P6-05. A separately requested COM reset was rejected by platform
+approval before process creation and is not a current availability observation.
+P6-05 remains the sole in_progress row pending Architect's personal source and
+visual verdict and any separately authorized next proof.
+
+### P6-05 remaining visual verdict and one deferred form defect — 2026-09-16
+
+While P6-04 remained active, Architect completed the previously missing personal
+visual review from current-source preview captures: Files, Terminal and Settings
+at 1280 and 900 pixels; current C++ literal login normal/error at 1280, 390 and
+320 pixels; and the 390-pixel bottom positions for Chat master, Settings and SSH.
+The retained evidence is under
+`C:/Users/84vs1/.codex/visualizations/2026/09/15/01a0a682-5410-7ed1-8f67-c2ab499bf055/p605-remaining-wide/`.
+All six login variants were accepted, bottom actions remained above fixed mobile
+navigation, and the wide grids had no overlap. These accepted frames must not be
+repeated.
+
+Architect found one consolidated P6-05 presentation defect. A populated SSH form
+has a persistent label only for Profile name; Host, Port, User, Auth and secret
+fields merge without useful spacing, while their placeholders clip and disappear
+when populated. The same source defect affects the STT, search and TTS fields in
+the current Web asset. After P6-04 publication, P6-05 must use the existing
+`field-label` and spacing markup to add associated `label for` owners for
+`sshProfiles`, `sshHost`, `sshPort`, `sshUser`, `sshAuth`,
+`sshPassword`, `sshPassphrase`, `sftpPath`, `sttBaseUrl`, `sttModel`,
+`sttApiKey`, `searchBaseUrl`, `searchApiKey`, `ttsBaseUrl`, `ttsModel`,
+`ttsVoice` and `ttsApiKey`. Secret fields must move the blank-keeps-current
+instruction into persistent `small` text without changing write-only semantics.
+
+This correction adds no component, behavior, text-contract test or new review
+cycle. Its remaining focused visual proof is only corrected SSH at 900 and 390
+pixels plus expanded Voice/search/TTS at 900 and 390 pixels, followed by
+Architect personal inspection and the standard asset-consistency/Web UI suite.
+P6-05 remains `pending`; no production asset edit is authorized before P6-04
+publication.
+
+### P6-05 permanent form-label correction evidence — 2026-09-16
+
+At `2026-09-16T19:15:59+03:00` the one deferred presentation correction was
+evidence-ready. The existing `field-label` pattern now provides associated labels
+for exactly `sshProfiles`, `sshHost`, `sshPort`, `sshUser`, `sshAuth`,
+`sshPassword`, `sshPassphrase`, `sftpPath`, `sttBaseUrl`, `sttModel`,
+`sttApiKey`, `searchBaseUrl`, `searchApiKey`, `ttsBaseUrl`, `ttsModel`,
+`ttsVoice` and `ttsApiKey`. The existing row-wrapper pattern is reused only for
+Host/Port and TTS model/Voice. The SSH blank-keeps-current instructions moved
+from transient placeholders to persistent `small` text, and equivalent persistent
+saved-key guidance was added for STT, search and TTS. All IDs, input limits,
+password/autocomplete attributes, dynamic key-state owners, clear controls,
+JavaScript consumers, routes, persistence and write-only semantics are unchanged.
+
+The atomic generated asset was rebuilt with
+`WEB_CONSOLE_ASSET source=166789 gzip=40838`. Worktree SHA-256 identities are
+HTML `45A845022AD9DF575A03E550816CA22A5F186A800C957AB12AFB47B02838D8EB`
+at 166,892 CRLF bytes and generated header
+`99FA162E0C8AD04B17EA76FABEAA6DA59A17A91FD5548715E1AF393C26B146B4`
+at 255,583 bytes. The scoped diff check and existing Web UI suite both passed;
+no new test or text contract was added.
+
+One direct current-source CDP observation populated the secret fields with
+non-secret preview values and captured only the four required frames. Every named
+control had exactly one associated label, positive width and a 5-pixel label/control
+gap at both widths. Document width did not exceed the viewport at 900 or 390
+pixels, and no runtime or console error occurred. The inspected images are under
+`C:\Users\84vs1\.codex\visualizations\2026\09\02\01a06386-22d5-7833-bb82-40a4f499f52e\p6-05-form-label-proof\`:
+
+- SSH 900: `9694F80AFA73B4CC4C6BEE36F41DA658BBC208D4D7282C36C2BC6FA3B4D6A884`;
+- SSH 390: `5521B6E41F184AB2FFFFEF277EF59D2D400D30FCB2BCBC07FA6D7D51D3DB133D`;
+- expanded Voice/search/TTS 900:
+  `5CB26D4F76D867FBD73231030DFEC827A41CADA20DEF35598F552CA3CF14E6C7`;
+- expanded Voice/search/TTS 390:
+  `5BA8F5F0E69757AEF92BC4112CDFD185C631330658C515136E5D31EAAC369C21`.
+
+Personal inspection found the persistent labels readable on populated controls,
+paired rows aligned, secret guidance visible and mobile navigation clear of the
+forms. P6-05 remains `in_progress` pending Architect's personal source/visual
+verdict and the coordinated integrated compile/Device boundary. No compile,
+upload, COM, CardMind HTTP or Device action occurred. The active interval from
+`2026-09-16T18:55:49+03:00` to this checkpoint was under 30 minutes, so no
+stall alert or 60-minute pivot occurred.
+
+Architect personally inspected the populated markup and existing consumers plus
+all four exact visual-proof PNGs at 900 and 390 pixels, then returned focused
+source/visual `GO`. Persistent labels and secret guidance are readable, controls
+remain aligned, no label overlap or horizontal spill is present, and existing
+scrolling handles the long forms. IDs and behavior remain intact. This is
+presentation acceptance only; P6-05 remains `in_progress`. Architect authorized
+one coherent pinned compile of the current integrated candidate, including the
+already integrated FIX-POWER-01 boundary, followed by exact build-options and
+binary-hash inspection. No upload is authorized before the separately coordinated
+power/performance baseline returns the Device slot. No new test or review cycle is
+required. A remote CI query for published P6-04 found zero feature-branch workflow
+runs; this is absence of CI evidence, not a failed run.
+
+### P6-05 integrated build checkpoint — 2026-09-16
+
+The pinned M5Cardputer, M5Unified and M5GFX commit identities and ArduinoJson
+7.2.1 version all matched. The first host-suite shell invocation did not start
+compilation because its output-path variable reached `g++` empty. The corrected
+invocation changed only the harness path to explicit exact-owned
+`/tmp/cardmind-host-tests-p605-labels-20260916`; the same strict source list then
+returned `host_tests: PASS`, and the temporary ELF was verified absent. No
+production or oracle change followed that invocation failure.
+
+The one Architect-authorized pinned compile of the current integrated candidate
+completed successfully. The sketch used 3,650,250 bytes, globals used 65,956
+bytes and 261,724 bytes remained for local variables. `build.options.json`
+contains exact FQBN
+`m5stack:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=custom`, resolves
+one unique M5Stack hardware directory at 3.2.1 (the same path appears twice) and
+contains no 3.3.9 reference. Its exact identities are:
+
+- `build.options.json`: 1,736 bytes, SHA-256
+  `20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`;
+- application binary: 3,650,432 bytes, SHA-256
+  `339D99C25AD3A2FCC6C125202B148B46FA3AD6F8C1C46AFF328D3748B397CD8F`;
+- merged 8,388,608-byte image: SHA-256
+  `7BC03323FD102540DE9982F3726D0520A54CC58A85CD62AF193900679F7AA4DA`.
+
+The application has 19,584 bytes remaining against its 3,670,016-byte CI budget,
+with 543,872 bytes free in the 4,194,304-byte partition. This budget does not authorize speculative
+infrastructure. No upload, COM8, Device HTTP or readiness action occurred. The
+exclusive Device slot remains with the power/performance task for its accepted
+PRE baseline. That baseline owns closing Console through `#endConsole`, observing
+`WEB_CONSOLE result=stopped` and releasing its serial holder. After its explicit
+successful slot return, P6-05 must reuse that observed stop evidence, recheck the
+same options and hashes without rebuilding, upload exactly once and avoid an
+extra pre-upload readiness or `EXIT` experiment. A failed baseline, options gate,
+upload or normal post-upload readiness stops dependent acceptance.
+
+### P6-05 accepted-image upload and normal readiness — 2026-09-16
+
+Immediately before upload, the unchanged `build.options.json` again matched
+SHA-256 `20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`,
+the application binary again matched
+`339D99C25AD3A2FCC6C125202B148B46FA3AD6F8C1C46AFF328D3748B397CD8F`,
+the FQBN was exact and the only resolved M5Stack hardware version was 3.2.1.
+No rebuild occurred. Exactly one pinned COM8 upload exited zero; every written
+esptool block passed its data-hash verification and COM8 reappeared normally.
+
+The one permitted normal post-upload readiness check then passed without a
+retry, reset or recovery action. `STATUS` reported application 1.12.1,
+`board_adv=yes`, microSD/chats/files ready, three chats, connected Wi-Fi, valid
+TLS time, Balanced power 1, CPU 160 MHz, free heap 121,520 bytes, largest block
+57,332 bytes, minimum heap 109,680 bytes, stack margin 7,784 bytes and reset
+reason 1. The exact-owned temporary readiness log was deleted and verified
+absent. COM8/Device HTTP ownership was returned to Architect for the short
+POST observation; P6-05 remains `in_progress` and no runtime closure is claimed.
+
+### P6-05 direct runtime evidence and remaining Browser boundary — 2026-09-16
+
+The first bounded serial observer received exact `PONG` but timed out before
+starting Console because it configured a CRLF delimiter while firmware
+`printStatus()` terminates its line with LF. Its composite matcher also required
+desirable Wi-Fi and storage values instead of first accepting and classifying a
+responsive `STATUS version=` line. Architect classified this as an observer
+delimiter/oracle defect. The failed run remains failed evidence: it sent no
+`CONSOLE`, made no HTTP request or mutation, performed no recovery action and
+closed COM8 normally. It is not firmware-readiness evidence.
+
+One explicitly approved corrected lifecycle used LF with a trimmed trailing CR,
+one 12-second initialization interval, one fixed-deadline `PING`, and independent
+classification of the returned status fields. Initial status reported application
+1.12.1, ADV hardware, ready microSD, connected Wi-Fi, Balanced profile 1 at
+160 MHz, free heap 120,776 bytes, largest block 56,308 bytes, minimum heap
+109,136 bytes, stack margin 7,800 bytes and reset reason 1. The same holder then
+started one Web Console session and retained sole COM8 ownership through all HTTP
+work.
+
+Against the installed P6-05/Home candidate with application SHA-256
+`9FD88B0C2B0992D4E60540CD4BDC9D553F185CD31780429E92573B2F3E0B78C4`,
+the ignored credential owner completed real login without emitting a password,
+cookie or CSRF value. An unauthenticated latest-sources read returned 401, and
+authenticated file-copy and Wi-Fi-scan writes without CSRF each returned 401.
+The exact UI-equivalent zero-byte multipart upload, with its filename supplied by
+the native form part and no query fallback, created one editable 0-byte text file.
+The real copy route reproduced a 32-byte source with matching SHA-256; a second
+copy to the existing destination returned 400 and left its bytes unchanged.
+
+The latest Device search cache returned the required typed
+`latest_device_cache` envelope: the query occupied 24 UTF-8 bytes and all five
+rows carried HTTP(S) URLs. The real foreground Wi-Fi scan completed in 3,689 ms
+and returned six typed named secured networks. Settings revision, configured SSID
+and actual connected SSID were unchanged across the scan. Comparable Web
+resources were free heap 89,536 -> 89,516 bytes, largest block
+31,732 -> 31,732 bytes, minimum heap 73,660 -> 73,660 bytes and stack margin
+5,608 -> 5,608 bytes; CPU remained 160 MHz and reset reason remained 1. Every
+collision-checked empty/source/copy/blocked fixture was deleted and verified
+absent. No settings, API credential, Wi-Fi configuration or unrelated SD state
+changed.
+
+Architect personally viewed the real Device login page at 1280x720 and 390x780.
+The native responsive render retained its heading, password field, help and action
+without overlap or horizontal spill. The available Browser controller has no
+supported secure file-to-input or cookie bridge: its fill API accepts only literal
+model-visible strings, while the direct-login cookie was intentionally process
+local and cleared. Therefore authenticated DOM actions for New text, Save copy,
+sources, Wi-Fi controls and especially browser-local New Project draft isolation
+remain OPEN rather than failed firmware evidence. No credential was exposed and no
+replacement CDP/helper mechanism was created.
+
+On Architect instruction the same holder sent one exact `EXIT`, observed exact
+`WEB_CONSOLE result=stopped`, waited three seconds and obtained final normal
+status: ready microSD, connected Wi-Fi, free heap 98,632 bytes, largest block
+31,732 bytes, minimum heap 73,660 bytes, stack margin 5,608 bytes, Balanced
+profile 1, 160 MHz and reset reason 1. COM8 closed normally. P6-05 remains the
+sole `in_progress` row pending the secure authenticated Browser actions and its
+subsequent closure review; this checkpoint is not row completion.
+
+### P6-05 Architect direct browser observation — 2026-09-16 21:12–21:21 UTC
+
+Architect directly exercised the installed 741E1C0999ECC19473B45FCA84BE2E25B8361E8CBFF910F0DC4EBC29B5522A0A image in a fresh isolated Chromium context using the existing local credential owner. No user browser profile or exported session was used. The serial holder kept the Console active until exact-owned cleanup and browser close.
+
+The run failed a real P6-05 acceptance boundary: Save copy as created the requested editable zero-byte file, but its settled file selection was empty (selectedIndex -1). Source inspection assigns the defect to the existing loadStateView/render/selection ordering: render schedules requestAnimationFrame, while the create/copy handler selects the new filename before that option is rendered. New text has the same ordering exposure although its creation/selection passed this run. Manual selection and opening the copy succeeded; that does not turn automatic selection into a pass. Phase 6 owns the minimal correction; the row remains in_progress.
+
+Independent observed cases passed: a new project starts with an empty composer, switching to the prior project restores its draft, and returning to the new project remains empty; new text creates an editable zero-byte file; Latest search sources renders five rows with HTTP(S) links and closes; Wi-Fi scan renders three networks with valid secured flags, manual/discovered mode switches work, and settings revision/configured/connected Wi-Fi remain unchanged with zero settings-save requests. Sources content and network identities were not recorded.
+
+Two prior observer mistakes are preserved separately: the first Console observer waited for started instead of the actual ready marker, and the first project observation captured the old chat before the sequential projects/chats/chat DOM refresh finished. The former had no fixtures and its existing handler was explicitly stopped; the latter exact-owned project was removed and the original context restored before a fresh run with a settled identity predicate. Neither failed observer run is acceptance evidence or a Device-readiness failure.
+
+After the production failure, cleanup removed both exact-owned files and the current exact-owned project, restored the original project/chat, and repeated the absence/postcondition reads successfully. The isolated context/browser closed; serial observed WEB_CONSOLE result=stopped and normal STATUS, then closed. Final SD ready, Wi-Fi connected, configured yes, reset reason1, history17 and chats3 matched the baseline. Heap93452 before versus92600 after; largest31732 unchanged; minimum72020 before versus65072 after; stack3304. The sub-70KiB historical minimum requires ownership/baseline classification and is not silently declared a pass or an established regression. No reset, upload or recovery was used.
+
+Safe result and personally inspected screenshots: C:/Users/84vs1/.codex/visualizations/2026/09/16/01a0a682-5410-7ed1-8f67-c2ab499bf055/p605-direct-browser/browser-observation.json, new-project-1280.png and empty-file-copy-manually-selected-1280.png. The latter shows the manually selected copy, not success of the failed automatic selection.
+
+### P6-05 Architect direct observation and separate cleanup — 2026-09-16 23:33 UTC
+
+On unchanged5619, the23:13:41 HTTP observation reported current free88512,
+largest31732, lifetime minimum68368 and stack5592. The frozen general-mode
+oracle applies its71680-byte floor to current free heap, not the lifetime
+minimum. The disposable proof's additional lifetime-minimum floor was not a
+canonical acceptance requirement; its failed runs remain failed.
+
+The23:17–23:20 direct browser observation selected both a new zero-byte text
+file and its saved copy, with the editor enabled. Current free heap changed
+from85140 to84132; largest31732, minimum68368, stack5560 and reset11 remained
+stable over the79.75-second sampled interval. This whole run FAILED: Architect's
+180-second holder stopped Console before exact-owned HTTP cleanup completed.
+These functional/resource observations are retained as sub-observations only,
+not successful whole-run acceptance. The selected-file screenshot does not
+establish a compressed list; parent-card scrolling remains an unmeasured cause.
+
+A separate cleanup preflight and the normal-status check following one separate
+vendor RTS reset received PONG but no complete STATUS before their deadlines.
+Neither reached HTTP mutation. The observer discarded unterminated buffered
+bytes, so those logs cannot distinguish absent output from a partial line.
+Source review found no normal-loop path executing queued requests after Console
+exit. Earlier timeout causality remains unresolved; no hardware/SD fault is claimed.
+No additional reset or reflash followed. At23:31:44 a raw-read observation
+received a complete468-byte normal STATUS: SD/chats/files ready, Wi-Fi connected,
+heap118332/largest55284/minimum108452/stack7752/reset11.
+
+At23:32:39–23:32:54 a separate direct holder kept Console active until the awaited
+cleanup client completed. It deleted only arch-1789600669277.txt and
+arch-1789600669277-copy.txt, then verified both absent twice. Exact Console stopped
+and final normal STATUS passed with SD/chats/files ready, Wi-Fi connected,
+heap95356/largest31732/minimum79420/stack5576/reset11. Serial and API client closed;
+COM8/HTTP ownership returned to Phase6. API credentials and Wi-Fi settings were
+not mutated. This separate cleanup does not convert the earlier run to passing.
+Artifacts: artifacts/p605-direct-files-failed.json,
+artifacts/p605-status-byte-observation.json, artifacts/p605-owned-cleanup.json,
+and artifacts/p605-owned-cleanup-direct-serial.log.
+
+Architect's subsequent actual-source local layout inspection at1280x720 measured
+workspaceFiles height220px both before and after scrolling to Save copy. The
+parent card changed scrollTop from0 to238; its client height530px explains the
+small visible remainder of the list in the earlier screenshot. No compression or
+overlap defect was demonstrated, and no extra layout change is required. Retained
+images: artifacts/p605-files-top-layout.png and
+artifacts/p605-files-actions-layout.png. This is layout evidence, not Device
+functional acceptance. The local preview and browser were closed afterward.
+
+### P6-05 post-close Wi-Fi proof boundary — 2026-09-16 23:38 UTC
+
+Architect personally confirmed that unchanged SSID/password cannot enter
+DeviceMenus' wifiChanged branch. Exercising it would require replacing working
+Wi-Fi configuration or adding test-only injection solely for the new presentation
+calls. ROADMAP records the proportional-evidence decision: focused source review
+and retained connection/display-owner evidence cover Connecting, actual-success
+and existing failure ordering; real unchanged-network close/reopen must still
+preserve and display the actual connected SSID. The changed-credential branch is
+not claimed as physically executed. No additional harness, secret export or Wi-Fi
+mutation is authorized to manufacture that observation. Other P6-05 runtime and
+full-firmware acceptance gates remain in force.
+
+### P6-05 Architect final runtime and closure GO — 2026-09-16 23:53 UTC
+
+Architect ran the smallest direct browser proof on unchanged5619 from23:51:49
+to23:53:12UTC. One serial holder awaited the browser through exact-owned cleanup,
+the browser Close & apply action, normal STATUS, Console reopening, the connected
+SSID observation, exact stop and final normal STATUS. No build, upload or reset
+occurred. New text and Save copy as each automatically selected the resulting
+zero-byte text file; both opened in the enabled editor with zero-byte content.
+The two collision-checked files were deleted and their absence verified twice
+before closing Console. Browser page errors0, HTTP errors0, settings writes0.
+Reopening reported the same actual and configured SSID and unchanged typed API/
+optional-key presence flags. No secret-setting owner was invoked. The separately
+recorded changed-credential presentation branch was not physically executed.
+
+Eight Web resource samples reported current free82768 initially, post-action
+baseline84364 and minimum sampled current81736; largest31732, lifetime minimum
+68960, stack5576 and reset11 stayed unchanged. The60.75-second post-action
+observation remained above the71680/28672 current-free/largest floors, with
+maximum baseline free loss2628 bytes, below4096. Final normal STATUS after both
+Console cycles had heap93028/largest31732/minimum68960/stack5560/reset11,
+Wi-Fi connected, SD/chats/files ready, history17 and chats3. API credentials and
+Wi-Fi configuration were not changed. All browser/API/serial handles closed.
+
+Raw artifacts are artifacts/architect-p605-browser-result.json,
+artifacts/architect-p605-reopen-result.json and artifacts/architect-p605-serial.log.
+Architect personally inspected artifacts/architect-p605-final-files.png; the
+selected copy/editor is coherent, with the already explained parent-card scroll.
+The earlier failed runs remain failed; this is a new complete passing run.
+
+Architect personally reviewed the actual three route handlers and dispatch/storage
+guards, their reused file/upload/search/Wi-Fi owners, the HTML consumers, actual
+SSID state, and the post-close Device presentation hunk. Retained source, host,
+unchanged Web UI suite, visual, real-route/failure, draft-isolation and exact-core
+build evidence remains applicable. Current row blobs are HTML6391afd436c5efac3ccff22d6d6cf5cc0840d054,
+asset058ed206dda0660c7c40424bf49ff0ec7a404146,
+serverf3ee1ee65af228f3b85d853987e164f8c4779798,
+routes-headerde1e23f6b904f9684f89ed061f576b7ac749de7c,
+routes-sourcefe91e2c39e0b7038232eaaea61c16e67889e9028,
+statedfb5efbe1687a7da87de530350fa62eefa5e7b3a and
+preview00701a603cd4541f062fb2ffdf9afef9fc046ec9. DeviceMenus includes only the
+post-close Wi-Fi presentation hunk; Home/icon and other corrective hunks remain
+outside this row. Application SHA256 remains
+56191AA19E520A546ED55450CDEB083B9B3B4A0B920D5725FF73338FDA2DEE8B.
+
+Architect returns explicit P6-05 CLOSURE GO for these eight production/preview
+paths and this row's selective trace evidence. Phase6 may mark only P6-05 completed,
+prepare its isolated row-only commit from the freshly verified remote parent,
+publish by native fast-forward Git and verify exact SHA/blobs/identity through
+GitHub MCP. This GO is not publication evidence. P6-05A/P6-06/FIX work, disposable
+scripts/artifacts and the final P6-08 release/CI/resource-debt gates remain excluded.

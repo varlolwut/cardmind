@@ -305,6 +305,8 @@ OperationResult buildWebConsoleSettingsState(
     document["settings_revision"] = revision;
     document["firmware_version"] = runtime.firmwareVersion;
     document["wifi_ssid"] = settings.wifiSsid;
+    document["wifi_connected_ssid"] =
+        WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String("");
     document["model"] = settings.model;
     document["global_instructions"] = settings.globalInstructions;
     document["master_tool_policy"] = JsonString(

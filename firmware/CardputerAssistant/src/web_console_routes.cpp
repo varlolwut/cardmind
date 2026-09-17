@@ -150,10 +150,14 @@ void configureWebConsoleRoutes(WebServer& server,
               handler(handlers, WebConsoleRouteHandler::ClearChat));
     server.on("/api/chat/archived", HTTP_GET,
               handler(handlers, WebConsoleRouteHandler::ArchivedMessages));
+    server.on("/api/search/sources", HTTP_GET,
+              handler(handlers, WebConsoleRouteHandler::SearchSources));
     server.on("/api/settings", HTTP_POST,
               handler(handlers, WebConsoleRouteHandler::Settings));
     server.on("/api/settings", HTTP_GET,
               handler(handlers, WebConsoleRouteHandler::State));
+    server.on("/api/wifi/scan", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::WifiScan));
     server.on("/api/profile/create", HTTP_POST,
               handler(handlers, WebConsoleRouteHandler::ApiProfileCreate));
     server.on("/api/profile/update", HTTP_POST,
@@ -216,6 +220,8 @@ void configureWebConsoleRoutes(WebServer& server,
               handler(handlers, WebConsoleRouteHandler::FileRead));
     server.on("/api/file/save", HTTP_POST,
               handler(handlers, WebConsoleRouteHandler::FileSave));
+    server.on("/api/file/copy", HTTP_POST,
+              handler(handlers, WebConsoleRouteHandler::FileCopy));
     server.on("/api/file/rename", HTTP_POST,
               handler(handlers, WebConsoleRouteHandler::FileRename));
     server.on("/api/file/delete", HTTP_POST,

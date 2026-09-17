@@ -686,6 +686,10 @@ void openWebConsole(Screen returnScreen)
         const bool wifiChanged = settingsResult.success &&
             (settings.wifiSsid != previousWifiSsid ||
              settings.wifiPassword != previousWifiPassword);
+        if (wifiChanged) {
+            cardputer::showBusyScreen(
+                "WI-FI", "Connecting to " + settings.wifiSsid + "...");
+        }
         const cardputer::OperationResult wifiResult = wifiChanged
             ? cardputer::connectToWifi(settings)
             : cardputer::OperationResult{true, ""};
@@ -709,7 +713,9 @@ void openWebConsole(Screen returnScreen)
         } else if (!listResult.success) {
             menuStatus = listResult.error;
         } else {
-            menuStatus = "Web console closed";
+            menuStatus = wifiChanged
+                ? "Wi-Fi connected: " + WiFi.SSID()
+                : "Web console closed";
         }
     }
     currentScreen = returnScreen;

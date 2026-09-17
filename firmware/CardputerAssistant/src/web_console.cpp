@@ -25,6 +25,7 @@
 #include "web_console_state.h"
 #include "web_console_transport.h"
 #include "web_search_client.h"
+#include "wifi_networks.h"
 
 #include <ArduinoJson.h>
 #include <M5Cardputer.h>
@@ -681,6 +682,7 @@ WebStorageAccess webStorageAccessForRoute(WebConsoleRouteHandler route)
         case WebConsoleRouteHandler::ProjectLinks:
         case WebConsoleRouteHandler::Pending:
         case WebConsoleRouteHandler::ArchivedMessages:
+        case WebConsoleRouteHandler::SearchSources:
         case WebConsoleRouteHandler::SftpUpload:
         case WebConsoleRouteHandler::QrFile:
         case WebConsoleRouteHandler::FileRead:
@@ -726,6 +728,7 @@ WebStorageAccess webStorageAccessForRoute(WebConsoleRouteHandler route)
         case WebConsoleRouteHandler::SshForget:
         case WebConsoleRouteHandler::SftpDownload:
         case WebConsoleRouteHandler::FileSave:
+        case WebConsoleRouteHandler::FileCopy:
         case WebConsoleRouteHandler::FileRename:
         case WebConsoleRouteHandler::FileDelete:
         case WebConsoleRouteHandler::FileUploadComplete:
@@ -1608,9 +1611,9 @@ String loginPage(const String& error, const bool reconnectReturn)
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>CardMind Login</title><style>"
-        ":root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;font:15px system-ui;background:radial-gradient(circle at 50% 0,#143550,#050b12 38rem);color:#f3f7fb;display:grid;place-items:center;min-height:100vh;padding:18px}"
-        ".card{width:min(420px,100%);background:linear-gradient(145deg,#101e2d,#0a1521);border:1px solid #294158;padding:26px;border-radius:20px;box-shadow:0 24px 80px #0009}.brand{display:flex;align-items:center;gap:12px;margin-bottom:26px}.mark{width:44px;height:44px;display:grid;place-items:center;border:1px solid #65f2cc66;border-radius:14px;background:#15343d;color:#65f2cc;font-weight:900}.brand b{letter-spacing:.12em}.badge{margin-left:auto;padding:6px 9px;border:1px solid #294158;border-radius:999px;color:#91a9be;font-size:11px}"
-        "h1{font-size:24px;margin:0 0 7px}p{color:#9eb1c4;line-height:1.5;margin:0 0 18px}label{display:block;color:#c8d5e2;font-weight:700;font-size:12px}input,button{box-sizing:border-box;width:100%;padding:12px;margin-top:8px;border-radius:10px;font:inherit}input{background:#07111c;color:#fff;border:1px solid #39536e;outline:none}input:focus{border-color:#65f2cc;box-shadow:0 0 0 3px #65f2cc18}button{border:0;background:#65f2cc;color:#052019;font-weight:850;cursor:pointer;margin-top:14px}.hint{margin:17px 0 0;padding-top:15px;border-top:1px solid #203247;color:#8197aa;font-size:12px}.error{padding:10px;border:1px solid #713544;border-radius:10px;background:#351722;color:#ffc6ce}</style></head><body><form class='card' method='post' action='/login'>"
+        ":root{color-scheme:light;--canvas:#aaa49a;--paper:#ded8ce;--text:#242622;--muted:#59564f;--line:#746f66;--signal:#c77d24;--select:#e6c89c;--danger:#922f27;--danger-bg:#f0d2ca;--instrument:#242724;--instrument-text:#f3eee4}*{box-sizing:border-box}body{margin:0;font:15px/1.45 Arial,Helvetica,sans-serif;background:var(--canvas);color:var(--text);display:grid;place-items:center;min-height:100vh;padding:18px}"
+        ".card{width:min(420px,100%);background:var(--paper);border:1px solid var(--line);padding:26px;border-radius:2px}.brand{display:flex;align-items:center;gap:12px;margin-bottom:26px;padding-bottom:16px;border-bottom:1px solid var(--line)}.mark{width:44px;height:44px;display:grid;place-items:center;border:1px solid var(--signal);border-radius:2px;background:var(--instrument);color:#e2a34f;font-weight:800}.brand b{letter-spacing:.1em}.badge{margin-left:auto;padding:6px 9px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:11px}"
+        "h1{font-size:24px;font-weight:500;margin:0 0 7px}p{color:var(--muted);line-height:1.5;margin:0 0 18px}label{display:block;color:var(--text);font-weight:600;font-size:12px}input,button{box-sizing:border-box;width:100%;min-height:44px;padding:10px 12px;margin-top:8px;border-radius:2px;font:inherit}input{background:var(--paper);color:var(--text);border:1px solid var(--line);outline:none}input:focus{border-color:#a85f12;outline:2px solid #a85f12;outline-offset:2px}button{border:1px solid var(--signal);background:var(--signal);color:#1f211f;font-weight:700;cursor:pointer;margin-top:14px}button:focus-visible{outline:2px solid #a85f12;outline-offset:2px}.hint{margin:17px 0 0;padding-top:15px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}.error{padding:10px;border-left:3px solid var(--danger);background:var(--danger-bg);color:var(--danger)}</style></head><body><form class='card' method='post' action='/login'>"
         "<div class='brand'><div class='mark'>CM</div><div><b>CARDMIND</b><br><small>Device console</small></div><span class='badge'>LOCAL</span></div><h1>Connect to CardMind</h1><p>Use the installation password displayed on your Cardputer.</p>";
     if (!error.isEmpty()) {
         page += "<p class='error'>" + htmlEscape(error) + "</p>";
@@ -4442,6 +4445,58 @@ void handleArchivedMessages()
     sendWebJson(server, 200, document);
 }
 
+void handleSearchSources()
+{
+    if (!sessionIsActive()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const std::uint32_t startedAt = millis();
+    const WebSearchSourcesResult result = loadLatestWebSearchSources();
+    recordWebSdRead(millis() - startedAt);
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    document["source_kind"] = "latest_device_cache";
+    document["query"] = result.query;
+    JsonArray sources = document["sources"].to<JsonArray>();
+    for (const WebSearchSource& source : result.sources) {
+        JsonObject item = sources.add<JsonObject>();
+        item["title"] = source.title;
+        item["url"] = source.url;
+        item["snippet"] = source.snippet;
+    }
+    sendWebJson(server, 200, document);
+}
+
+void handleWifiScan()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    beginWebConsoleForegroundWork();
+    const WifiScanResult result = scanWifiNetworks();
+    endWebConsoleForegroundWork();
+    if (!result.success) {
+        sendWebJsonError(server, 503, result.error);
+        return;
+    }
+    JsonDocument document;
+    document["ok"] = true;
+    JsonArray networks = document["networks"].to<JsonArray>();
+    for (const WifiNetwork& network : result.networks) {
+        JsonObject item = networks.add<JsonObject>();
+        item["ssid"] = network.ssid;
+        item["rssi"] = network.rssi;
+        item["secured"] = network.secured;
+    }
+    sendWebJson(server, 200, document);
+}
+
 void handleModels()
 {
     if (!sessionIsActive()) {
@@ -5578,6 +5633,34 @@ void handleFileRename()
     sendWebJson(server, 200, document);
 }
 
+void handleFileCopy()
+{
+    if (!requestHasValidCsrf()) {
+        sendWebJsonError(server, 401, "Authentication required");
+        return;
+    }
+    const String destination = server.arg("new_name");
+    const std::uint32_t startedAt = millis();
+    beginWebConsoleForegroundWork();
+    OperationResult result = copyWorkspaceFile(server.arg("name"), destination);
+    endWebConsoleForegroundWork();
+    recordWebSdWrite(millis() - startedAt);
+    if (!result.success) {
+        sendWebJsonError(server, 400, result.error);
+        return;
+    }
+    result = refreshFiles();
+    if (!result.success) {
+        sendWebJsonError(server, 500, result.error);
+        return;
+    }
+    consoleStatus = "File copied";
+    JsonDocument document;
+    document["ok"] = true;
+    document["name"] = destination;
+    sendWebJson(server, 200, document);
+}
+
 void handleFileDelete()
 {
     if (!requestHasValidCsrf()) {
@@ -5984,7 +6067,9 @@ WebConsoleResult runWebConsole(const Settings& settings,
             handleDeleteChat,
             handleClearChat,
             handleArchivedMessages,
+            handleSearchSources,
             handleSettings,
+            handleWifiScan,
             handleApiProfileCreate,
             handleApiProfileUpdate,
             handleApiProfileDefault,
@@ -6017,6 +6102,7 @@ WebConsoleResult runWebConsole(const Settings& settings,
             handleQrClose,
             handleFileRead,
             handleFileSave,
+            handleFileCopy,
             handleFileRename,
             handleFileDelete,
             handleFileDownload,
