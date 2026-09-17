@@ -23,6 +23,58 @@ constexpr const char* kTemporaryFirmwarePath = "/assistant/update.bin.tmp";
 constexpr const char* kFirmwarePath = "/assistant/update.bin";
 constexpr std::uint32_t kMaximumFirmwareBytes = 0x3f0000U;
 constexpr std::uint32_t kTransferTimeoutMs = 30000U;
+constexpr std::size_t kMaximumReleaseResponseBytes = 32768;
+
+class ReleaseJsonReader {
+public:
+    ReleaseJsonReader(NetworkClient& client, std::size_t bytes,
+                      std::uint32_t startedAt)
+        : client_(client), remaining_(bytes), startedAt_(startedAt), timedOut_(false)
+    {
+    }
+
+    int read()
+    {
+        char value = 0;
+        return readBytes(&value, 1) == 1
+            ? static_cast<unsigned char>(value) : -1;
+    }
+
+    std::size_t readBytes(char* output, std::size_t maximumBytes)
+    {
+        std::size_t copied = 0;
+        while (copied < maximumBytes && remaining_ > 0) {
+            if (millis() - startedAt_ >= kTransferTimeoutMs) {
+                timedOut_ = true;
+                break;
+            }
+            const int available = client_.available();
+            if (available <= 0) {
+                if (!client_.connected()) break;
+                delay(1);
+                continue;
+            }
+            const std::size_t requested = std::min<std::size_t>(
+                static_cast<std::size_t>(available),
+                std::min(maximumBytes - copied, remaining_));
+            const int received = client_.read(
+                reinterpret_cast<std::uint8_t*>(output + copied), requested);
+            if (received <= 0) break;
+            copied += static_cast<std::size_t>(received);
+            remaining_ -= static_cast<std::size_t>(received);
+        }
+        return copied;
+    }
+
+    bool complete() const { return remaining_ == 0; }
+    bool timedOut() const { return timedOut_; }
+
+private:
+    NetworkClient& client_;
+    std::size_t remaining_;
+    std::uint32_t startedAt_;
+    bool timedOut_;
+};
 
 const char kGithubRoots[] PROGMEM = R"CERT(-----BEGIN CERTIFICATE-----
 MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
@@ -208,15 +260,18 @@ FirmwareUpdateInfo checkLatestFirmwareUpdate(const String& currentVersion)
     client.setCACert(kGithubRoots);
     client.setHandshakeTimeout(20);
     HTTPClient http;
+    http.useHTTP10(true);
     http.setReuse(false);
     http.setTimeout(30000);
+    http.setUserAgent("CardMind-Firmware-Updater");
     if (!http.begin(client, kLatestReleaseUrl)) {
         return {false, false, "", "", "", 0, pythonRecoveryReady(),
                 "Failed to initialize the GitHub release request"};
     }
     http.addHeader("Accept", "application/vnd.github+json");
     http.addHeader("X-GitHub-Api-Version", "2022-11-28");
-    http.addHeader("User-Agent", "CardMind-Firmware-Updater");
+    const char* responseHeaders[] = {"Transfer-Encoding", "Content-Encoding"};
+    http.collectHeaders(responseHeaders, 2);
     const int status = http.GET();
     if (status != HTTP_CODE_OK) {
         char tlsError[160] = {};
@@ -229,21 +284,52 @@ FirmwareUpdateInfo checkLatestFirmwareUpdate(const String& currentVersion)
                                  (tlsError[0] == '\0' ? "" : String("; TLS: ") + tlsError)};
     }
     const int declaredBytes = http.getSize();
-    if (declaredBytes > 32768) {
+    if (declaredBytes <= 0 ||
+        static_cast<std::size_t>(declaredBytes) > kMaximumReleaseResponseBytes) {
         http.end();
         return {false, false, "", "", "", 0, pythonRecoveryReady(),
-                "GitHub latest release response exceeded 32768 bytes"};
+                "GitHub latest release requires Content-Length between 1 and 32768 bytes"};
     }
-    const String responseBody = http.getString();
-    http.end();
-    if (responseBody.isEmpty() || responseBody.length() > 32768) {
+    const String transferEncoding = http.header("Transfer-Encoding");
+    const String contentEncoding = http.header("Content-Encoding");
+    if ((!transferEncoding.isEmpty() &&
+         !transferEncoding.equalsIgnoreCase("identity")) ||
+        (!contentEncoding.isEmpty() &&
+         !contentEncoding.equalsIgnoreCase("identity"))) {
+        http.end();
         return {false, false, "", "", "", 0, pythonRecoveryReady(),
-                responseBody.isEmpty()
-                    ? "GitHub latest release response body was empty"
-                    : "GitHub latest release response exceeded 32768 bytes"};
+                "GitHub latest release returned unsupported response encoding"};
     }
+    JsonDocument filter;
+    filter["tag_name"] = true;
+    filter["assets"][0]["name"] = true;
+    filter["assets"][0]["browser_download_url"] = true;
+    filter["assets"][0]["size"] = true;
+    filter["assets"][0]["digest"] = true;
+    if (filter.overflowed()) {
+        http.end();
+        return {false, false, "", "", "", 0, pythonRecoveryReady(),
+                "Failed to allocate the GitHub release JSON filter"};
+    }
+    ReleaseJsonReader reader(http.getStream(),
+                             static_cast<std::size_t>(declaredBytes), millis());
     JsonDocument release;
-    const DeserializationError error = deserializeJson(release, responseBody);
+    const DeserializationError error = deserializeJson(
+        release, reader, DeserializationOption::Filter(filter));
+    if (!error) {
+        char discarded[128] = {};
+        while (!reader.complete() && reader.readBytes(discarded, sizeof(discarded)) > 0) {}
+    }
+    http.end();
+    if (reader.timedOut()) {
+        return {false, false, "", "", "", 0, pythonRecoveryReady(),
+                "GitHub latest release body exceeded the 30000 ms deadline"};
+    }
+    if (!reader.complete() &&
+        (!error || error == DeserializationError::IncompleteInput)) {
+        return {false, false, "", "", "", 0, pythonRecoveryReady(),
+                "GitHub latest release body ended before its declared Content-Length"};
+    }
     if (error) {
         return {false, false, "", "", "", 0, pythonRecoveryReady(),
                 String("GitHub latest release JSON parsing failed: ") + error.c_str()};

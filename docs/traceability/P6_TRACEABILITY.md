@@ -79,7 +79,7 @@ Status values are `pending`, `in_progress`, and `completed`.
 | P6-05A | Bring the existing basic setup/provisioning page and save/error responses to the accepted shared visual style | All Wi-Fi/API/STT/search/TTS fields and actions remain usable at desktop/tablet/phone sizes; actual-source form/state/interaction evidence and unchanged write-only secret/validation/save/restart owners; flash-resident setup without SD or external assets; pinned build/resources under the 2026-09-17 proportional-evidence decision | completed |
 | P6-06 | Bring the 240x135 Device UI to the Architect-reviewed replacement direction through existing screen/input owners | Every required Device capability reachable; coherent navigation and compact states; provider/SD/optional-API degradation; no Web-only requirement leakage; device resources and latency | completed |
 | P6-07 | Reconcile cross-surface behavior and run focused integration acceptance | Names/state/permissions consistent across Device and Web; profiles, sessions, presence, reconnect and SSH interoperate; inherited Phase 5 behavior remains regression-free; forbidden effects absent; exact-owned cleanup | completed |
-| P6-08 | Establish the stable Wi-Fi release candidate, complete full firmware acceptance and close Phase 6 | Full E2E of all implemented functionality through P6 plus host/Device/Web regression; exact build options and binary hash; flash/RAM/heap/largest-block/stack/latency; screenshots; soak; cleanup including quarantined P2-21 debt; independent reviews; green CI; reviewed phase merge to `develop`, followed by Architect-owned `main` release under the 2026-09-15 user mandate | pending |
+| P6-08 | Establish the stable Wi-Fi release candidate, complete full firmware acceptance and close Phase 6 | Full E2E of all implemented functionality through P6 plus host/Device/Web regression; exact build options and binary hash; flash/RAM/heap/largest-block/stack/latency; screenshots; soak; cleanup including quarantined P2-21 debt; independent reviews; green CI; reviewed phase merge to `develop`, followed by Architect-owned `main` release under the 2026-09-15 user mandate | in_progress |
 
 P6-05B was removed from this release by the user's explicit 2026-09-16 scope
 decision. This is cancellation, not completion or runtime verification. Phase 5
@@ -6703,3 +6703,44 @@ Reopened work started 03:52:30 UTC; final required runtime proof completed
 06:58:12 UTC. Material evidence-driven pivots above are retained; no mandatory
 60-minute single-hypothesis stall was recorded. P6-07 is completed; P6-08 stays
 pending until the exact official correction commit and remote blobs are verified.
+
+### FIX-OTA-01 verified correction and Architect closure GO — 2026-09-17 07:49 UTC
+
+Architect personally reviewed the complete ota_update.cpp diff, both existing Device
+callers, pinned HTTPClient/ArduinoJson semantics, independent design/code GO and raw
+build/device evidence. GO for the bounded release-metadata correction. P6-08 remains
+the sole in_progress phase row; this closes only the explicit inherited OTA fix.
+
+The metadata request now parses the existing positive-length <=32768-byte GitHub
+response directly through a deadline/length-bounded NetworkClient reader and the
+ArduinoJson filter. It retains tag_name plus every asset's name, URL, size and digest,
+checks the complete declared body, and fails explicitly for timeout, short body,
+unsupported encoding, allocation or JSON failure. HTTP/1.0 and the native User-Agent
+setter match pinned core 3.2.1. TLS roots, endpoint, version/asset/prefix/size/SHA-256
+validation, download/install and cleanup are unchanged. No SD staging of metadata,
+new dependency, production test endpoint or retained test change was introduced.
+The failed earlier empty-body run stays failed; its exact allocator cause was not
+measured. This removes the observed whole-body reserve/error-loss boundary.
+
+Pinned build/options passed with app 3,665,808 bytes, application-partition reserve
+528,496 bytes, text 2,244,340, rodata 1,319,936, static DRAM 65,980 and IRAM 77,567.
+App SHA-256 B38A3C4E11A9E8E78D178E1C389C1D58075A88B7CA344F6C371ED8A4F5397A07;
+ELF 9E7AEC4E449E7C496876A0B971B9D191340051E87E7D871EA6A2C11925EAC0A0;
+merged 8C33599E35DB9AD3FA73A510E833435D9620089C402BEA0CE9560B8F44B9BF35;
+options 20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998.
+Exact FQBN/core3.2.1 and pinned uploader4.9.0 were checked before one upload;
+flash hash verification and vendor RTS reset passed. This acceptance build also
+contains the already frozen P6-08 version/budget WIP, excluded from this fix commit.
+
+Unchanged OTACHECK and OTADOWNLOADTEST passed on the physical Cardputer at
+07:46:32-07:47:47 UTC: latest v1.12.1, 2,663,504 bytes, not newer than this candidate,
+Python recovery available; real download and SHA-256 verification succeeded and
+removeDownloadedFirmware succeeded. No install/downgrade action occurred. Normal
+heap/largest were 99,612/36,852 before and 99,228/33,780 after; lifetime minimum
+25,392, main-stack margin 6,124 bytes after. Original history17/chats3, SD/files,
+configuration and Wi-Fi readiness remained intact. Existing cleanup primitives are
+unchanged. Raw artifacts: architect-fix-ota01-build.log, -metrics.json, -upload.log,
+and -device.log. Investigation started07:09; this is verified closure at07:49,
+with bounded independent-review/other-device-owner intervals rather than a repeated
+single-hypothesis loop. Publication write set is exactly ota_update.cpp and this
+compact trace record; independent P6-08 acceptance, CI, merge and release remain open.
