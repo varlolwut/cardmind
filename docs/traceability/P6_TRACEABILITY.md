@@ -76,7 +76,7 @@ Status values are `pending`, `in_progress`, and `completed`.
 | P6-03 | Add configurable authentication lifetime and independent multi-tab browser presence | Four exact lifetime choices; expiry and until-reboot semantics; aggregate visible-tab heartbeat; while WebServer is available, waiting within 30 seconds after the last heartbeat without auth loss; multi-tab correctness; blocking foreground request shown as Busy/unobservable and original timestamp evaluated at return without renewal; final-image startup rejection before login plus stale-token rejection through the shared clear owner | completed |
 | P6-04 | Preserve active project, active view and drafts through the existing Web reconnect path | Same-address reconnect after transient disconnect and Python handoff; active project/view/draft restored; stale or missing state fails explicitly; no exact-scroll claim | completed |
 | P6-05 | Bring the Web Console to the Architect-reviewed replacement direction, add explicit discovered-network Wi-Fi selection through the smallest reviewed existing-owner backend mapping, and finish desktop/tablet/phone polish through the existing asset boundary | Every required Web capability reachable; explicit Wi-Fi scan/select/hidden-manual/connect states and other degraded states; stable-ID interaction checks; 1280, 900 and 390 px screenshots without overlap; soak and resource evidence | completed |
-| P6-05A | Bring the existing basic setup/provisioning page and save/error responses to the accepted shared visual style | All Wi-Fi/API/STT/search/TTS fields and actions remain usable at desktop/tablet/phone sizes; write-only secrets and validation/save/restart semantics preserved; flash-resident setup works without SD or external assets; focused runtime and resource evidence | pending |
+| P6-05A | Bring the existing basic setup/provisioning page and save/error responses to the accepted shared visual style | All Wi-Fi/API/STT/search/TTS fields and actions remain usable at desktop/tablet/phone sizes; actual-source form/state/interaction evidence and unchanged write-only secret/validation/save/restart owners; flash-resident setup without SD or external assets; pinned build/resources under the 2026-09-17 proportional-evidence decision | completed |
 | P6-05B | Bring the existing manual Python login/workspace/return pages to the accepted shared visual style and deliver them through the existing VFS image | Script list/editor/output/actions, splitters and responsive layout remain usable; login and same-address CardMind return preserved; no execution/authentication changes; exact updated VFS delivery plus focused real-browser/runtime evidence | pending |
 | P6-06 | Bring the 240x135 Device UI to the Architect-reviewed replacement direction through existing screen/input owners, including complete Python-source navigation and return to the originating Chat | Every required Device capability reachable; coherent navigation and compact states; Python source review returns to its originating Chat without changing approval state; provider/SD/optional-API degradation; no Web-only requirement leakage; device resources and latency | pending |
 | P6-07 | Reconcile cross-surface behavior and run focused integration acceptance | Names/state/permissions consistent across Device and Web; profiles, sessions, presence, reconnect, SSH and Python full-source review/return boundaries interoperate; forbidden effects absent; exact-owned cleanup | pending |
@@ -5356,3 +5356,345 @@ prepare its isolated row-only commit from the freshly verified remote parent,
 publish by native fast-forward Git and verify exact SHA/blobs/identity through
 GitHub MCP. This GO is not publication evidence. P6-05A/P6-06/FIX work, disposable
 scripts/artifacts and the final P6-08 release/CI/resource-debt gates remain excluded.
+
+### P6-05A pre-edit contract and proof freeze
+
+P6-05A active work began at `2026-09-16T11:30:02+03:00`. The root-cause
+hypothesis is that the existing flash-resident setup page already owns every required
+field, selection, validation, write-only secret, save/warning/error and delayed
+restart behavior; only its inline presentation remains in the rejected dark
+blue/teal style. Read-only inventory is expected to confirm that one bounded markup
+and CSS correction in the existing page owner can adopt the accepted graphite,
+warm-gray and amber direction without changing any route, request, persistence or
+restart semantics.
+
+The inventory confirms two presentation producers in the same production file:
+`firmware/CardputerAssistant/src/provisioning.cpp::setupPage()` owns initial and
+error markup, while `saveSubmittedSettings()` owns verified-success and
+cleanup-warning markup. They are served by the existing exact bindings
+`webServer.on("/", HTTP_GET, sendSetupPage)`,
+`webServer.on("/save", HTTP_POST, saveSubmittedSettings)` and
+`webServer.onNotFound(sendSetupPage)`. Startup enters the same non-returning portal
+when settings are incomplete and from the existing AI, Voice, Web Console and
+Device settings actions. The page is entirely flash-resident and does not read SD
+or an external asset. Existing Wi-Fi scan options and hidden/manual entry are
+escaped and retain IDs/names `ssid` and `ssid_manual`. The complete unchanged form
+contract is `wifi_password`, `api_key`, `api_base_url`, `model`,
+`stt_api_key`, `stt_base_url`, `stt_model`, `search_api_key`,
+`search_base_url`, `tts_api_key`, `tts_base_url`, `tts_model`, `tts_voice`
+and `tts_auto`, plus the sole `Save and restart` submit.
+
+All five secret inputs remain empty password controls; blank values keep existing
+secrets under the current save owner and no saved secret is rendered. Existing
+length/type attributes, HTML escaping, hidden-SSID show/required behavior, URL
+normalization, provider-authority save ordering, NVS validation/verification,
+cleanup-warning classification, explicit error re-render, verified-success response,
+five-second delayed restart and serial audit line remain unchanged. The only success
+variants remain `Saved and verified` and `Saved with a cleanup warning`; the
+warning message remains escaped.
+
+The smallest design reuses the accepted P6-01 palette and component grammar:
+graphite instrument header, warm-gray canvas/paper, restrained amber signal,
+square two-pixel controls, clear section separators, 14-20 px hierarchy, visible
+focus, 44 px mobile controls and single-column mobile flow. The existing form is
+grouped only visually into Network/model, Voice input, Web search and Speech output.
+Error, success and cleanup-warning responses use the same self-contained shell and
+typed notice treatment. No navigation, field, route or application behavior is
+added.
+
+Frozen proof matrix:
+
+1. Source/host checks compare the exact pre-edit and post-edit form ID/name set,
+   method/action, all three route-handler bindings, input types/limits/autocomplete,
+   required `api_base_url` and `model`, every behavior-affecting current/default
+   `value`, network `selected`, `tts_auto` `checked`, write-only empty secret values,
+   escaping call sites, Wi-Fi manual-entry script, result branches, restart delay
+   and absence of external assets or SD access.
+2. The existing strict host suite must pass without a retained-test rewrite.
+3. A disposable offline renderer must derive actual production markup from both
+   `setupPage()` and `saveSubmittedSettings()`, then render initial,
+   validation-error, verified-success and cleanup-warning states.
+   Inspect 1280x720, 900x720, 390x780, 320x568 and short 720x450 screenshots at
+   100 percent. Every required field/action must remain reachable, readable and free
+   of horizontal overflow; error/warning/success hierarchy, focus and the hidden
+   SSID show/required transition are observed separately. Browser page errors and
+   external requests must remain zero.
+4. Firmware compilation, live portal save/restart behavior, flash/heap/stack and
+   latency remain mandatory later gates. Offline screenshots and source checks make
+   no runtime or resource claim.
+
+The exact production write set is
+`firmware/CardputerAssistant/src/provisioning.cpp` plus this trace. `ROADMAP.md`
+contains only the already recorded ordering decision. Retained tests change only if
+a concrete required behavior cannot be proved proportionally otherwise. Frozen
+P6-04 files and proof pair, the main Web Console, generated Web asset, Python/VFS,
+Device UI, routes, storage, provider profiles, Wi-Fi scanning, authentication,
+secrets and runtime state are non-goals. No production edit begins before one
+bounded independent pre-edit review returns `GO`.
+
+The independent pre-edit reviewer returned `STOP` before any production edit on
+exactly two freeze defects: the inventory named only `setupPage()` although
+`saveSubmittedSettings()` produces the success/warning markup, and the proof did
+not explicitly bind route ownership, required/value/selected/checked semantics or
+the success/warning renders to their production producer. The corrected inventory
+and proof above preserve the same file and behavior boundary. Production remains
+unchanged while the same reviewer performs its one permitted blocker verification.
+
+By `2026-09-16T11:49:14+03:00` the same independent reviewer had performed that
+single blocker-verification pass and returned explicit `P6-05A PRE-EDIT GO`.
+Both corrected ownership and proof boundaries remain frozen; the exact two-file
+write set is now authorized for implementation.
+
+### P6-05A host and offline-browser evidence
+
+By `2026-09-16T12:13:21+03:00` the reviewed presentation boundary was implemented
+only in `firmware/CardputerAssistant/src/provisioning.cpp`; routes, storage,
+validation, secret handling, restart ownership and the frozen P6-04 files were not
+edited. The working-tree source SHA-256 is
+`149114FF551ACAC6B6E94E8A73F04CEC7B9C4F9B3E6FA41EA1CC859D62D25F69`;
+the production diff is 90 insertions and 28 deletions. One shared flash-resident
+style now serves initial/error markup from `setupPage()` and verified-success/
+cleanup-warning markup from `saveSubmittedSettings()`.
+
+The pinned M5Cardputer, M5Unified, M5GFX and ArduinoJson versions passed their exact
+pre-host gate. The scoped diff check passed. The first CI-equivalent host invocation
+did not compile because its PowerShell/WSL transport delivered an empty temporary
+ELF name; an exact collision-checked literal temporary path corrected only that
+harness boundary, was removed by its trap and produced `host_tests: PASS` without
+production or oracle change.
+
+A disposable source-derived renderer read the actual current and Git-baseline C++
+string expressions from both presentation producers and ran installed local Chrome
+offline at 100 percent scale. Its accepted final run reported 20/20 state/viewport
+observations, four derived HTML files and 26 PNGs (813,405 PNG bytes) under
+`C:/Users/84vs1/.codex/visualizations/2026/09/02/01a06386-22d5-7833-bb82-40a4f499f52e/p6-05a-provisioning-evidence/`.
+Initial, validation-error, verified-success and cleanup-warning states covered
+1280x720, 900x720, 390x780, 320x568 and 720x450, with full-page setup and a separate
+manual-SSID observation. The rendered pre/post form contract matched exactly:
+method/action, ordered controls, names, types, limits, autocomplete, required,
+values, selected option, checked state, script and sole submit. All three route
+bindings were unchanged, all five password controls rendered empty, the manual SSID
+transition changed both visibility and `required`, keyboard focus had a visible
+three-pixel outline, controls and the checkbox label met the 44-pixel target, and
+every field/action was horizontally reachable after scrolling.
+
+All 20 observations had zero page errors, external requests and horizontal overflow;
+derived markup had no external asset. The primary agent personally inspected the
+full 1280, 390 and 320 setup renders, 900 and short 720 viewport renders, and the
+error, success, warning and manual-network variants. Graphite/warm-gray/amber
+hierarchy, square controls, separators, wrapping and notice distinction were
+coherent without contact, clipping, gradients, shadows or ornamental effects. The
+exact temporary workspace preview copy was deleted and verified absent; the
+disposable renderer remains outside the repository only until Architect completes
+its requested artifact inspection.
+
+A different fresh read-only post-implementation reviewer inspected the actual diff
+against the frozen ownership, behavior, security and presentation contract and
+returned explicit `P6-05A CODE REVIEW GO`. At this offline checkpoint P6-05A
+remained `in_progress`: exact firmware compilation and flash/global-RAM evidence,
+focused live portal render and ordinary save/restart, runtime heap/largest-block/
+stack/latency, final renderer cleanup and Architect closure review remained
+mandatory. No COM, CardMind HTTP, Device action or P6-04 proof was performed, and no
+runtime/resource claim followed from this evidence.
+
+### P6-05A offline visual and compile-only verdicts
+
+At `2026-09-16T12:18:35+03:00` Architect reported personal inspection of all 26
+retained PNGs, the actual `provisioning.cpp` diff and renderer provenance for exact
+source SHA-256
+`149114FF551ACAC6B6E94E8A73F04CEC7B9C4F9B3E6FA41EA1CC859D62D25F69`,
+and returned explicit `OFFLINE VISUAL GO`. Architect separately ran Chrome with
+`isMobile: true`, `hasTouch: true` and DPR 1 at 320x568 and 390x780 against the
+exact derived initial and warning HTML. Those observations had CSS1Compat, exact
+viewport widths, scale 1, coarse pointer/touch, zero errors, network requests and
+overflow; Architect personally inspected all six top/bottom/warning screenshots.
+They are retained with `observations.json` under
+`C:/Users/84vs1/.codex/visualizations/2026/09/15/01a0a682-5410-7ed1-8f67-c2ab499bf055/prototype-audit/p605a-personal-mobile/`.
+Native single-line placeholder text clips its last few glyphs at 320 pixels, while
+its label, meaning and control remain readable and usable; Architect classified it
+as a non-blocking presentation residual.
+
+Before the authorized compile-only action, the existing P6-04 build metadata was
+preserved from the canonical record and matched the build directory: 3,632,994
+flash bytes, 65,908 global bytes, 3,633,184-byte application binary SHA-256
+`636C7D2F2F80922412AE9AC6D0D82E51B300DA94C4CAE6DDE35364CBEDC08D72`,
+and exact 1,736-byte build-options SHA-256
+`20BA11EE73700A2D4A591C7C8DA0516C89E807BF0E66D8257ED88E8CC834C998`.
+The one Architect-authorized pinned compile of the P6-05A source passed with
+3,636,506 reported sketch bytes (+3,512) and the CLI's generic 21-percent figure,
+plus unchanged 65,908 static global bytes (20%) and 261,772 reported bytes left for
+local variables. The CLI percentage is not CardMind application-partition
+occupancy: the authoritative `partitions.csv` app size is 0x400000 (4,194,304)
+bytes. The 3,636,688-byte application binary (+3,504) therefore occupies
+86.70546 percent and leaves 557,616 bytes (about 544.55 KiB), with SHA-256
+`FF046C2B1EF5BEB4E4372540848028653BB714D7990E416A194221FD1C7B0EE6`;
+the ELF is 45,927,580 bytes with SHA-256
+`A719E97237ACD540B1F95FD0289EF0BE5DBF63E466773585A339F959B01CA965`.
+Generated `build.options.json` retained the exact required FQBN and the two
+references resolved to one unique M5Stack ESP32 3.2.1 directory, with no 3.3.9 or
+other core; its size and SHA remained exact.
+
+Unchanged static global allocation is compile compatibility evidence only; runtime
+heap, largest block and stack remain unmeasured and are not inferred from it.
+
+The disposable renderer was then deleted and verified absent. Its retained evidence
+directory contains exactly 26 PNGs, four HTML files and one `observations.json`,
+with no harness or unexpected file. No upload, COM, CardMind HTTP, Device or P6-04
+action occurred. P6-05A remains incomplete pending the focused live portal render
+and ordinary save/restart plus heap/largest-block/stack/latency and
+credential/Wi-Fi invariants, followed by Architect closure review. The offline
+actual-markup proof and unchanged producer review already cover initial, error,
+verified-success and cleanup-warning presentation, classification and escaping;
+this row does not require storage fault injection, an induced cleanup failure, a
+new harness or repetition of P6-02 persistence primitives.
+
+### P6-05A local correction activation — 2026-09-16
+
+At 2026-09-16T19:57:00Z Architect returned P6-05 to pending its remaining
+Browser/Device acceptance and activated P6-05A for independent local work while
+FIX-PERF-04 retains the shared-device slot. Existing accepted source/host/visual
+facts remain valid; no repeat inventory or whole-page test rewrite is requested.
+Architect observed that provisioning.cpp renders ssid_manual with only a
+placeholder, without its own associated visible label. Add that label within
+the existing manual-network show/required behavior and inspect the changed
+actual-source manual form at narrow and desktop widths. Preserve all field IDs,
+names, values, escaping, secrets, routes and save/restart behavior. This is a
+bounded correction within the already reviewed presentation owner; provisioning.cpp
+is the sole production write set. The phase developer resumes implementation and
+local visual evidence autonomously; Architect retains COM8/HTTP/build ownership
+until explicit transfer. No P6 or performance completion is claimed.
+
+### P6-05A associated-label correction and corrected local proof — 2026-09-16
+
+The bounded local correction wrapped the existing `ssid_manual` input and its new
+visible `Hidden network name (SSID)` label in `ssid-manual-field`. The existing
+update function now hides that wrapper for a discovered SSID and leaves the input's
+`required` transition unchanged. Field IDs, names, limits, value escaping, routes,
+secret handling and save/restart behavior did not change. The corrected
+`firmware/CardputerAssistant/src/provisioning.cpp` SHA-256 is
+`82042A62F032CC382B2E3BD28FDD4302686A13DA724F84A88FFE305359DF76FF`.
+
+The first focused 390x780 screenshot attempt is retained as failed evidence. The
+Windows Chrome command requested a 390-pixel bitmap but laid the page out at
+`innerWidth=500`, `clientWidth=485` and `scrollWidth=485`, then cropped the
+result to 390 pixels. That invalidated its visual no-overflow claim: the select
+arrow and card right edge were absent and notes were clipped. The rejected manual
+and discovered bitmap SHA-256 values were respectively
+`C15A19EAF56D2A6BC3E0CFB7FCC5C87447DB3CD939C997397439F8C529F798B1`
+and
+`F346A0043D452FA27AD4096DF2435B52B59A8AA7BEF97D4695C0F8E6487BAB2C`.
+Those files were superseded, but these hashes preserve the failed observation.
+
+The corrected disposable proof used direct Chrome device-metric emulation at
+390x780, DPR 1, mobile/touch mode. It reconstructed `kSetupPageStyle` from the
+current source, matched that literal CSS to the preview after whitespace-only
+normalization, and required the exact production wrapper, label, input and update
+fragments. Both manual and discovered states reported standards mode,
+`innerWidth=clientWidth=scrollWidth=390`, card bounds 12..378 and width 366,
+coarse pointer and five touch points. Manual state kept the wrapper visible and
+the populated input required; discovered state hid the wrapper and removed
+`required`. The primary agent personally inspected both corrected narrow images:
+the complete right margin and select arrow were visible, notes wrapped inside the
+card and no contact, clipping or horizontal overflow remained. The unchanged
+1280x720 manual and discovered renders remained visually coherent.
+
+Evidence is under
+`C:\Users\84vs1\.codex\visualizations\2026\09\02\01a06386-22d5-7833-bb82-40a4f499f52e\p6-05a-manual-label-correction\`.
+`observations.json` SHA-256 is
+`C331E1BF02CBF2F76F9B56BB5C4559FC83698E9EE27B1F96FCDA75039208F96D`;
+corrected manual/discovered narrow PNG SHA-256 values are
+`CA69FEE7417DA4C6AC7C5D764507E0448C153E2FE26B9C40F5901ADECFF0A9A4`
+and
+`78B81D728493AC033F8513A0CF1E9F7DDEC241B52A2997DC3B58AF45FBC96B31`;
+desktop values are
+`2D12FA637450B7EB44A968252890E379BDE05BFC5E692D5C9FF448632A35280F`
+and
+`64D7CC33C6E8F948B6728024F00616730923CC3F784AC8FA59FAA3A126A59B57`.
+Temporary Chrome profiles, DOM dumps and the disposable capture script were
+deleted; the directory contains only the focused HTML, four PNGs and the measured
+observations.
+
+At `2026-09-16T20:27:52Z` Architect personally inspected the corrected manual and
+discovered narrow PNGs and returned GO for this bounded label visual correction;
+the earlier desktop label placement was already GO. P6-05A remains
+`in_progress`: focused live portal save/restart, runtime resources, latency and
+credential/Wi-Fi invariants plus closure review are still mandatory. No row
+completion, staging or commit is authorized by this local proof.
+
+### P6-05A live-entry constraint — 2026-09-16
+
+Read-only source inventory established that the installed firmware has no
+unattended, non-mutating entry into the provisioning portal. Startup calls
+`runProvisioningPortal()` only when `settingsAreComplete()` is false; that
+predicate requires the configured Wi-Fi SSID, a main API key of at least eight
+characters, an HTTPS API base URL and a model. Forcing that path would therefore
+require invalidating configuration that this proof must preserve.
+
+The other four call sites are physical Cardputer menu handlers: AI
+`API and services setup`, Voice `Configure voice APIs`, Web Console
+`Configure API and Wi-Fi` and Device `API and services setup`. No serial
+diagnostic command enters the portal. A menu entry copies the current settings
+without rewriting them, then disconnects the station and starts AP+STA mode; the
+test host would still need reachability through the setup AP. If the setup-AP
+password does not yet exist, entry also generates and persists that installation
+credential.
+
+Under the transferred slot's explicit constraints of no physical setup-AP switch,
+reprovisioning or credential/Wi-Fi mutation, no eligible live save/restart
+observation can start autonomously. At `2026-09-16T23:36:15+03:00` the phase
+task therefore released COM8/HTTP ownership without opening COM, HTTP, the portal,
+or changing Device state. The prepared one-run proof remains: exact round-trip of
+all non-secret values and SSID, all five secret fields empty, HTTP verified-success,
+the exact `settings_saved=yes nvs_verified=yes restart_delay_ms=5000` marker,
+no early reset, the delayed reboot, normal readiness and unchanged Wi-Fi/provider
+behavior. P6-05A remains `in_progress`; this is an external entry/reachability
+constraint, not runtime acceptance, completion or publication authority.
+
+### P6-05A proportional presentation acceptance decision — 2026-09-16 23:43 UTC
+
+Architect re-read the actual provisioning.cpp diff and current source SHA256
+82042A62F032CC382B2E3BD28FDD4302686A13DA724F84A88FFE305359DF76FF.
+The changes are shared CSS, layout/labels and the existing manual-input wrapper's
+visibility; routes, form names/types/values, secret handling, validation, writes
+and delayed restart are unchanged. The earlier actual-source visual/form-contract
+evidence and corrected manual-label interaction apply to these exact bytes.
+A bounded source advisor confirmed no existing unattended portal entry/abort;
+it found no specific retained live portal transcript and did not claim one.
+
+Architect decides that invalidating protected configuration or adding an entry
+diagnostic solely for this presentation delta would be disproportionate. ROADMAP
+and the P6-05A observation column now explicitly replace the additional live
+AP/save/restart gate with the accepted actual-source render/interaction contract,
+unchanged-owner review and pinned compile/resource evidence. The final release
+coverage must say that a live provisioning cycle was not executed. This reduction
+does not claim inherited behavior was newly exercised or remove other firmware
+E2E gates. P6-05A stays pending until P6-05 publication and its own closure review;
+no file edit, build, upload, mutation or commit follows merely from this decision.
+
+### P6-05A Architect closure GO — 2026-09-17 00:18:35 UTC
+
+Architect personally re-read the actual current 95-insertion/31-deletion diff
+against published parent `080e7b2b1e14e35eb35432c9f2c6499b6218e2da`.
+The exact `provisioning.cpp` source is Git blob
+`7512be4951a1e3618b5204004ec2723494c9d273` with SHA-256
+`82042A62F032CC382B2E3BD28FDD4302686A13DA724F84A88FFE305359DF76FF`.
+Its changes remain limited to shared flash-resident CSS, semantic markup, the
+manual-SSID label/wrapper and its unchanged selection-driven visibility and
+`required` behavior. Setup, save, error, success and cleanup-warning producers,
+all fields and write-only secrets, escaping, validation, routes, persistence and
+the five-second delayed restart owner remain unchanged.
+
+The previously personally reviewed exact-source screenshots, form and manual-SSID
+interaction observations, exact-owned cleanup and independent code review remain
+applicable to these bytes. The current coordinated exact-core 3.2.1 build also
+contains this unchanged source: its application is 3,669,328 bytes, globals use
+65,956 bytes and normal readiness passed. Under the recorded proportional-evidence
+decision, the actual-source interaction proof and unchanged-owner review close the
+presentation delta without invalidating protected configuration merely to enter
+the portal.
+
+Architect returns explicit `P6-05A CLOSURE GO` for only
+`firmware/CardputerAssistant/src/provisioning.cpp` and selective P6-05A trace
+evidence. No live provisioning cycle was executed; final release coverage must
+retain that limitation. P6-06 and all foreign corrective work remain pending and
+outside this row publication.
