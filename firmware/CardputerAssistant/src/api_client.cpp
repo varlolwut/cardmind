@@ -4,16 +4,19 @@
 #include "ssh_command_options.h"
 
 #include "instruction_policy.h"
+#include "sd_storage.h"
 #include "text_utils.h"
 
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <SD.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
 #include <algorithm>
 #include <cstring>
 #include <ctime>
+#include <limits>
 #include <utility>
 
 namespace cardputer {
@@ -29,6 +32,7 @@ constexpr std::size_t kMaximumErrorLength = 120;
 constexpr std::size_t kMaximumToolRounds = 4;
 constexpr std::size_t kMaximumToolOutputBytes = 32768;
 constexpr std::uint32_t kMinimumRequestHeapBytes = 70000;
+constexpr const char* kToolRequestPath = "/assistant/model-request.tmp";
 
 struct ToolRound {
     std::string response;
@@ -42,6 +46,116 @@ struct CompletionTurnResult {
     std::vector<ToolCall> toolCalls;
     String error;
 };
+
+struct CompletionSendResult {
+    int status;
+    String error;
+};
+
+using CompletionSender = std::function<CompletionSendResult(HTTPClient&)>;
+
+enum class RequestInputFailure { None, Cancelled, Read };
+
+class ToolRequestFile final : public File {
+public:
+    ToolRequestFile(const File& file, std::size_t size,
+                    const CancelCallback& isCancelled)
+        : File(file), remaining_(size), isCancelled_(isCancelled)
+    {
+    }
+
+    int available() override
+    {
+        // HTTPClient calls available twice before each read; keep it stable.
+        return failure_ == RequestInputFailure::None
+            ? static_cast<int>(std::min<std::size_t>(remaining_, 1460)) : -1;
+    }
+
+    std::size_t readBytes(std::uint8_t* buffer, std::size_t length) override
+    {
+        if (failure_ != RequestInputFailure::None) return 0;
+        if (isCancelled_()) {
+            failure_ = RequestInputFailure::Cancelled;
+            return 0;
+        }
+        const std::size_t requested = std::min(length, remaining_);
+        const std::size_t count = File::read(buffer, requested);
+        if (count != requested) failure_ = RequestInputFailure::Read;
+        if (count > requested) return 0;
+        remaining_ -= count;
+        return count;
+    }
+
+    std::size_t readBytes(char* buffer, std::size_t length) override
+    {
+        return readBytes(reinterpret_cast<std::uint8_t*>(buffer), length);
+    }
+
+    RequestInputFailure failure() const { return failure_; }
+
+private:
+    std::size_t remaining_;
+    const CancelCallback& isCancelled_;
+    RequestInputFailure failure_ = RequestInputFailure::None;
+};
+
+OperationResult removeToolRequest()
+{
+    const OperationResult access = requireSdCleanupAccess();
+    if (!access.success) return access;
+    if (SD.exists(kToolRequestPath) && !SD.remove(kToolRequestPath)) {
+        return {false, "Failed to remove temporary model request from microSD"};
+    }
+    return {true, ""};
+}
+
+OperationResult stageToolRequest(const String& payload)
+{
+    const OperationResult cleaned = removeToolRequest();
+    if (!cleaned.success) return cleaned;
+    if (payload.isEmpty() || payload.length() >
+            static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return {false, "Model request serialization failed or exceeded the HTTP byte range"};
+    }
+    const OperationResult access = requireSdWriteAccess(
+        payload.length(), kStorageOperationalFloorBytes);
+    if (!access.success) return access;
+    File file = SD.open(kToolRequestPath, FILE_WRITE);
+    if (!file) return {false, "Failed to create temporary model request on microSD"};
+    const bool buffered = file.setBufferSize(512);
+    const std::size_t written = buffered
+        ? file.write(reinterpret_cast<const std::uint8_t*>(payload.c_str()),
+                     payload.length()) : 0;
+    file.flush();
+    file.close();
+    if (written != payload.length()) {
+        return {false, "Failed to write complete model request to microSD"};
+    }
+    return {true, ""};
+}
+
+CompletionSendResult sendToolRequest(HTTPClient& http, std::size_t size,
+                                    const CancelCallback& isCancelled)
+{
+    const OperationResult access = requireSdReadAccess();
+    if (!access.success) return {0, access.error};
+    File file = SD.open(kToolRequestPath, FILE_READ);
+    if (!file) return {0, "Failed to reopen temporary model request from microSD"};
+    if (!file.setBufferSize(512) || file.size() != size) {
+        file.close();
+        return {0, "Temporary model request could not be buffered or has changed size"};
+    }
+    ToolRequestFile input(file, size, isCancelled);
+    const int status = http.sendRequest("POST", &input, size);
+    input.close();
+    if (input.failure() == RequestInputFailure::Cancelled) {
+        return {status, "Request canceled by user"};
+    }
+    if (input.failure() == RequestInputFailure::Read) {
+        return {status, "Failed to read complete model request from microSD"};
+    }
+    return {status, ""};
+}
 
 const char kIsrgRoots[] PROGMEM = R"CERT(-----BEGIN CERTIFICATE-----
 MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
@@ -520,8 +634,11 @@ String buildToolChatRequest(const Settings& settings,
             ? "required"
             : "auto";
     }
+    if (document.overflowed()) return "";
+    const std::size_t expectedBytes = measureJson(document);
     String payload;
     serializeJson(document, payload);
+    if (payload.length() != expectedBytes) return "";
     return payload;
 }
 
@@ -1008,7 +1125,7 @@ ChatRequestSerializationValidation validateChatRequestSerialization(
 namespace {
 
 CompletionTurnResult streamCompletionTurn(const Settings& settings,
-                                          const String& payload,
+                                          const CompletionSender& sendRequest,
                                           const ChatTextCallback& onText,
                                           const CancelCallback& isCancelled)
 {
@@ -1028,7 +1145,12 @@ CompletionTurnResult streamCompletionTurn(const Settings& settings,
         http.addHeader("Accept", "text/event-stream");
         const char* responseHeaderKeys[] = {"Content-Type"};
         http.collectHeaders(responseHeaderKeys, 1);
-        const int status = http.POST(payload);
+        const CompletionSendResult sent = sendRequest(http);
+        if (!sent.error.isEmpty()) {
+            http.end();
+            return {false, "", {}, sent.error};
+        }
+        const int status = sent.status;
         if (status != HTTP_CODE_OK) {
             const String body = status > 0 ? http.getString() : String();
             lastError = status > 0
@@ -1128,6 +1250,13 @@ ChatResult streamChatCompletionWithBudget(const Settings& settings,
     if (history.empty() || history.back().role != "user") {
         return {false, "", "Chat request requires a final user message"};
     }
+    const ParsedWebSearchCommand searchCommand = parseWebSearchCommand(history.back().content);
+    if (searchCommand.kind == WebSearchCommand::EmptyQuery) {
+        return {false, "", "Search command requires a query after /search or /web"};
+    }
+    if (searchCommand.kind == WebSearchCommand::Search) {
+        return {false, "", "Search command requires enabled Web Search; check No tools, permissions and search configuration"};
+    }
     if (ESP.getFreeHeap() < kMinimumRequestHeapBytes) {
         return {false, "", "Not enough free heap to start chat request safely"};
     }
@@ -1140,7 +1269,13 @@ ChatResult streamChatCompletionWithBudget(const Settings& settings,
         return {false, "", "Chat payload left less than 70000 bytes of free heap; start a new chat"};
     }
     const CompletionTurnResult turn = streamCompletionTurn(
-        settings, payload, onText, isCancelled);
+        settings,
+        [&payload](HTTPClient& http) -> CompletionSendResult {
+            // The String overload copies the request before allocating TLS buffers.
+            return {http.POST(reinterpret_cast<std::uint8_t*>(
+                        const_cast<char*>(payload.c_str())), payload.length()), ""};
+        },
+        onText, isCancelled);
     if (!turn.success) {
         return {false, turn.response, turn.error};
     }
@@ -1167,6 +1302,24 @@ ChatResult streamChatCompletionWithTools(const Settings& settings,
 }
 
 namespace {
+
+CompletionTurnResult buildWebSearchCommandTurn(std::string_view query)
+{
+    JsonDocument document;
+    document["query"] = query;
+    if (document.overflowed()) {
+        return {false, "", {}, "Not enough memory to encode search query"};
+    }
+    const std::size_t expectedBytes = measureJson(document);
+    std::string arguments;
+    serializeJson(document, arguments);
+    if (arguments.size() != expectedBytes) {
+        return {false, "", {}, "Failed to serialize search query"};
+    }
+    CompletionTurnResult result{true, "", {}, ""};
+    result.toolCalls.push_back({"call_cardmind_web_search", "web_search", std::move(arguments)});
+    return result;
+}
 
 ChatResult runToolCompletionLoop(
     const Settings& settings,
@@ -1195,6 +1348,14 @@ ChatResult runToolCompletionLoop(
     if (!toolRequestPlanIsConsistent(toolPlan)) {
         return {false, "", "Tool request policy plan is inconsistent"};
     }
+    const ParsedWebSearchCommand searchCommand = parseWebSearchCommand(history.back().content);
+    if (searchCommand.kind == WebSearchCommand::EmptyQuery) {
+        return {false, "", "Search command requires a query after /search or /web"};
+    }
+    if (searchCommand.kind == WebSearchCommand::Search && roundIndex == 0 &&
+        !toolRequestPlanIncludesSchema(toolPlan, ToolSchemaId::WebSearch)) {
+        return {false, "", "Search command requires enabled Web Search; check No tools, permissions and search configuration"};
+    }
     if (toolPlan.missingRequiredGroups != 0) {
         return {false, "",
                 "Required tool capability is unavailable (group mask 0x" +
@@ -1210,9 +1371,11 @@ ChatResult runToolCompletionLoop(
         1U << static_cast<std::uint8_t>(ToolCapabilityGroup::Files));
     const bool filesToolsIncluded =
         (toolPlan.includedGroups & filesGroup) != 0;
-    const bool requiresInitialWorkspaceTool = filesToolsIncluded &&
+    const bool requiresInitialWorkspaceTool = searchCommand.kind != WebSearchCommand::Search &&
+        filesToolsIncluded &&
         requestsWorkspaceAccess(history.back().content);
-    const bool requiresSuccessfulWorkspaceWrite = filesToolsIncluded &&
+    const bool requiresSuccessfulWorkspaceWrite = searchCommand.kind != WebSearchCommand::Search &&
+        filesToolsIncluded &&
         requestsWorkspaceWrite(history.back().content);
     while (roundIndex <= kMaximumToolRounds) {
         if (ESP.getFreeHeap() < kMinimumRequestHeapBytes) {
@@ -1222,26 +1385,45 @@ ChatResult runToolCompletionLoop(
             requiresInitialWorkspaceTool && rounds.empty();
         std::string bufferedText;
         CompletionTurnResult turn;
-        {
-            const String payload = buildToolChatRequest(
-                settings, history, instructions, toolPlan,
-                maximumOutputTokens, rounds);
-            if (ESP.getFreeHeap() < kMinimumRequestHeapBytes) {
-                return {false, completeResponse,
-                        "Tool payload left less than 70000 bytes of free heap; start a new chat"};
+        if (searchCommand.kind == WebSearchCommand::Search && roundIndex == 0) {
+            turn = buildWebSearchCommandTurn(searchCommand.query);
+        } else {
+            std::size_t payloadBytes = 0;
+            OperationResult staged;
+            {
+                const String payload = buildToolChatRequest(
+                    settings, history, instructions, toolPlan,
+                    maximumOutputTokens, rounds);
+                payloadBytes = payload.length();
+                staged = stageToolRequest(payload);
             }
-            turn = streamCompletionTurn(
-                settings, payload,
-                [&bufferedText, &completeResponse, &onText,
-                 bufferInitialText](const std::string& text) {
-                    if (bufferInitialText) {
-                        bufferedText += text;
-                    } else {
-                        completeResponse += text;
-                        onText(text);
-                    }
-                },
-                isCancelled);
+            if (!staged.success) {
+                turn = {false, "", {}, staged.error};
+            } else if (ESP.getFreeHeap() < kMinimumRequestHeapBytes) {
+                turn = {false, "", {},
+                        "Not enough free heap to send staged tool request safely"};
+            } else {
+                turn = streamCompletionTurn(
+                    settings,
+                    [payloadBytes, &isCancelled](HTTPClient& http) {
+                        return sendToolRequest(http, payloadBytes, isCancelled);
+                    },
+                    [&bufferedText, &completeResponse, &onText,
+                     bufferInitialText](const std::string& text) {
+                        if (bufferInitialText) {
+                            bufferedText += text;
+                        } else {
+                            completeResponse += text;
+                            onText(text);
+                        }
+                    },
+                    isCancelled);
+            }
+            const OperationResult cleaned = removeToolRequest();
+            if (!cleaned.success) {
+                return {false, completeResponse,
+                        turn.error + "; request cleanup failed: " + cleaned.error};
+            }
         }
         if (!turn.success) {
             return {false, completeResponse, turn.error};
@@ -1291,6 +1473,14 @@ ChatResult runToolCompletionLoop(
             if (isCancelled()) {
                 return {false, completeResponse, "Request canceled by user"};
             }
+            std::string wireName = std::move(call.name);
+            if (isWebSearchToolName(wireName)) {
+                call.name = "web_search";
+            } else if (isWebFetchToolName(wireName)) {
+                call.name = "web_fetch";
+            } else {
+                call.name = std::move(wireName);
+            }
             remainingRequiredGroups = remainingRequiredGroupsAfterToolCall(
                 toolPlan, remainingRequiredGroups, call.name);
             ToolExecutionResult result = executeTool(call);
@@ -1304,6 +1494,8 @@ ChatResult runToolCompletionLoop(
                     return {false, completeResponse,
                             "Tool confirmation persistence is not configured"};
                 }
+                std::string pendingWireName = wireName.empty()
+                    ? call.name : std::move(wireName);
                 const PendingToolContinuation continuation = {
                     std::move(call),
                     toolPlan.intent,
@@ -1311,14 +1503,16 @@ ChatResult runToolCompletionLoop(
                     static_cast<std::uint8_t>(roundIndex),
                     static_cast<std::uint32_t>(toolOutputBytes),
                     completedWorkspaceWrite,
+                    std::move(pendingWireName),
                 };
                 const OperationResult saved = savePendingTool(continuation);
                 if (!saved.success) {
                     return {false, completeResponse, saved.error};
                 }
                 Serial.printf(
-                    "INFO event=tool_confirmation name=%s result=pending\n",
-                    continuation.call.name.c_str());
+                    "INFO event=tool_confirmation name=%s result=pending wire_alias=%s\n",
+                    continuation.call.name.c_str(),
+                    continuation.wireName == continuation.call.name ? "no" : "yes");
                 return {
                     false,
                     completeResponse,
@@ -1359,6 +1553,9 @@ ChatResult runToolCompletionLoop(
                 completedWorkspaceWrite = true;
             }
             round.results.push_back(std::move(result));
+            if (!wireName.empty()) {
+                call.name = std::move(wireName);
+            }
         }
         rounds.push_back(std::move(round));
         ++roundIndex;
@@ -1415,6 +1612,9 @@ ChatResult continueChatCompletionAfterPendingToolResult(
         return {false, "", "Output token budget must be between 128 and 16384"};
     }
     const ToolCall& call = continuation.call;
+    if (!pendingToolWireNameMatches(call.name, continuation.wireName)) {
+        return {false, "", "Pending continuation has no matching original tool wire name"};
+    }
     const ToolCatalogEntry* entry = toolCatalogEntryForName(call.name);
     if (entry == nullptr || !toolRequestPlanIncludesSchema(toolPlan, entry->schema) ||
         call.id.empty() || call.id.size() > kMaximumPendingToolCallIdBytes ||
@@ -1459,6 +1659,7 @@ ChatResult continueChatCompletionAfterPendingToolResult(
     const std::uint8_t remainingRequiredGroups =
         continuation.remainingRequiredGroupsAfterCall;
     ToolRound resumedRound;
+    continuation.call.name = std::move(continuation.wireName);
     resumedRound.calls.push_back(std::move(continuation.call));
     resumedRound.results.push_back(std::move(toolResult));
     std::vector<ToolRound> rounds;

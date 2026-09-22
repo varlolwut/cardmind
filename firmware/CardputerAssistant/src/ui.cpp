@@ -487,7 +487,8 @@ void showFatalError(const String& error)
     M5Cardputer.Display.println(error);
 }
 
-void showProvisioning(const String& accessPointName, const String& accessPointPassword)
+void showProvisioning(const String& accessPointName, const String& accessPointPassword,
+                      const String& footer)
 {
     canvas->fillScreen(kCanvas);
     canvas->setFont(&fonts::efontCN_14);
@@ -513,6 +514,9 @@ void showProvisioning(const String& accessPointName, const String& accessPointPa
     canvas->setTextColor(kText, kCanvas);
     canvas->setCursor(5, 115);
     canvas->print("192.168.4.1");
+    canvas->setTextColor(kSignal, kCanvas);
+    canvas->setCursor(235 - canvas->textWidth(footer), 115);
+    canvas->print(footer);
     canvas->pushSprite(0, 0);
 }
 

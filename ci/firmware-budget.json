@@ -3,12 +3,12 @@
   "baseline_version": "1.12.0",
   "warning_growth_percent": 5.0,
   "limits": {
-    "app_binary_bytes": 3670016,
-    "app_free_bytes_minimum": 524288,
+    "app_binary_bytes": 3682304,
+    "app_free_bytes_minimum": 512000,
     "flash_text_bytes": 2285300,
     "flash_rodata_bytes": 1450000,
     "static_dram_bytes": 83000,
     "iram_bytes": 101000
   },
-  "rationale": "The app-size and free-space limits are hard partition-safety gates retaining at least 512 KiB. Section limits detect anomalous growth: rodata, DRAM and IRAM retain approximately 30 percent over the v1.12.0 baseline, while flash text accommodates the measured Phase 6 release-candidate ELF plus a 40 KiB guard and the v1.12.0 baseline still supplies growth warnings. The linker remains the final authority for SoC memory-region capacity."
+  "rationale": "The app-size and free-space limits retain at least 500 KiB in the fixed 4 MiB CardMind partition. The Architect decisions of 2026-09-22 allocate 12 KiB of the former 512 KiB reserve to the measured request-memory, search-command and pending-name corrections, leaving 3,584 bytes below the app cap on the coherent candidate. Section limits detect anomalous growth: rodata, DRAM and IRAM retain approximately 30 percent over the v1.12.0 baseline, while flash text accommodates the measured Phase 6 release-candidate ELF plus a 40 KiB guard and the v1.12.0 baseline still supplies growth warnings. The linker remains the final authority for SoC memory-region capacity."
 }

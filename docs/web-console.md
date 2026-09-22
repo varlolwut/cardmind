@@ -37,6 +37,9 @@ configuration and SFTP controls.
   and active context usage.
 - Send prompts with SSE streaming, cancel an active request, or retry the previous
   browser prompt.
+- Start a prompt with `/search <query>` or `/web <query>` to search for that exact
+  query before the model answers. Supply a nonempty query; search must be configured and permitted.
+  **No tools** prevents the command, and **Ask** still requires confirmation.
 - Choose **Auto**, **No tools**, or any combination of Web, Files, SSH, and Python in
   the composer. The one-message selection resets to **Auto** after send and never edits
   persistent chat policy.

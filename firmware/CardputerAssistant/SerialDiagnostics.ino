@@ -7597,6 +7597,13 @@ void handleSerialCommand(const String& command)
         openWebConsole(Screen::DeviceMenu);
         return;
     }
+    if (command == "SETUP") {
+        const cardputer::OperationResult result = openLocalSetup();
+        statusMessage = result.success ? String("Local setup closed") : result.error;
+        menuStatus = statusMessage;
+        render();
+        return;
+    }
     if (command == "STTTLS") {
         ensureNetworkReady();
         const cardputer::OperationResult result = cardputer::probeDefaultSttTls();

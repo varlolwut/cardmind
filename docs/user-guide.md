@@ -56,6 +56,12 @@ Voice settings.
 
 ## Search
 
+Start a message with `/search <query>` (or `/web <query>`) to search for that exact
+query, then have the model answer from the results, on the device or in the Web Console. The command needs a
+nonempty query and enabled search; **No tools**, **Off**, or missing configuration
+produce an error. **Ask** still requires confirmation. The command applies only to
+this message and does not change chat permissions.
+
 Choose **Web** under **Next capabilities** to require Web access for one prompt, or
 leave the selection on **Auto** and let the model choose among allowed tools. Search
 and page extraction are separate capabilities. CardMind shows each tool stage and
@@ -130,6 +136,12 @@ The existing manual Python workspace remains available for interactive work.
 Device contains display and power preferences, API setup, firmware update, and
 diagnostics. Network and Python controls have dedicated carousel
 cards. Help lists the global shortcuts; feature screens show their local controls.
+
+On a configured device, press Esc to leave **Local setup** without saving. CardMind
+closes its temporary access point, reconnects the existing Wi-Fi connection, and
+returns to the menu. Initial setup must be completed before leaving. After a save
+has committed or its result is uncertain, follow the displayed restart instruction
+instead of returning with partially applied settings.
 
 Export needed project bundles and copy other workspace data off the card before
 replacing a microSD card. A normal firmware update preserves NVS and microSD. A clean

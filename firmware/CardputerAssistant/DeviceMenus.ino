@@ -656,6 +656,18 @@ void renderQrEntry()
                              "ENTER show  ESC back  Fn+3 lang");
 }
 
+cardputer::OperationResult openLocalSetup()
+{
+    cardputer::markOperation("provisioning");
+    const cardputer::OperationResult result =
+        cardputer::runProvisioningPortal(settings, providerProfileStore);
+    cachedSshToolProfileId = sshStorageReady
+        ? cardputer::sshToolAvailableProfileId() : 0;
+    cardputer::markOperation("idle");
+    lastUserActivityAt = millis();
+    return result;
+}
+
 void openWebConsole(Screen returnScreen)
 {
     lastUserActivityAt = millis();

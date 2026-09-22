@@ -9,6 +9,7 @@
 #include <WiFi.h>
 #include <esp_system.h>
 
+#include <algorithm>
 #include <vector>
 
 namespace cardputer {
@@ -71,6 +72,9 @@ WebServer webServer(80);
 Settings currentSettings;
 WifiScanResult nearbyNetworkScan = {true, {}, ""};
 bool restartPending = false;
+bool routesConfigured = false;
+bool exitRequested = false;
+bool saveBlocksExit = false;
 std::uint32_t restartAt = 0;
 String serialCommand;
 ProviderProfileStore* currentProviderStore = nullptr;
@@ -290,6 +294,7 @@ void saveSubmittedSettings()
     }
     const ProviderStoreResult result =
         saveProvisionedSettings(submitted, *currentProviderStore);
+    saveBlocksExit = saveBlocksExit || result.committed || result.outcomeUnknown;
     const bool savedWithCleanupWarning =
         !providerStoreResultSucceeded(result) && result.committed &&
         result.error == ProviderStoreError::CleanupFailed;
@@ -341,6 +346,13 @@ String randomPassword()
     return String(password);
 }
 
+bool provisioningEscapePressed()
+{
+    const Keyboard_Class::KeysState& keys = M5Cardputer.Keyboard.keysState();
+    return keys.esc ||
+        std::find(keys.word.begin(), keys.word.end(), '`') != keys.word.end();
+}
+
 void updateProvisioningSerial()
 {
     while (Serial.available() > 0) {
@@ -349,6 +361,15 @@ void updateProvisioningSerial()
             serialCommand.trim();
             if (serialCommand == "PING") {
                 Serial.println("PONG");
+            } else if (serialCommand == "EXIT") {
+                if (!settingsAreComplete(currentSettings)) {
+                    Serial.println("PROVISIONING exit=blocked reason=configuration_required");
+                } else if (restartPending || saveBlocksExit) {
+                    Serial.println("PROVISIONING exit=blocked reason=restart_required");
+                } else {
+                    exitRequested = true;
+                    Serial.println("PROVISIONING exit=requested");
+                }
             } else if (serialCommand == "STATUS") {
                 Serial.printf("STATUS board_adv=%s configured=%s search_configured=%s tts_configured=%s wifi=ap portal=ready heap=%u\n",
                               M5.getBoard() == m5::board_t::board_M5CardputerADV ? "yes" : "no",
@@ -396,9 +417,15 @@ void updateProvisioningSerial()
 
 }  // namespace
 
-[[noreturn]] void runProvisioningPortal(const Settings& existingSettings,
-                                        ProviderProfileStore& providerStore)
+OperationResult runProvisioningPortal(const Settings& existingSettings,
+                                     ProviderProfileStore& providerStore)
 {
+    const bool exitAllowed = settingsAreComplete(existingSettings);
+    const bool stationWasEnabled = (WiFi.getMode() & WIFI_MODE_STA) != 0;
+    restartPending = false;
+    exitRequested = false;
+    saveBlocksExit = false;
+    serialCommand = "";
     currentSettings = existingSettings;
     currentProviderStore = &providerStore;
     const String accessPointName = "Cardputer-" + macSuffix();
@@ -437,20 +464,68 @@ void updateProvisioningSerial()
     } else {
         Serial.println("WARN event=wifi_scan result=failed");
     }
-    webServer.on("/", HTTP_GET, sendSetupPage);
-    webServer.on("/save", HTTP_POST, saveSubmittedSettings);
-    webServer.onNotFound(sendSetupPage);
+    if (!routesConfigured) {
+        webServer.on("/", HTTP_GET, sendSetupPage);
+        webServer.on("/save", HTTP_POST, saveSubmittedSettings);
+        webServer.onNotFound(sendSetupPage);
+        routesConfigured = true;
+    }
     webServer.begin();
     Serial.println("PROVISIONING result=started security=wpa2 ip=192.168.4.1");
-    showProvisioning(accessPointName, accessPointPassword);
+    showProvisioning(accessPointName, accessPointPassword,
+                     exitAllowed ? "ESC back" : "Save in browser");
+    bool exitHintVisible = exitAllowed;
+    M5Cardputer.update();
+    bool escapeHeld = provisioningEscapePressed();
     while (true) {
         webServer.handleClient();
         updateProvisioningSerial();
+        M5Cardputer.update();
+        const bool escapePressed = provisioningEscapePressed();
+        if (exitAllowed && !restartPending && !saveBlocksExit &&
+            escapePressed && !escapeHeld) {
+            exitRequested = true;
+        }
+        escapeHeld = escapePressed;
+        if (exitHintVisible && (saveBlocksExit || restartPending)) {
+            showProvisioning(accessPointName, accessPointPassword,
+                             restartPending ? "Restarting..." : "Restart required");
+            exitHintVisible = false;
+        }
         if (restartPending && static_cast<std::int32_t>(millis() - restartAt) >= 0) {
             ESP.restart();
         }
+        if (exitRequested && exitAllowed && !restartPending && !saveBlocksExit) {
+            break;
+        }
         delay(2);
     }
+    webServer.stop();
+    const bool accessPointStopped = WiFi.softAPdisconnect(true);
+    const bool stationRestored = stationWasEnabled
+        ? WiFi.reconnect() : WiFi.mode(WIFI_OFF);
+    currentSettings = Settings{};
+    nearbyNetworkScan = {true, {}, ""};
+    currentProviderStore = nullptr;
+    serialCommand = "";
+    while (!M5Cardputer.Keyboard.keyList().empty()) {
+        M5Cardputer.update();
+        delay(5);
+    }
+    String error;
+    if (!accessPointStopped) {
+        error = "Failed to stop Local setup access point";
+    }
+    if (!stationRestored) {
+        if (!error.isEmpty()) {
+            error += "; ";
+        }
+        error += "Failed to restore Wi-Fi after Local setup";
+    }
+    Serial.printf("PROVISIONING result=%s error=%s\n",
+                  error.isEmpty() ? "stopped" : "failed",
+                  error.isEmpty() ? "none" : error.c_str());
+    return {error.isEmpty(), error};
 }
 
 }  // namespace cardputer
