@@ -7386,7 +7386,7 @@ and redundant-copy correction. It is completed; publication follows. Setup's pri
 accepted commit is published as `e20c477a125a70449c1e3453afde860682e2aa17`.
 The independently failing Web continuation below still blocks the patch release.
 
-## FIX-WEB-CONTINUATION — in_progress, 2026-09-17
+## FIX-WEB-CONTINUATION — completed, 2026-09-17
 
 The post-release Web observations exposed an independent resource boundary. With
 all available schemas, two successful ~4.4 KiB searches can exhaust the unchanged
@@ -7407,6 +7407,283 @@ Four chats/history 3, API configuration and connected Wi-Fi were retained. Evide
 `architect-web-ask-web-only.log.node.out`, `architect-web-ask-separate-restoration.log`,
 `architect-web-ask-restored-status.log`, and `architect-web-ask-restored-cleanup.log`.
 
-Architect records **release STOP**. ROADMAP contains the bounded SD-backed request
-design assignment; Phase 6 is doing read-only design, with production handoff still
-pending. No claim of a completed Web search/approval flow or v1.13.1 release is made.
+The user additionally reported Device web search failing with
+`Malformed SSE JSON: NoMemory` at 12:02 UTC. This is user-observed evidence; its
+exact response event and allocation size have not been captured. The retained
+successful Device sample does not establish that this failure is resolved.
+
+Architect records **release STOP** and retains implementation ownership. ROADMAP
+contains the bounded SD-backed request design, informed by Phase 6's completed
+read-only inventory. No claim of a completed Web search/approval flow or v1.13.1
+release is made.
+
+Implementation resumed on 2026-09-22 at 19:47 UTC after the earlier independent
+design review was interrupted by the account usage limit. The resumed bounded
+review returned pre-edit GO; Architect adopted it and implemented the request
+staging boundary only. Existing strict host tests passed unchanged. Pinned build
+and independent final code review passed; real search acceptance remains open.
+
+The initial COM8 status attempt at 19:48:26 failed to open with Access denied.
+Separate read-only Windows evidence found the device present/started, error code
+zero, and a fresh arrival at that time, without proving an exclusive holder.
+The already authorized esptool 4.9.0 RTS restoration succeeded; a new normal status
+run passed at 19:51:07 with four chats/history 4, configured APIs, connected Wi-Fi,
+ready SD/chats/files, heap 102,160, largest block 37,876 and stack margin 7,792.
+The failed initial attempt remains failed. Evidence:
+`artifacts/architect-1131-resume-20260922-status.log`,
+`architect-1131-resume-20260922-reset.log`, and
+`architect-1131-resume-20260922-restored-status.log`.
+
+The flashed SD-request candidate has SHA-256
+`fd0b6bd839b49b9582ccf0c555d4c612fe0f5ae29ce198a9aad23dc62367b657`.
+Pinned options, upload, host checks and third-party inventory passed. App size is
+3,673,840 bytes (+3,888); partition free space is 520,464 bytes; static DRAM and
+IRAM remain 65,980 and 77,567 bytes. The original 512 KiB reserve check failed by
+3,824 bytes and remains failed evidence. ROADMAP records Architect's explicit
+504 KiB growth-reserve decision before the budget edit; the resulting budget check
+passes with 4,368 bytes below the new app cap. Fixed partitions and RAM limits are
+unchanged. Evidence: `artifacts/architect-1131-sd-request-build.log`,
+`architect-1131-sd-request-metrics.json`,
+`architect-1131-sd-request-approved-budget-metrics.json`, and
+`architect-1131-sd-request-upload.log`.
+
+At 19:57-20:02 UTC the ordinary Device API smoke returned a seven-byte answer.
+Device SEARCHTEST and Web Ask on the default model, followed by one advertised
+Sonnet control confined to an owned chat, returned text without required tool calls.
+All three search runs therefore failed acceptance; none reported TLS allocation
+or SSE NoMemory. Their absence does not prove continuation memory is fixed because
+no search result was sent back. Both Web owned projects were deleted, pending was
+absent, API/Wi-Fi projections were unchanged, and exact Console EXIT plus normal
+STATUS passed. Final status retained four chats/history 4, heap 95,420, largest
+block 31,732 and stack margin 2,688 bytes; lifetime minimum heap reached 6,824.
+Evidence: `artifacts/architect-1131-sd-device.log`,
+`architect-1131-sd-web.log` and `architect-1131-sd-sonnet.log`, with their Node
+outputs. A narrow read-only comparison found the byte/Stream HTTP overloads send
+the same Content-Length and untransformed JSON, with only bounded writes and
+inactive redirect differences. It did not prove an upstream cause for missing calls.
+Release remains STOP pending actual search/continuation and memory evidence.
+
+At 20:07-20:08 UTC an information-only repeat retained the owned model's answer:
+it was a Cardputer summary, without an observable tool call. Exact-owned cleanup
+and normal readiness passed. This was not a new successful search sample.
+At 20:13-20:14 a disposable diagnostic image (SHA-256
+`c95913f4cf6dc8f1ee7384f204579e8526616617416cfe312b180e040b65fa2d`)
+measured the boundary without logging request content or authentication data:
+the body was 3,707 bytes with six schemas, `tool_choice=required`, zero prior
+rounds and an exact byte-for-byte SD readback. Before TLS heap/largest were
+87,276/31,732; HTTP 200 headers left 33,552/18,420. SSE completed with
+`finish_reason=stop` and no delta, message, root or legacy function-call fields.
+The model returned text; Required correctly rejected it. This is an observed
+external tool-call contract failure, not evidence of an SD corruption or an SSE
+allocation failure. It still cannot prove the memory behavior of continuation.
+The preceding immediate-post-upload observation stopped before HTTP because
+background Wi-Fi startup was not yet connected; it remains failed. A separate
+normal status at 20:13:18 confirmed connected Wi-Fi before the diagnostic run.
+The diagnostic run's cleanup, exact Console stop and normal STATUS passed.
+
+An advertised-model inventory at 20:15 showed only Claude models, so the proposed
+cross-family control stopped before any model call. At 20:17 a read-only profile
+inventory confirmed one configured API profile and no model presets; no alternate
+provider or credentials were selected or changed. Public provider tool-use,
+Chat Completions, authentication, compatibility, status and changelog documents
+offered no specific remedy or dated incident for the observed Required failure;
+their absence is not proof of provider health. Do not repeat the same model
+request or cycle models without a new discriminating cause. Existing TLS,
+permission and Required checks must not be bypassed to make this run pass.
+
+Evidence: `artifacts/architect-1131-web-response-diagnostic.log.node.out`,
+`architect-1131-wire-diagnostic-build.log`,
+`architect-1131-wire-diagnostic-upload.log`,
+`architect-1131-wire-diagnostic.log` (startup failure),
+`architect-1131-wire-network-status.log`,
+`architect-1131-wire-diagnostic-ready.log` and its Node output,
+`architect-1131-wire-gpt-control.log.node.out`, and
+`architect-1131-provider-inventory.log.node.out`.
+The temporary instrumentation is retained only in ignored artifacts; production
+source was restored byte-for-byte to the reviewed SD-request candidate
+(`api_client.cpp` SHA-256
+`5e2c968ed3ab3e2e6f7151ac98c19e77132941c7009cdb6d2c62cabfa9296776`).
+No acceptance, closure GO, new commit or release is claimed.
+
+At 20:20 UTC the user took the device for their own test. Architect released COM8
+and stopped device/HTTP/model requests, resets and uploads pending that result.
+The reviewed production source rebuilt successfully to the identical candidate
+SHA-256 `fd0b6bd839b49b9582ccf0c555d4c612fe0f5ae29ce198a9aad23dc62367b657`.
+It was not uploaded over the user's test: the device still has the disposable
+`c95913f4...` diagnostic image described above. Restore the production image only
+after the user returns device ownership; silence is not that handoff. Its last
+observed normal STATUS was healthy and all observer-owned fixtures were removed.
+
+At 20:26 UTC the user reported a successful `web_search` call and verified its
+search-service usage. This is retained as successful user-observed search evidence.
+It supersedes any blanket claim that the provider currently prevents search;
+the earlier text-only Required failures remain facts of their particular prompt
+and observer. The user's report does not explicitly distinguish the successful
+search call from completion of the subsequent model answer. Architect resumes
+with a read-only audit/history observation and compares the observer's prompt path
+with normal UI handling before choosing any further reproduction. No provider
+change, weakening of Required, or test-oracle change follows from this result.
+
+The subsequent read-only audit/history observation corroborated five successful
+canonical searches (3,086-5,351 ms, 4,292-4,600 output bytes), no pending request,
+and persisted assistant answers including the latest 583-byte answer. The user's
+normal Device flow therefore completed search and answer continuation on the
+diagnostic SD-request image. Evidence:
+`artifacts/architect-1131-user-search-bound-observation.log`.
+A separate observer login failed at transport before a model request; a later
+Windows route snapshot selected the VPN interface, while a source-bound physical
+Wi-Fi read succeeded. The user explicitly confirmed VPN was off during the prior
+search tests. That later host-route fact does not explain those model/search
+outcomes, and no such causal attribution is retained.
+
+After the user's result, exact Console stop and normal readiness passed; the
+reviewed production candidate `fd0b6bd8...` was uploaded with pinned options and
+verified flash hash at 20:32-20:33 UTC. Evidence:
+`artifacts/architect-1131-console-after-user-close.log` and
+`architect-1131-candidate-final-upload.log`.
+The 20:34 ordinary Web Ask observation failed before model dispatch because its
+disposable request omitted the output-budget header. The actual Web composer
+sends `X-CardMind-Output-Tokens: 0` for inheritance, and
+`resolveRawWebRequestOutputBudget` requires that explicit integer. Exact-owned
+cleanup, unchanged API/Wi-Fi projections and normal readiness passed; this failed
+run proves neither a memory failure nor successful continuation. Only the
+observer input is corrected to match the native composer; production and the
+acceptance outcome remain unchanged. Evidence:
+`artifacts/architect-1131-web-natural-ask.log` and its Node output.
+
+The corrected ordinary Web Ask run at 20:37-20:39 UTC reached four canonical
+confirmations. Each approval continued the model response without TLS allocation
+or SSE NoMemory; after the fourth, the model requested another tool round and the
+unchanged ceiling rejected it. This remains a failed completion, not closure.
+Cleanup and exact Console stop passed; normal STATUS retained the user's one chat
+and ten messages, ready SD/API/Wi-Fi, heap/largest 91,836/31,732, lifetime minimum
+3,608 and stack margin 2,224 bytes. Evidence:
+`artifacts/architect-1131-web-natural-budget.log` and its Node output.
+Architect isolates the next question to normal Allow versus the pending Ask
+continuation on the identical prompt/context; no production or limit change is
+authorized from the repeated-call observation alone.
+
+The matching Allow control at 20:41-20:43 UTC logged one successful search, then
+lost HTTP transport before receiving a terminal stream. Its holder stopped without
+further COM8/HTTP writes; exact-owned project `40e97765d761fc97` remains to be
+removed separately. A Wi-Fi driver `sta is connecting` message is present, but no
+allocation error or causal network diagnosis was captured. This control cannot
+compare completed Allow and Ask behavior. Evidence:
+`artifacts/architect-1131-web-allow-control.log` and its Node output. The copied
+fixture-label text says Ask, but the control source changes no policy and the
+effective Web Search permission is Allow. Its failed run remains failed.
+
+The read-only inherited-contract review also found that P3-06 explicitly chose
+original chat plus only the latest approved call/result, excluding previous tool
+results and assistant prose from pending persistence. The observed omission is
+therefore deliberate baseline behavior, not a newly proven implementation defect;
+its causal connection to these repeated searches is unproven. No transcript
+retention or pending-format expansion is authorized from this observation.
+
+Separate esptool 4.9.0 RTS restoration succeeded at 20:43 UTC; a new normal STATUS
+passed with connected Wi-Fi and ready storage. Exact-owned project cleanup then
+passed twice, with unchanged API/Wi-Fi settings projections and exact Console
+stop. Final status in the automatically selected default project showed four
+chats/history 4, heap/largest 96,604/31,732 and stack margin 5,072. User projects
+were not deleted. Evidence: `artifacts/architect-1131-allow-separate-reset.log`,
+`architect-1131-allow-restored-status.log`, and
+`architect-1131-allow-cleanup.log` plus its Node output. The earlier lost-transport
+run remains failed; release STOP is unchanged.
+
+A later read-only observation at 20:48 received PONG but timed out waiting for
+normal STATUS before any Console/HTTP action. This remains failed, separately
+from model execution. One separate RTS reset restored normal STATUS; the next
+read-only observation passed and returned the user's original project selection.
+The actual successful user search prompt was `pogugli datu vihoda cardputer zero`,
+followed by a substantive sourced answer. The latest 583-byte answer concerned
+which search API was used; it alone was not search-continuation proof. Evidence:
+`artifacts/architect-1131-search-context.log`,
+`architect-1131-readonly-separate-reset.log`,
+`architect-1131-readonly-restored-status.log`, and
+`architect-1131-search-context-restored.log` with its Node output.
+The final focused Ask observation now uses that exact successful user question,
+with the same owned-chat Auto/inherited-budget/Ask controls. This replaces the
+underspecified diagnostic `/search cardputer zero` wording; production and the
+required successful search, completed answer, policy and cleanup outcomes do not
+change. No further identical prompt rerun is authorized without new evidence.
+
+The exact-user-question Ask run at 20:51-20:52 reached `web_search` confirmation
+and continued after approval without TLS/NoMemory, but the model next requested
+`list_files`. The observer rejected this unexpected tool and its Deny cleanup
+continued the model into a new search confirmation; cleanup therefore also failed.
+This is not successful answer evidence. The observer is frozen against another
+repair/rerun; its assumed next-tool and Deny-as-disposal boundaries are not a
+reliable general completion observer. Evidence:
+`artifacts/architect-1131-user-query-ask.log` and its Node output.
+After exact Console stop, the pending request was non-resumable in the new Console
+session. Separate exact-owned acknowledgement and removal of project
+`e595acfcabd3a53e` passed, including repeated absence, unchanged API/Wi-Fi projections,
+exact Console stop and normal STATUS. Evidence:
+`artifacts/architect-1131-user-query-cleanup.log` and its Node output.
+No production changes, acceptance GO or publication follow from these runs.
+
+At 21:18 UTC Architect adopted the independent transient-name design GO and
+implemented the three-file correction. The original wire name is now bound to
+the existing same-boot pending ID, never serialized, and restored only into the
+outgoing assistant frame after canonical validation. The official Chat Completions
+function definition limits names to 64 ASCII characters and supports a named
+function `tool_choice`; those constraints are applied without changing policy.
+Canonical pending format, approval/execution, latest-call-only history and reboot
+nonexecution are unchanged. A fresh focused code review is pending.
+
+The coherent command/continuation candidate compiled and strict host checks passed;
+binary SHA-256 `3e9ccd1beca1ea7e38b2a323a244a0662d06efcdbb0e6f0925f02cd000e45870`
+was flashed with exact 3.2.1/FQBN, verified hash and pinned RTS reset at 21:22 UTC.
+App 3,678,720 bytes, partition free 515,584, text 2,254,900, rodata 1,322,260,
+static DRAM 66,012, IRAM 77,567. Original 504 KiB reserve failed by 512 bytes;
+ROADMAP explicitly allocates a further 4 KiB for the newly requested command and
+Ask regressions before changing the budget to 500 KiB. The revised calculation
+passes with 3,584 bytes of remaining growth headroom; runtime limits are unchanged.
+Evidence: `artifacts/architect-1131-command-wire-build.log`,
+`architect-1131-command-wire-host.log`, `architect-1131-command-wire-source.json`,
+`architect-1131-command-wire-metrics.json` (FAIL),
+`architect-1131-command-wire-approved-metrics.json` (PASS), and
+`architect-1131-command-wire-upload.log`. Runtime acceptance is still open.
+
+At 21:27-21:28 UTC the Web Ask run completed two approved canonical web_search
+calls, the second with a preserved original alias (`wire_alias=yes`), and stored
+a 511-byte assistant answer. Exact-owned project deletion, repeated absence,
+unchanged API/Wi-Fi/settings projections, Console stop and normal STATUS passed.
+Evidence: `artifacts/architect-1131-pending-wire-web.log` and its Node output.
+The observer retained answer size rather than its content; this proves completed
+continuation and persistence, not the factual quality of that answer. Final
+heap/largest were 94,812/31,732, lifetime minimum heap 2,436 and main stack margin
+1,248 bytes. These tight margins require comparison with the applicable accepted
+network-work baseline before closure; the idle-console budget is not silently
+applied to a different workload. A fresh independent code review returned GO for
+the SD-request and transient-name boundary. Architect closure remains pending
+the direct-command correction and its real Device/Web acceptance.
+
+The independent bounded resource assessment and Architect source/evidence review
+found no applicable numeric gate breach: final normal heap exceeds 70 KiB, largest
+block exceeds 28 KiB and stack remains positive. P6-07's accepted Web/SSH sequence
+already retained lifetime minimum heap 1,588 and stack 1,144 bytes; P6-08 Files Read
+Ask retained stack 976. These are different workloads, so they establish neither
+a new regression nor a controlled no-regression claim. The old device-budget
+consumer performs only idle Console cycles; its limits do not apply to model/TLS
+work. The unchanged 70,000-byte admission check applies before requests/tool rounds,
+not to lifetime minimum heap. Tight active-network margins remain an explicit
+residual risk; no extra memory rerun is added to the frozen acceptance.
+
+At 2026-09-22 21:49 UTC Architect personally returns **FIX-WEB-CONTINUATION
+CLOSURE GO** after reviewing the actual SD sender, shared retry/SSE owner,
+canonical pending producers/consumers and same-boot name lifecycle, pinned vendor
+semantics, independent design/code findings and retained runtime evidence.
+Ordinary Web Ask completed with an alias and exact cleanup; the coherent command
+candidate also completed actual Device and Web search-to-answer paths without
+TLS allocation or SSE NoMemory. The new literal-query guard belongs solely to
+FIX-SEARCH-COMMAND and does not change SD staging, pending or response parsing.
+The release does not claim arbitrary-provider-payload immunity, controlled A/B
+performance improvement or generous active-network RAM headroom. The unchanged
+admission limits, explicit failures and measured residual risk remain binding.
+No parser, pending format, tool authorization, TLS or round-limit relaxation was
+used. Start/resume and the earlier external usage-limit interval are recorded
+above; no 60-minute active-work stall occurred in the resumed correction.
+Accepted publication paths: api_client.cpp, pending_tool_call.h/.cpp, the measured
+firmware budget and this trace. The separate command implementation and its
+documentation/tests remain outside this fix commit. Publication is next.

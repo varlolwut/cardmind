@@ -52,7 +52,12 @@ struct PendingToolContinuation {
     std::uint8_t completedToolRoundsBeforeCall;
     std::uint32_t toolOutputBytesBeforeCall;
     bool completedWorkspaceWriteBeforeCall;
+    // Same-boot transport metadata; never serialized into the pending record.
+    std::string wireName;
 };
+
+bool pendingToolWireNameMatches(const std::string& canonicalName,
+                               const std::string& wireName);
 
 inline bool pendingToolContinuationAllowsSchema(
     ToolSchemaId schema,

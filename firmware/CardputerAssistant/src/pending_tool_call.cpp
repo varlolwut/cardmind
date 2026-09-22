@@ -20,6 +20,7 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -31,6 +32,7 @@ constexpr std::size_t kMaximumPendingToolCallBytes = 36864;
 constexpr std::uint8_t kMaximumCompletedToolRounds = 4;
 constexpr std::uint32_t kMaximumPriorToolOutputBytes = 32768;
 String resumablePendingIdThisBoot;
+std::string resumablePendingWireNameThisBoot;
 static_assert(kMaximumPendingFilePreviewSourceBytes ==
               kMaximumWorkspaceToolChunkBytes);
 
@@ -815,6 +817,15 @@ PendingToolCallBuildResult buildPendingToolCall(
         continuation.toolOutputBytesBeforeCall > kMaximumPriorToolOutputBytes) {
         return {false, {}, "Pending tool continuation counters are outside request limits"};
     }
+    if (!pendingToolWireNameMatches(continuation.call.name, continuation.wireName)) {
+        return {false, {}, "Pending tool wire name does not match its canonical call"};
+    }
+    std::string preparedWireName;
+    try {
+        preparedWireName = continuation.wireName;
+    } catch (const std::bad_alloc&) {
+        return {false, {}, "Not enough memory to retain the pending tool wire name"};
+    }
     CanonicalToolArgumentsResult arguments =
         canonicalizeToolArguments(continuation.call);
     if (!arguments.success) {
@@ -885,6 +896,7 @@ PendingToolCallBuildResult buildPendingToolCall(
         continuation.completedToolRoundsBeforeCall,
         continuation.toolOutputBytesBeforeCall,
         continuation.completedWorkspaceWriteBeforeCall,
+        std::move(preparedWireName),
     };
     PendingToolCall pending = {
         generatePendingId(),
@@ -904,6 +916,16 @@ PendingToolCallBuildResult buildPendingToolCall(
 }
 
 }  // namespace
+
+bool pendingToolWireNameMatches(const std::string& canonicalName,
+                               const std::string& wireName)
+{
+    if (wireName.empty() || wireName.size() > 64 ||
+        toolCatalogEntryForName(canonicalName) == nullptr) return false;
+    return wireName == canonicalName ||
+        (canonicalName == "web_search" && isWebSearchToolName(wireName)) ||
+        (canonicalName == "web_fetch" && isWebFetchToolName(wireName));
+}
 
 bool pendingToolCallIsResumableThisBoot(const String& pendingId)
 {
@@ -928,9 +950,11 @@ OperationResult savePendingToolCall(
     if (!built.success) {
         return {false, built.error};
     }
-    const PendingToolCallResult stored = storePendingToolCall(std::move(built.pending));
+    std::string preparedWireName = std::move(built.pending.continuation.wireName);
+    PendingToolCallResult stored = storePendingToolCall(std::move(built.pending));
     if (stored.success) {
-        resumablePendingIdThisBoot = stored.pending.pendingId;
+        resumablePendingWireNameThisBoot = std::move(preparedWireName);
+        resumablePendingIdThisBoot = std::move(stored.pending.pendingId);
     }
     return {stored.success, stored.error};
 }
@@ -964,9 +988,11 @@ OperationResult replaceTerminalPendingToolCall(
     if (!built.success) {
         return {false, built.error};
     }
-    const PendingToolCallResult stored = storePendingToolCall(std::move(built.pending));
+    std::string preparedWireName = std::move(built.pending.continuation.wireName);
+    PendingToolCallResult stored = storePendingToolCall(std::move(built.pending));
     if (stored.success) {
-        resumablePendingIdThisBoot = stored.pending.pendingId;
+        resumablePendingWireNameThisBoot = std::move(preparedWireName);
+        resumablePendingIdThisBoot = std::move(stored.pending.pendingId);
     }
     return {stored.success, stored.error};
 }
@@ -1196,6 +1222,17 @@ PendingToolCallResult loadPendingToolCall()
           pending.target.name != arguments.fileName)) ||
         ((pending.reason == PendingToolConfirmationReason::Mandatory) != mandatory)) {
         return corrupted("target identity does not match the exact call and reason");
+    }
+    if (pendingToolCallIsResumableThisBoot(pending.pendingId)) {
+        if (!pendingToolWireNameMatches(pending.continuation.call.name,
+                                       resumablePendingWireNameThisBoot)) {
+            return {false, true, {}, "Same-boot pending tool wire name is missing or invalid"};
+        }
+        try {
+            pending.continuation.wireName = resumablePendingWireNameThisBoot;
+        } catch (const std::bad_alloc&) {
+            return {false, true, {}, "Not enough memory to load the pending tool wire name"};
+        }
     }
     return {true, true, std::move(pending), ""};
 }
@@ -1500,6 +1537,7 @@ OperationResult clearPendingToolCall(
     }
     if (resumablePendingIdThisBoot == pendingId) {
         resumablePendingIdThisBoot.clear();
+        std::string().swap(resumablePendingWireNameThisBoot);
     }
     return {true, ""};
 }
