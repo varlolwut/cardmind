@@ -56,6 +56,12 @@ Voice settings.
 
 ## Search
 
+Start a message with `/search <query>` (or `/web <query>`) to search for that exact
+query, then have the model answer from the results, on the device or in the Web Console. The command needs a
+nonempty query and enabled search; **No tools**, **Off**, or missing configuration
+produce an error. **Ask** still requires confirmation. The command applies only to
+this message and does not change chat permissions.
+
 Choose **Web** under **Next capabilities** to require Web access for one prompt, or
 leave the selection on **Auto** and let the model choose among allowed tools. Search
 and page extraction are separate capabilities. CardMind shows each tool stage and

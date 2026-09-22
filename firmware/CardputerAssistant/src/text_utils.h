@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cardputer {
@@ -95,6 +96,16 @@ ContextUsage resolveContextUsage(const ChatDocument& chat,
 bool requestsWorkspaceAccess(const std::string& prompt);
 bool requestsWorkspaceWrite(const std::string& prompt);
 bool requestsWebSearch(const std::string& prompt);
+enum class WebSearchCommand : std::uint8_t {
+    None,
+    EmptyQuery,
+    Search,
+};
+struct ParsedWebSearchCommand {
+    WebSearchCommand kind;
+    std::string_view query;
+};
+ParsedWebSearchCommand parseWebSearchCommand(const std::string& prompt);
 bool isWebSearchToolName(const std::string& name);
 bool isWebFetchToolName(const std::string& name);
 

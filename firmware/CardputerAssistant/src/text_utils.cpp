@@ -925,6 +925,32 @@ bool requestsWebSearch(const std::string& prompt)
     return containsAny(value, explicitSearch) || containsAny(value, currentInformation);
 }
 
+ParsedWebSearchCommand parseWebSearchCommand(const std::string& prompt)
+{
+    constexpr const char* whitespace = " \t\r\n\f\v";
+    const std::size_t start = prompt.find_first_not_of(whitespace);
+    if (start == std::string::npos) return {WebSearchCommand::None, {}};
+    const std::size_t separator = prompt.find_first_of(whitespace, start);
+    const std::size_t end = separator == std::string::npos
+        ? prompt.size() : separator;
+    const auto matches = [&prompt, start, end](const char* command) {
+        if (end - start != std::char_traits<char>::length(command)) return false;
+        for (std::size_t i = start; i < end; ++i) {
+            const char value = prompt[i] >= 'A' && prompt[i] <= 'Z'
+                ? static_cast<char>(prompt[i] - 'A' + 'a') : prompt[i];
+            if (value != command[i - start]) return false;
+        }
+        return true;
+    };
+    if (!matches("/search") && !matches("/web")) return {WebSearchCommand::None, {}};
+    const std::size_t queryStart = separator == std::string::npos
+        ? std::string::npos : prompt.find_first_not_of(whitespace, separator);
+    if (queryStart == std::string::npos) return {WebSearchCommand::EmptyQuery, {}};
+    const std::size_t queryEnd = prompt.find_last_not_of(whitespace) + 1;
+    return {WebSearchCommand::Search,
+            std::string_view(prompt.data() + queryStart, queryEnd - queryStart)};
+}
+
 bool isWebSearchToolName(const std::string& name)
 {
     std::string normalized;

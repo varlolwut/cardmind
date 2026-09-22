@@ -2265,6 +2265,24 @@ void testProviderProfileAuthorityOutcomes()
 
 void testWebSearchRouting()
 {
+    using cardputer::WebSearchCommand;
+    require(cardputer::parseWebSearchCommand("/search Cardputer ADV").kind == WebSearchCommand::Search &&
+                cardputer::parseWebSearchCommand(" \t/WEB\nдата выхода").kind == WebSearchCommand::Search &&
+                cardputer::parseWebSearchCommand("/SEARCH\tnews").kind == WebSearchCommand::Search,
+            "Leading search command was not recognized");
+    const std::string command = " \t/WEB\n  дата \"выхода\"\nCardputer Zero \r\n";
+    const auto parsedCommand = cardputer::parseWebSearchCommand(command);
+    require(parsedCommand.query == "дата \"выхода\"\nCardputer Zero" &&
+                parsedCommand.query.data() == command.data() + command.find("дата"),
+            "Search command did not retain its exact trimmed query view");
+    require(cardputer::parseWebSearchCommand("/search").kind == WebSearchCommand::EmptyQuery &&
+                cardputer::parseWebSearchCommand(" /web \r\n\t").kind == WebSearchCommand::EmptyQuery,
+            "Search command accepted an empty query");
+    for (const char* prompt : {"", " \t", "/searching cats", "/search/cats",
+                                      "Explain /search", "Search the web for news"}) {
+        require(cardputer::parseWebSearchCommand(prompt).kind == WebSearchCommand::None,
+                "Ordinary text was interpreted as a search command");
+    }
     require(cardputer::requestsWebSearch("Когда появится Cardputer Zero?"),
             "Current Russian question did not enable web search");
     require(cardputer::requestsWebSearch("Find the latest Cardputer firmware news"),

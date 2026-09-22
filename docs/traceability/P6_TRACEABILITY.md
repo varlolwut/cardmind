@@ -7687,3 +7687,128 @@ above; no 60-minute active-work stall occurred in the resumed correction.
 Accepted publication paths: api_client.cpp, pending_tool_call.h/.cpp, the measured
 firmware budget and this trace. The separate command implementation and its
 documentation/tests remain outside this fix commit. Publication is next.
+
+Continuation commit `124c59eed5c02498d9cee93e35a23d1200c4d9e5` was published
+by native Git with parent `98d7263dd19b4b41c70531133a2f8e21bd4265a7` and both
+required Alexey Bulygin noreply identities. Authenticated GitHub MCP verified
+the exact branch SHA, linked varlolwut account, five changed paths and all five
+blob SHAs. The isolated publication tree was clean; filename-only secret/artifact
+exclusion passed. Command work, unrelated files, Device Power and stash remained
+untouched. Release CI/merge remain pending until the separate command commit.
+
+## FIX-SEARCH-COMMAND — completed, 2026-09-22 21:06 UTC
+
+The user explicitly requests correction after the lost `/search` behavior was
+identified. Pre-P3 commit `2ffc3eb5c1a433d06769acda82737158947a50f5` documents the
+command and forces `web_search`; P3 commit `d176fb47f2471338c37baa19a7e195b250a8cb4e`
+removes that consumer. The remaining `requestsWebSearch` helper has no production
+caller. ROADMAP now freezes explicit command syntax, existing policy constraints,
+the common Device/Web request boundary, minimal write set and proof. Architect
+owns implementation and device access; the SD-request correction remains preserved
+and unaccepted. No closure or new release is claimed.
+
+Independent pre-edit review returned GO; Architect implemented the exact command
+parser and shared initial dispatch/checks. Existing strict host tests, including
+the new command-boundary cases, passed at 21:14 UTC. The first shell invocation
+failed before compilation because its output path was lost in command quoting;
+the same command run from an exact-owned shell file passed. No test oracle changed.
+Proof: `artifacts/architect-1131-command-host.log`. Device/Web verification awaits
+the coherent continuation candidate; this fix is not completed or published.
+
+At 21:22-21:24 UTC the combined candidate passed normal readiness and ordinary
+APITEST (two-byte answer). Device E2ETEST sent `/search cardputer zero` through
+submitPrompt, but the model did not call web_search despite the named function
+choice. The run failed; its duplicate cleanup and final normal STATUS passed,
+with four chats/history 4, heap/largest 101,756/32,756, minimum heap 21,516 and
+stack margin 3,616. The generic E2E terminal message about missing durable growth
+is accompanied by the actual `chat_completion` missing-call error in the same log.
+Evidence: `artifacts/architect-1131-command-device.log`. No TLS/NoMemory was
+observed, but no search continuation occurred. ROADMAP records the explicit
+command pivot to the existing canonical router before model continuation;
+production remains frozen pending the bounded revised design review.
+
+At 21:38 UTC independent revised design review returned GO. Architect adopts
+the deterministic initial canonical call and owns implementation; continuation
+is paused for shared final acceptance. All permission, pending, output and
+round-count owners remain the existing implementations.
+
+The deterministic-command candidate passed strict host, existing Web static and
+third-party checks, the pinned build/options gate and one verified RTS upload.
+Binary SHA-256: `67cc2f4dc88f76c3f1214d56e63359fb34b5ae2b968844b8e22036cd95a77b36`.
+App 3,678,528 bytes, partition free 515,776, text 2,254,568, rodata 1,322,392,
+static DRAM 66,012 and IRAM 77,567; the unchanged 500 KiB reserve passes.
+An initial read-only options check treated the comma-delimited duplicate hardware
+paths as one path and rejected it before upload; splitting the actual field and
+resolving unique paths verified exactly 3.2.1. No toolchain or firmware change.
+
+At 21:41-21:42 UTC plain APITEST passed and Device E2ETEST completed the actual
+submitPrompt `/search cardputer zero` path: `web_search result=ok`, final
+`chat_completion result=ok`, durable response and duplicate cleanup passed.
+Final normal STATUS retained four chats/history 4, ready SD/chats/files/Wi-Fi,
+heap/largest 101,380/31,732, lifetime minimum heap 19,012 and stack 2,128 bytes.
+Evidence: `artifacts/architect-1131-direct-command-device.log`; build, host, Web
+static, license, target, metrics, source hashes and upload artifacts share the
+`architect-1131-direct-command-` prefix. Web Ask final proof is still pending.
+
+At 21:42-21:43 UTC the same binary passed the real Web command through Auto +
+Web Search Ask. No-tools rejected the command without pending/answer; after
+clearing that owned negative turn, `/search M5Stack Cardputer Zero release date`
+created one canonical search confirmation. Allow once completed the search
+(latest audit: succeeded, 2,885 ms, 4,292 output bytes), then a 502-byte substantive
+assistant answer about the requested release date was persisted. The actual
+owned answer and canonical activity are retained in the Node output rather than
+only an answer-size assertion. Persistent chat policy remained unchanged.
+Exact-owned project `f92cf9fb00e68c6c` was removed, absence checked twice, and the
+API/Wi-Fi/settings projection was unchanged. Console stop and normal STATUS
+passed, with four chats/history 4, heap/largest 94,720/31,732, lifetime minimum heap
+11,080 and stack 1,264 bytes. No reset, TLS allocation, SSE NoMemory or round-limit
+failure occurred. Evidence: `artifacts/architect-1131-command-web.log` and its
+Node output. The earlier model-choice failure remains failed. This proves the
+Device/Web command and shared continuation boundary; no broad firmware or
+controlled A/B performance claim is added. Final source review and Architect
+closure remain the publication gate.
+
+The independent direct-command source review returned GO for parser lifetime,
+canonical dispatch, Ask nonexecution before approval, resume from round one,
+Required accounting and the four-round limit. Architect's subsequent personal
+audit found the separate inferred-write predicate still interpreted literal
+search words: `/search Python write file documentation` matches its write/file
+heuristic. ROADMAP records the exact-query clarification before the one-line
+correction. Both inferred workspace predicates now exclude explicit commands;
+actual Required-group flags and the router remain unchanged. The final candidate
+requires one focused Web Ask run of that exact keyword query; the completed
+Cardputer and ordinary Web search evidence above remains eligible for unchanged
+paths and is not rewritten as evidence from the new binary.
+
+The final one-line correction compiled and passed the unchanged firmware budget;
+exact 3.2.1/FQBN inspection preceded one verified pinned RTS upload. Final binary
+SHA-256: `77372fac4b866c400489d88ab0282d24b59aacc5ae7adc0b6dfa9d8927947666`;
+api_client.cpp SHA-256: `d7589d96f45ad7e842afaf127932c81159ec78c31f5b5b6f06e1f1e2617c4c40`.
+App 3,678,512 bytes, free 515,792, text 2,254,556, rodata 1,322,392, static DRAM
+66,012 and IRAM 77,567. The final cap retains 3,792 bytes of development headroom
+above the reserved 500 KiB; runtime memory/stack limits are unchanged.
+
+At 21:49:56 UTC the final binary completed `/search Python write file documentation`
+through real Web Ask: one approved search, succeeded audit (5,198 ms, 4,184 output
+bytes), and a persisted 1,212-byte answer with Python documentation source URLs.
+No local file write was requested or required. No-tools rejection also passed.
+Exact-owned project `c3ddd4ae87331569` was deleted, absence checked twice, chat
+policy and API/Wi-Fi/settings projections remained unchanged, and Console stop
+plus normal STATUS passed. Final heap/largest 95,012/31,732, lifetime minimum
+10,964, stack 1,264; four chats/history 4, ready SD and Wi-Fi. Evidence uses
+`artifacts/architect-1131-search-literal-` build/target/metrics/upload/web logs and
+Web Node output, including the actual owned answer and canonical tool audit.
+
+At 2026-09-22 21:53 UTC Architect personally returns **FIX-SEARCH-COMMAND
+CLOSURE GO** after the frozen scope, all shared Device/Web producers/consumers,
+independent design/code review, parser/query ownership, JSON encoding, existing
+router and pending counters, actual command/Ask/No-tools observations, cleanup,
+resources and final inferred-write exclusion were reviewed. Plain chat, Required,
+Off, cancellation, four rounds and existing pending persistence retain their
+owners; no new router/framework or policy bypass was introduced. The only new
+retained tests are compact cases in the existing host search-routing test.
+Start 21:06 UTC, final runtime completion 21:49:56 UTC; the evidence-driven
+named-model-choice pivot and final literal-query finding are retained above.
+No 60-minute active-work stall occurred. This correction is completed; publish
+its exact seven-path diff separately, then require exact-head CI before merge
+and a new v1.13.1 release. v1.13.0 and the completed P1-P6 baseline remain intact.

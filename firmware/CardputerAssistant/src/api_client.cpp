@@ -1250,6 +1250,13 @@ ChatResult streamChatCompletionWithBudget(const Settings& settings,
     if (history.empty() || history.back().role != "user") {
         return {false, "", "Chat request requires a final user message"};
     }
+    const ParsedWebSearchCommand searchCommand = parseWebSearchCommand(history.back().content);
+    if (searchCommand.kind == WebSearchCommand::EmptyQuery) {
+        return {false, "", "Search command requires a query after /search or /web"};
+    }
+    if (searchCommand.kind == WebSearchCommand::Search) {
+        return {false, "", "Search command requires enabled Web Search; check No tools, permissions and search configuration"};
+    }
     if (ESP.getFreeHeap() < kMinimumRequestHeapBytes) {
         return {false, "", "Not enough free heap to start chat request safely"};
     }
@@ -1296,6 +1303,24 @@ ChatResult streamChatCompletionWithTools(const Settings& settings,
 
 namespace {
 
+CompletionTurnResult buildWebSearchCommandTurn(std::string_view query)
+{
+    JsonDocument document;
+    document["query"] = query;
+    if (document.overflowed()) {
+        return {false, "", {}, "Not enough memory to encode search query"};
+    }
+    const std::size_t expectedBytes = measureJson(document);
+    std::string arguments;
+    serializeJson(document, arguments);
+    if (arguments.size() != expectedBytes) {
+        return {false, "", {}, "Failed to serialize search query"};
+    }
+    CompletionTurnResult result{true, "", {}, ""};
+    result.toolCalls.push_back({"call_cardmind_web_search", "web_search", std::move(arguments)});
+    return result;
+}
+
 ChatResult runToolCompletionLoop(
     const Settings& settings,
     const std::vector<Message>& history,
@@ -1323,6 +1348,14 @@ ChatResult runToolCompletionLoop(
     if (!toolRequestPlanIsConsistent(toolPlan)) {
         return {false, "", "Tool request policy plan is inconsistent"};
     }
+    const ParsedWebSearchCommand searchCommand = parseWebSearchCommand(history.back().content);
+    if (searchCommand.kind == WebSearchCommand::EmptyQuery) {
+        return {false, "", "Search command requires a query after /search or /web"};
+    }
+    if (searchCommand.kind == WebSearchCommand::Search && roundIndex == 0 &&
+        !toolRequestPlanIncludesSchema(toolPlan, ToolSchemaId::WebSearch)) {
+        return {false, "", "Search command requires enabled Web Search; check No tools, permissions and search configuration"};
+    }
     if (toolPlan.missingRequiredGroups != 0) {
         return {false, "",
                 "Required tool capability is unavailable (group mask 0x" +
@@ -1338,9 +1371,11 @@ ChatResult runToolCompletionLoop(
         1U << static_cast<std::uint8_t>(ToolCapabilityGroup::Files));
     const bool filesToolsIncluded =
         (toolPlan.includedGroups & filesGroup) != 0;
-    const bool requiresInitialWorkspaceTool = filesToolsIncluded &&
+    const bool requiresInitialWorkspaceTool = searchCommand.kind != WebSearchCommand::Search &&
+        filesToolsIncluded &&
         requestsWorkspaceAccess(history.back().content);
-    const bool requiresSuccessfulWorkspaceWrite = filesToolsIncluded &&
+    const bool requiresSuccessfulWorkspaceWrite = searchCommand.kind != WebSearchCommand::Search &&
+        filesToolsIncluded &&
         requestsWorkspaceWrite(history.back().content);
     while (roundIndex <= kMaximumToolRounds) {
         if (ESP.getFreeHeap() < kMinimumRequestHeapBytes) {
@@ -1350,41 +1385,45 @@ ChatResult runToolCompletionLoop(
             requiresInitialWorkspaceTool && rounds.empty();
         std::string bufferedText;
         CompletionTurnResult turn;
-        std::size_t payloadBytes = 0;
-        OperationResult staged;
-        {
-            const String payload = buildToolChatRequest(
-                settings, history, instructions, toolPlan,
-                maximumOutputTokens, rounds);
-            payloadBytes = payload.length();
-            staged = stageToolRequest(payload);
-        }
-        if (!staged.success) {
-            turn = {false, "", {}, staged.error};
-        } else if (ESP.getFreeHeap() < kMinimumRequestHeapBytes) {
-            turn = {false, "", {},
-                    "Not enough free heap to send staged tool request safely"};
+        if (searchCommand.kind == WebSearchCommand::Search && roundIndex == 0) {
+            turn = buildWebSearchCommandTurn(searchCommand.query);
         } else {
-            turn = streamCompletionTurn(
-                settings,
-                [payloadBytes, &isCancelled](HTTPClient& http) {
-                    return sendToolRequest(http, payloadBytes, isCancelled);
-                },
-                [&bufferedText, &completeResponse, &onText,
-                 bufferInitialText](const std::string& text) {
-                    if (bufferInitialText) {
-                        bufferedText += text;
-                    } else {
-                        completeResponse += text;
-                        onText(text);
-                    }
-                },
-                isCancelled);
-        }
-        const OperationResult cleaned = removeToolRequest();
-        if (!cleaned.success) {
-            return {false, completeResponse,
-                    turn.error + "; request cleanup failed: " + cleaned.error};
+            std::size_t payloadBytes = 0;
+            OperationResult staged;
+            {
+                const String payload = buildToolChatRequest(
+                    settings, history, instructions, toolPlan,
+                    maximumOutputTokens, rounds);
+                payloadBytes = payload.length();
+                staged = stageToolRequest(payload);
+            }
+            if (!staged.success) {
+                turn = {false, "", {}, staged.error};
+            } else if (ESP.getFreeHeap() < kMinimumRequestHeapBytes) {
+                turn = {false, "", {},
+                        "Not enough free heap to send staged tool request safely"};
+            } else {
+                turn = streamCompletionTurn(
+                    settings,
+                    [payloadBytes, &isCancelled](HTTPClient& http) {
+                        return sendToolRequest(http, payloadBytes, isCancelled);
+                    },
+                    [&bufferedText, &completeResponse, &onText,
+                     bufferInitialText](const std::string& text) {
+                        if (bufferInitialText) {
+                            bufferedText += text;
+                        } else {
+                            completeResponse += text;
+                            onText(text);
+                        }
+                    },
+                    isCancelled);
+            }
+            const OperationResult cleaned = removeToolRequest();
+            if (!cleaned.success) {
+                return {false, completeResponse,
+                        turn.error + "; request cleanup failed: " + cleaned.error};
+            }
         }
         if (!turn.success) {
             return {false, completeResponse, turn.error};
